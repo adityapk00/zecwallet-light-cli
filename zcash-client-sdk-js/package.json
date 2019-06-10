@@ -10,5 +10,11 @@
     "zcash"
   ],
   "author": "Jack Grigg <jack@z.cash>",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "webpack": "4.33.0"
+  },
+  "dependencies": {
+    "zcash-client-backend-wasm": "file:../zcash-client-backend-wasm/pkg"
+  }
 }
