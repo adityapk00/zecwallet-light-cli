@@ -2,9 +2,20 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Hello wasm-pack!</title>
+    <title>Zcash Demo Wallet</title>
   </head>
   <body>
+    <h1>Welcome to your demo Zcash wallet!</h1>
+    <p>You can interact with it using a <code>zcashd</code> testnet node.</p>
+    <div id="zcash-client-loading">
+      <h2>Loading...</h2>
+    </div>
+    <div id="zcash-client-content" style="display: none">
+      <h2 id="zcash-client-address"></h2>
+      <p>That's your Zcash address!</p>
+      <h2 id="zcash-client-balance"></h2>
+      <p id="zcash-client-no-balance">You have no TAZ. Go <a href="https://faucet.testnet.z.cash/" target="blank">here</a> to get some!</p>
+    </div>
     <script src="./bootstrap.js"></script>
   </body>
 </html>

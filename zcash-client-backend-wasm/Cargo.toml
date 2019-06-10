@@ -26,6 +26,22 @@ console_error_panic_hook = { version = "0.1.1", optional = true }
 # Unfortunately, `wee_alloc` requires nightly Rust when targeting wasm for now.
 wee_alloc = { version = "0.4.2", optional = true }
 
+[dependencies.pairing]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+
+[dependencies.sapling-crypto]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+
+[dependencies.zcash_client_backend]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+
+[dependencies.zcash_primitives]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+
 [dev-dependencies]
 wasm-bindgen-test = "0.2"
 
