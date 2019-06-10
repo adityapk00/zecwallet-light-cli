@@ -1,3 +1,3 @@
-import * as wasm from "hello-wasm-pack";
+import * as wasm from 'zcash-client-sdk'
 
 wasm.greet();
