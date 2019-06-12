@@ -1,11 +1,13 @@
 import { Client } from 'zcash-client-backend-wasm'
 
-const { BlockID, BlockRange, ChainSpec } = require('./service_pb.js')
+const { BlockID, BlockRange, ChainSpec, RawTransaction } = require('./service_pb.js')
 const { CompactTxStreamerClient } = require('./service_grpc_web_pb.js')
 const grpc = {}
 grpc.web = require('grpc-web')
 
 const COIN = 100000000
+
+const SAPLING_CONSENSUS_BRANCH_ID = 0x76b809bb
 
 const CHAIN_REFRESH_INTERVAL = 60 * 1000
 const BATCH_SIZE = 1000
@@ -19,6 +21,40 @@ export class ZcashClient {
     if (!this.client.set_initial_block(checkpoint.height, checkpoint.hash, checkpoint.sapling_tree)) {
       console.error('Invalid checkpoint data')
     }
+  }
+
+  fetchSpendParams () {
+    var self = this
+
+    var req = new XMLHttpRequest()
+    req.addEventListener('load', function () {
+      var buffer = req.response
+      if (buffer) {
+        self.spendParams = new Uint8Array(buffer)
+      } else {
+        console.error("Didn't receive sapling-spend.params")
+      }
+    })
+    req.open('GET', 'params/sapling-spend.params')
+    req.responseType = 'arraybuffer'
+    req.send()
+  }
+
+  fetchOutputParams () {
+    var self = this
+
+    var req = new XMLHttpRequest()
+    req.addEventListener('load', function () {
+      var buffer = req.response
+      if (buffer) {
+        self.outputParams = new Uint8Array(buffer)
+      } else {
+        console.error("Didn't receive sapling-spend.params")
+      }
+    })
+    req.open('GET', 'params/sapling-output.params')
+    req.responseType = 'arraybuffer'
+    req.send()
   }
 
   updateUI () {
@@ -109,10 +145,47 @@ export class ZcashClient {
     })
   }
 
+  sendToAddress (to, value, onFinished) {
+    var self = this
+
+    console.log(`Sending ${value} TAZ to ${to}`)
+
+    var tx = self.client.send_to_address(
+      SAPLING_CONSENSUS_BRANCH_ID,
+      self.spendParams,
+      self.outputParams,
+      to,
+      value * COIN)
+    if (tx == null) {
+      console.error('Failed to create transaction')
+      onFinished()
+      return
+    }
+
+    var rawTx = new RawTransaction()
+    rawTx.setData(tx)
+
+    console.log('Sending transaction...')
+    self.lightwalletd.sendTransaction(rawTx, {}, (response) => {
+      console.log('Sent transaction')
+      if (response != null) {
+        console.log(`Error code: ${response.getErrorcode()} "${response.getErrormessage()}"`)
+      }
+
+      self.updateUI()
+
+      onFinished()
+    })
+  }
+
   load (onFinished) {
     var self = this
 
     var loader = () => {
+      // Fetch Sapling parameters
+      self.fetchSpendParams()
+      self.fetchOutputParams()
+
       // Register event handlers
 
       // Initial UI updates

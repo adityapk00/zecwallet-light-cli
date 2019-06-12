@@ -34,6 +34,7 @@ $ docker run -d -p 8081:8081 --network=host lightwalletd/envoy
 ## Running the demo
 
 ```sh
+$ ln -s "$HOME/.zcash-params" demo-www/params
 $ cd demo-www
 $ npm run start
 ```

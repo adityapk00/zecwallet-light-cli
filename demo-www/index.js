@@ -2,7 +2,11 @@ import { ZcashClient } from 'zcash-client-sdk'
 
 const address = document.getElementById('zcash-client-address')
 const balance = document.getElementById('zcash-client-balance')
+const yesBalance = document.getElementById('zcash-client-yes-balance')
 const noBalance = document.getElementById('zcash-client-no-balance')
+const sendToAddress = document.getElementById('zcash-client-send-to-address')
+const sendValue = document.getElementById('zcash-client-send-value')
+const sendAction = document.getElementById('zcash-client-send-action')
 const syncStatus = document.getElementById('zcash-client-sync-status')
 
 var zcashClient = new ZcashClient('http://localhost:8081', {
@@ -12,8 +16,10 @@ var zcashClient = new ZcashClient('http://localhost:8081', {
   updateBalance: (newBalance) => {
     balance.textContent = `Balance: ${newBalance} TAZ`
     if (newBalance > 0) {
+      yesBalance.style.display = ''
       noBalance.style.display = 'none'
     } else {
+      yesBalance.style.display = 'none'
       noBalance.style.display = ''
     }
   },
@@ -31,6 +37,20 @@ var zcashClient = new ZcashClient('http://localhost:8081', {
 })
 
 zcashClient.load(() => {
+  // Register event handlers
+  sendAction.onclick = () => {
+    sendAction.disabled = true
+    sendAction.textContent = 'Sending...'
+
+    var to = sendToAddress.value
+    var value = sendValue.value
+
+    zcashClient.sendToAddress(to, value, () => {
+      sendAction.disabled = false
+      sendAction.textContent = 'Send!'
+    })
+  }
+
   // Loading complete, show the wallet
   document.getElementById('zcash-client-loading').remove()
   document.getElementById('zcash-client-content').style.display = ''
