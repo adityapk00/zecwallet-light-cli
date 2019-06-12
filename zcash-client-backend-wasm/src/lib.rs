@@ -1,14 +1,23 @@
+macro_rules! log {
+    ( $( $t:tt )* ) => {
+        web_sys::console::log_1(&format!( $( $t )* ).into());
+    };
+}
+
 macro_rules! error {
     ( $( $t:tt )* ) => {
         web_sys::console::error_1(&format!( $( $t )* ).into());
     };
 }
 
+mod address;
+mod prover;
 mod utils;
 
 use pairing::bls12_381::Bls12;
 use protobuf::parse_from_bytes;
-use sapling_crypto::primitives::{Note, PaymentAddress};
+use sapling_crypto::primitives::{Diversifier, Note, PaymentAddress};
+use std::cmp;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use zcash_client_backend::{
@@ -19,7 +28,11 @@ use zcash_primitives::{
     block::BlockHash,
     merkle_tree::{CommitmentTree, IncrementalWitness},
     sapling::Node,
-    transaction::TxId,
+    transaction::{
+        builder::{Builder, DEFAULT_FEE},
+        components::Amount,
+        TxId,
+    },
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
     JUBJUB,
 };
@@ -31,6 +44,8 @@ use wasm_bindgen::prelude::*;
 #[cfg(feature = "wee_alloc")]
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+
+const ANCHOR_OFFSET: u32 = 10;
 
 const SAPLING_ACTIVATION_HEIGHT: i32 = 280_000;
 
@@ -47,6 +62,7 @@ struct BlockData {
 
 struct SaplingNoteData {
     account: usize,
+    diversifier: Diversifier,
     note: Note<Bls12>,
     witnesses: Vec<IncrementalWitness<Node>>,
     nullifier: [u8; 32],
@@ -71,8 +87,9 @@ impl SaplingNoteData {
 
         SaplingNoteData {
             account: output.account,
+            diversifier: output.to.diversifier,
             note: output.note,
-            witnesses: vec![],
+            witnesses: vec![witness],
             nullifier: nf,
             spent: None,
         }
@@ -82,6 +99,32 @@ impl SaplingNoteData {
 struct WalletTx {
     block: i32,
     notes: Vec<SaplingNoteData>,
+}
+
+struct SpendableNote {
+    txid: TxId,
+    nullifier: [u8; 32],
+    diversifier: Diversifier,
+    note: Note<Bls12>,
+    witness: IncrementalWitness<Node>,
+}
+
+impl SpendableNote {
+    fn from(txid: TxId, nd: &SaplingNoteData, anchor_offset: usize) -> Option<Self> {
+        if nd.spent.is_none() {
+            let witness = nd.witnesses.get(nd.witnesses.len() - anchor_offset - 1);
+
+            witness.map(|w| SpendableNote {
+                txid,
+                nullifier: nd.nullifier,
+                diversifier: nd.diversifier,
+                note: nd.note.clone(),
+                witness: w.clone(),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -149,6 +192,30 @@ impl Client {
             .last()
             .map(|block| block.height)
             .unwrap_or(SAPLING_ACTIVATION_HEIGHT - 1)
+    }
+
+    /// Determines the target height for a transaction, and the offset from which to
+    /// select anchors, based on the current synchronised block chain.
+    fn get_target_height_and_anchor_offset(&self) -> Option<(u32, usize)> {
+        match {
+            let blocks = self.blocks.read().unwrap();
+            (
+                blocks.first().map(|block| block.height as u32),
+                blocks.last().map(|block| block.height as u32),
+            )
+        } {
+            (Some(min_height), Some(max_height)) => {
+                let target_height = max_height + 1;
+
+                // Select an anchor ANCHOR_OFFSET back from the target block,
+                // unless that would be before the earliest block we have.
+                let anchor_height =
+                    cmp::max(target_height.saturating_sub(ANCHOR_OFFSET), min_height);
+
+                Some((target_height, (target_height - anchor_height) as usize))
+            }
+            _ => None,
+        }
     }
 
     pub fn address(&self) -> String {
@@ -311,5 +378,125 @@ impl Client {
         self.blocks.write().unwrap().push(block_data);
 
         true
+    }
+
+    pub fn send_to_address(
+        &self,
+        consensus_branch_id: u32,
+        spend_params: &[u8],
+        output_params: &[u8],
+        to: &str,
+        value: u32,
+    ) -> Option<Box<[u8]>> {
+        let extsk = &self.extsks[0];
+        let extfvk = &self.extfvks[0];
+        let ovk = extfvk.fvk.ovk;
+
+        let to = match address::RecipientAddress::from_str(to) {
+            Some(to) => to,
+            None => {
+                error!("Invalid recipient address");
+                return None;
+            }
+        };
+        let value = Amount(value as i64);
+
+        // Target the next block, assuming we are up-to-date.
+        let (height, anchor_offset) = match self.get_target_height_and_anchor_offset() {
+            Some(res) => res,
+            None => {
+                error!("Cannot send funds before scanning any blocks");
+                return None;
+            }
+        };
+
+        // Select notes to cover the target value
+        let target_value = value.0 + DEFAULT_FEE.0;
+        let notes: Vec<_> = self
+            .txs
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
+            .flatten()
+            .filter_map(|(txid, note)| SpendableNote::from(txid, note, anchor_offset))
+            .scan(0, |running_total, spendable| {
+                let value = spendable.note.value;
+                let ret = if *running_total < target_value as u64 {
+                    Some(spendable)
+                } else {
+                    None
+                };
+                *running_total = *running_total + value;
+                ret
+            })
+            .collect();
+
+        // Confirm we were able to select sufficient value
+        let selected_value = notes
+            .iter()
+            .map(|selected| selected.note.value)
+            .sum::<u64>();
+        if selected_value < target_value as u64 {
+            error!(
+                "Insufficient funds (have {}, need {})",
+                selected_value, target_value
+            );
+            return None;
+        }
+
+        // Create the transaction
+        let mut builder = Builder::new(height);
+        for selected in notes.iter() {
+            if let Err(e) = builder.add_sapling_spend(
+                extsk.clone(),
+                selected.diversifier,
+                selected.note.clone(),
+                selected.witness.clone(),
+            ) {
+                error!("Error adding note: {:?}", e);
+                return None;
+            }
+        }
+        if let Err(e) = match to {
+            address::RecipientAddress::Shielded(to) => {
+                builder.add_sapling_output(ovk, to.clone(), value, None)
+            }
+            address::RecipientAddress::Transparent(to) => {
+                builder.add_transparent_output(&to, value)
+            }
+        } {
+            error!("Error adding output: {:?}", e);
+            return None;
+        }
+        let (tx, _) = match builder.build(
+            consensus_branch_id,
+            prover::InMemTxProver::new(spend_params, output_params),
+        ) {
+            Ok(res) => res,
+            Err(e) => {
+                error!("Error creating transaction: {:?}", e);
+                return None;
+            }
+        };
+        log!("Transaction ID: {}", tx.txid());
+
+        // Mark notes as spent.
+        let mut txs = self.txs.write().unwrap();
+        for selected in notes {
+            let mut spent_note = txs
+                .get_mut(&selected.txid)
+                .unwrap()
+                .notes
+                .iter_mut()
+                .find(|nd| &nd.nullifier[..] == &selected.nullifier[..])
+                .unwrap();
+            spent_note.spent = Some(tx.txid());
+        }
+
+        // Return the encoded transaction, so the caller can send it.
+        let mut raw_tx = vec![];
+        tx.write(&mut raw_tx).unwrap();
+        Some(raw_tx.into_boxed_slice())
     }
 }
