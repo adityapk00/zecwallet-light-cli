@@ -54,6 +54,14 @@ extern "C" {
     fn alert(s: &str);
 }
 
+fn now() -> f64 {
+    web_sys::window()
+        .expect("should have a Window")
+        .performance()
+        .expect("should have a Performance")
+        .now()
+}
+
 struct BlockData {
     height: i32,
     hash: BlockHash,
@@ -388,6 +396,13 @@ impl Client {
         to: &str,
         value: u32,
     ) -> Option<Box<[u8]>> {
+        let start_time = now();
+        log!(
+            "0: Creating transaction sending {} tazoshis to {}",
+            value,
+            to
+        );
+
         let extsk = &self.extsks[0];
         let extfvk = &self.extfvks[0];
         let ovk = extfvk.fvk.ovk;
@@ -411,6 +426,7 @@ impl Client {
         };
 
         // Select notes to cover the target value
+        log!("{}: Selecting notes", now() - start_time);
         let target_value = value.0 + DEFAULT_FEE.0;
         let notes: Vec<_> = self
             .txs
@@ -446,6 +462,7 @@ impl Client {
         }
 
         // Create the transaction
+        log!("{}: Adding {} inputs", now() - start_time, notes.len());
         let mut builder = Builder::new(height);
         for selected in notes.iter() {
             if let Err(e) = builder.add_sapling_spend(
@@ -458,6 +475,7 @@ impl Client {
                 return None;
             }
         }
+        log!("{}: Adding output", now() - start_time);
         if let Err(e) = match to {
             address::RecipientAddress::Shielded(to) => {
                 builder.add_sapling_output(ovk, to.clone(), value, None)
@@ -469,6 +487,7 @@ impl Client {
             error!("Error adding output: {:?}", e);
             return None;
         }
+        log!("{}: Building transaction", now() - start_time);
         let (tx, _) = match builder.build(
             consensus_branch_id,
             prover::InMemTxProver::new(spend_params, output_params),
@@ -479,6 +498,7 @@ impl Client {
                 return None;
             }
         };
+        log!("{}: Transaction created", now() - start_time);
         log!("Transaction ID: {}", tx.txid());
 
         // Mark notes as spent.
