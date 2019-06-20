@@ -248,6 +248,33 @@ impl Client {
             .sum::<u64>() as u32
     }
 
+    // TODO: This will be inaccurate if the balance exceeds a u32, but u64 -> JavaScript
+    // requires BigUint64Array which has limited support across browsers, and is not
+    // implemented in the LTS version of Node.js. For now, let's assume that no one is
+    // going to use a web wallet with more than ~21 TAZ.
+    pub fn verified_balance(&self) -> u32 {
+        let anchor_height = match self.get_target_height_and_anchor_offset() {
+            Some((height, anchor_offset)) => height - anchor_offset as u32,
+            None => return 0,
+        };
+
+        self.txs
+            .read()
+            .unwrap()
+            .values()
+            .map(|tx| {
+                if tx.block as u32 <= anchor_height {
+                    tx.notes
+                        .iter()
+                        .map(|nd| if nd.spent.is_none() { nd.note.value } else { 0 })
+                        .sum::<u64>()
+                } else {
+                    0
+                }
+            })
+            .sum::<u64>() as u32
+    }
+
     pub fn scan_block(&self, block: &[u8]) -> bool {
         let block: CompactBlock = match parse_from_bytes(block) {
             Ok(block) => block,

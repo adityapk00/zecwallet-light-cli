@@ -58,7 +58,7 @@ export class ZcashClient {
   }
 
   updateUI () {
-    this.uiHandlers.updateBalance(this.client.balance() / COIN)
+    this.uiHandlers.updateBalance(this.client.balance() / COIN, this.client.verified_balance() / COIN)
   }
 
   sync () {

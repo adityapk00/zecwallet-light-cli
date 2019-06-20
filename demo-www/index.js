@@ -2,6 +2,7 @@ import { ZcashClient } from 'zcash-client-sdk'
 
 const address = document.getElementById('zcash-client-address')
 const balance = document.getElementById('zcash-client-balance')
+const spendableBalance = document.getElementById('zcash-client-spendable-balance')
 const yesBalance = document.getElementById('zcash-client-yes-balance')
 const noBalance = document.getElementById('zcash-client-no-balance')
 const sendToAddress = document.getElementById('zcash-client-send-to-address')
@@ -13,14 +14,18 @@ var zcashClient = new ZcashClient('http://localhost:8081', {
   setAddress: (newAddress) => {
     address.textContent = newAddress
   },
-  updateBalance: (newBalance) => {
+  updateBalance: (newBalance, newVerifiedBalance) => {
     balance.textContent = `Balance: ${newBalance} TAZ`
+    spendableBalance.textContent = `Spendable: ${newVerifiedBalance} TAZ`
     if (newBalance > 0) {
-      yesBalance.style.display = ''
       noBalance.style.display = 'none'
     } else {
-      yesBalance.style.display = 'none'
       noBalance.style.display = ''
+    }
+    if (newVerifiedBalance > 0) {
+      yesBalance.style.display = ''
+    } else {
+      yesBalance.style.display = 'none'
     }
   },
   updateSyncStatus: (syncedHeight, latestHeight) => {
