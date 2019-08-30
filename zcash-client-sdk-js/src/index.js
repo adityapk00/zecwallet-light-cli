@@ -7,7 +7,7 @@ grpc.web = require('grpc-web')
 
 const COIN = 100000000
 
-const SAPLING_CONSENSUS_BRANCH_ID = 0x76b809bb
+const SAPLING_CONSENSUS_BRANCH_ID = 0x2bb40e60
 
 const CHAIN_REFRESH_INTERVAL = 60 * 1000
 const BATCH_SIZE = 1000
