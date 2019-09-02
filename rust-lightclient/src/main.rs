@@ -4,6 +4,7 @@ use hyper::client::connect::{Destination, HttpConnector};
 use tower_grpc::Request;
 use tower_hyper::{client, util};
 use tower_util::MakeService;
+use futures::stream::Stream;
 
 pub mod grpc_client {
     include!(concat!(env!("OUT_DIR"), "/cash.z.wallet.sdk.rpc.rs"));
@@ -29,19 +30,31 @@ pub fn main() {
                 .unwrap();
 
             // Wait until the client is ready...
-            CompactTxStreamer::new(conn).ready()
+            CompactTxStreamer::new(conn)
+                .ready()
+                .map_err(|e| eprintln!("streaming error {:?}", e))
         })
         .and_then(|mut client| {
-            use crate::grpc_client::ChainSpec;
+            use crate::grpc_client::BlockId;
+            use crate::grpc_client::BlockRange;
 
-            client.get_latest_block(Request::new(ChainSpec {}))
-        })
-        .and_then(|response| {
-            println!("RESPONSE = {:?}", response);
-            Ok(())
-        })
-        .map_err(|e| {
-            println!("ERR = {:?}", e);
+            let bs = BlockId{ height: 588300, hash: vec!()};
+            let be = BlockId{ height: 588390, hash: vec!()};
+
+            let br = Request::new(BlockRange{ start: Some(bs), end: Some(be)});
+            client
+                .get_block_range(br)
+                .map_err(|e| {
+                    eprintln!("RouteChat request failed; err={:?}", e);
+                })
+                .and_then(|response| {
+                    let inbound = response.into_inner();
+                    inbound.for_each(|b| {
+                        println!("RESPONSE = {:?}", b);
+                        Ok(())
+                    })
+                    .map_err(|e| eprintln!("gRPC inbound stream error: {:?}", e))                    
+                })
         });
 
     tokio::run(say_hello);
