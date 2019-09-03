@@ -17,6 +17,40 @@ tower-hyper = "0.1"
 hyper = "0.12"
 tower-service = "0.2"
 tower-util = "0.1"
+hex = "0.3"
+protobuf = "2"
+
+
+[dependencies.bellman]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+default-features = false
+features = ["groth16"]
+
+[dependencies.pairing]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+
+[dependencies.sapling-crypto]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+default-features = false
+
+[dependencies.zcash_client_backend]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+default-features = false
+
+[dependencies.zcash_primitives]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+default-features = false
+
+[dependencies.zcash_proofs]
+git = "https://github.com/str4d/librustzcash.git"
+branch = "demo-wasm"
+default-features = false
+
 
 [build-dependencies]
 tower-grpc-build = { git = "https://github.com/tower-rs/tower-grpc",  features = ["tower-hyper"]  }
