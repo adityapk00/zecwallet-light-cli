@@ -7,10 +7,14 @@ use tower_util::MakeService;
 use futures::stream::Stream;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 
 mod lightclient;
 mod address;
 mod prover;
+
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange};
 
 pub mod grpc_client {
     include!(concat!(env!("OUT_DIR"), "/cash.z.wallet.sdk.rpc.rs"));
@@ -27,6 +31,16 @@ pub fn main() {
     let mut last_scanned_height = lightclient.last_scanned_height() as u64;
     let mut end_height = last_scanned_height + 1000;
 
+    let latest_block_height = Arc::new(AtomicU64::new(0));
+
+    let latest_block_height_clone = latest_block_height.clone();
+    let latest_block = move |block: BlockId| {
+        latest_block_height_clone.store(block.height, Ordering::SeqCst);
+    };
+    get_latest_block(latest_block);
+    let last_block = latest_block_height.load(Ordering::SeqCst);
+    println!("Latest block = {}", last_block);
+
     loop {
         let local_lightclient = lightclient.clone();
 
@@ -38,10 +52,14 @@ pub fn main() {
 
         read_blocks(last_scanned_height, end_height, simple_callback);
 
-        if end_height < 588000 {
-            last_scanned_height = end_height + 1;
-            end_height = last_scanned_height + 1000 - 1;
-        }
+        last_scanned_height = end_height + 1;
+        end_height = last_scanned_height + 1000 - 1;
+
+        if last_scanned_height > last_block {
+            break;
+        } else if end_height > last_block {
+            end_height = last_block;
+        }        
     }    
 }
 
@@ -72,10 +90,6 @@ pub fn read_blocks<F : 'static + std::marker::Send>(start_height: u64, end_heigh
                 .map_err(|e| eprintln!("streaming error {:?}", e))
         })
         .and_then(move |mut client| {
-            use crate::grpc_client::BlockId;
-            use crate::grpc_client::BlockRange;
-            
-
             let bs = BlockId{ height: start_height, hash: vec!()};
             let be = BlockId{ height: end_height,   hash: vec!()};
 
@@ -101,5 +115,42 @@ pub fn read_blocks<F : 'static + std::marker::Send>(start_height: u64, end_heigh
         });
 
     tokio::run(say_hello);
-    println!("All done!");
+}
+
+pub fn get_latest_block<F : 'static + std::marker::Send>(mut c : F) 
+    where F : FnMut(BlockId) {
+    let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+
+    let dst = Destination::try_from_uri(uri.clone()).unwrap();
+    let connector = util::Connector::new(HttpConnector::new(4));
+    let settings = client::Builder::new().http2_only(true).clone();
+    let mut make_client = client::Connect::with_builder(connector, settings);
+
+    let say_hello = make_client
+        .make_service(dst)
+        .map_err(|e| panic!("connect error: {:?}", e))
+        .and_then(move |conn| {
+            use crate::grpc_client::client::CompactTxStreamer;
+
+            let conn = tower_request_modifier::Builder::new()
+                .set_origin(uri)
+                .build(conn)
+                .unwrap();
+
+            // Wait until the client is ready...
+            CompactTxStreamer::new(conn).ready()
+        })
+        .and_then(|mut client| {
+
+            client.get_latest_block(Request::new(ChainSpec {}))
+        })
+        .and_then(move |response| {
+            c(response.into_inner());
+            Ok(())
+        })
+        .map_err(|e| {
+            println!("ERR = {:?}", e);
+        });
+
+    tokio::run(say_hello);
 }

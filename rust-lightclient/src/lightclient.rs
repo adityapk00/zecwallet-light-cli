@@ -211,11 +211,7 @@ impl Client {
         encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &self.address)
     }
 
-    // TODO: This will be inaccurate if the balance exceeds a u32, but u64 -> JavaScript
-    // requires BigUint64Array which has limited support across browsers, and is not
-    // implemented in the LTS version of Node.js. For now, let's assume that no one is
-    // going to use a web wallet with more than ~21 TAZ.
-    pub fn balance(&self) -> u32 {
+    pub fn balance(&self) -> u64 {
         self.txs
             .read()
             .unwrap()
@@ -226,14 +222,10 @@ impl Client {
                     .map(|nd| if nd.spent.is_none() { nd.note.value } else { 0 })
                     .sum::<u64>()
             })
-            .sum::<u64>() as u32
+            .sum::<u64>()
     }
 
-    // TODO: This will be inaccurate if the balance exceeds a u32, but u64 -> JavaScript
-    // requires BigUint64Array which has limited support across browsers, and is not
-    // implemented in the LTS version of Node.js. For now, let's assume that no one is
-    // going to use a web wallet with more than ~21 TAZ.
-    pub fn verified_balance(&self) -> u32 {
+    pub fn verified_balance(&self) -> u64 {
         let anchor_height = match self.get_target_height_and_anchor_offset() {
             Some((height, anchor_offset)) => height - anchor_offset as u32,
             None => return 0,
@@ -253,7 +245,7 @@ impl Client {
                     0
                 }
             })
-            .sum::<u64>() as u32
+            .sum::<u64>()
     }
 
     pub fn scan_block(&self, block: &[u8]) -> bool {
