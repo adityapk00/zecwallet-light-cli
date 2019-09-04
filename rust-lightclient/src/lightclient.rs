@@ -151,7 +151,11 @@ impl Client {
         }
 
         let hash = match hex::decode(hash) {
-            Ok(hash) => BlockHash::from_slice(&hash),
+            Ok(hash) => {
+                let mut r = hash;
+                r.reverse();
+                BlockHash::from_slice(&r)
+            },
             Err(e) => {
                 eprintln!("{}", e);
                 return false;
@@ -263,7 +267,7 @@ impl Client {
             // If the last scanned block is rescanned, check it still matches.
             if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
                 if block.hash() != hash {
-                    eprintln!("Block hash does not match");
+                    eprintln!("Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
                     return false;
                 }
             }

@@ -14,6 +14,9 @@ mod lightclient;
 mod address;
 mod prover;
 
+use rustyline::error::ReadlineError;
+use rustyline::Editor;
+
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange};
 
 pub mod grpc_client {
@@ -23,6 +26,43 @@ pub mod grpc_client {
 
 
 pub fn main() {
+    // `()` can be used when no completer is required
+    let mut rl = Editor::<()>::new();
+    if rl.load_history("history.txt").is_err() {
+        println!("No previous history.");
+    }
+    loop {
+        let readline = rl.readline(">> ");
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str());
+                do_user_command(line);
+            },
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                break
+            },
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break
+            },
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break
+            }
+        }
+    }
+    rl.save_history("history.txt").unwrap();
+}
+
+pub fn do_user_command(cmd: String) {
+    match cmd.as_ref() {
+        "sync"    => { do_sync() }
+        _          => { println!("Unknown command {}", cmd); }
+    }
+}
+
+pub fn do_sync() {
     let lightclient = Arc::new(lightclient::Client::new());
     lightclient.set_initial_block(500000,
                             "004fada8d4dbc5e80b13522d2c6bd0116113c9b7197f0c6be69bc7a62f2824cd",
@@ -47,7 +87,7 @@ pub fn main() {
         let simple_callback = move |encoded_block: &[u8]| {
             local_lightclient.scan_block(encoded_block);
             
-            println!("Block Height: {}, Balance = {}", local_lightclient.last_scanned_height(), local_lightclient.balance());
+            print!("Block Height: {}, Balance = {}\r", local_lightclient.last_scanned_height(), local_lightclient.balance());
         };
 
         read_blocks(last_scanned_height, end_height, simple_callback);
