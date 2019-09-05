@@ -40,10 +40,13 @@ message SendResponse {
 // Empty placeholder. Someday we may want to specify e.g. a particular chain fork.
 message ChainSpec {}
 
+message Empty {}
+
 service CompactTxStreamer {
     rpc GetLatestBlock(ChainSpec) returns (BlockID) {}
     rpc GetBlock(BlockID) returns (CompactBlock) {}
     rpc GetBlockRange(BlockRange) returns (stream CompactBlock) {}
     rpc GetTransaction(TxFilter) returns (RawTransaction) {}
     rpc SendTransaction(RawTransaction) returns (SendResponse) {}
+    rpc GetLightdInfo(Empty) returns (SendResponse) {}
 }

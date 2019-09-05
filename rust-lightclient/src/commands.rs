@@ -45,6 +45,21 @@ impl Command for HelpCommand {
     }
 }
 
+struct InfoCommand {}
+impl Command for InfoCommand {
+    fn help(&self) {
+        println!("Gets server info");
+    }
+
+    fn short_help(&self) -> String {
+        "Get the lightwalletd server's info".to_string()
+    }
+
+    fn exec(&self, args: &[String], lightclient: &LightClient) {
+        lightclient.do_info();
+    }
+}
+
 struct AddressCommand {}
 impl Command for AddressCommand {
     fn help(&self) {
@@ -60,12 +75,32 @@ impl Command for AddressCommand {
     }
 }
 
+struct SendCommand {}
+impl Command for SendCommand {
+    fn help(&self) {
+        println!("Send ZEC");
+    }
+
+    fn short_help(&self) -> String {
+        "Send ZEC to the given address".to_string()
+    }
+
+    fn exec(&self, args: &[String], lightclient: &LightClient) {
+        lightclient.do_send(
+            "ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d".to_string(), 
+            1500000, 
+            Some("Hello from the command".to_string()));
+    }
+}
+
 pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     let mut map: HashMap<String, Box<dyn Command>> = HashMap::new();
 
     map.insert("sync".to_string(),      Box::new(SyncCommand{}));
     map.insert("help".to_string(),      Box::new(HelpCommand{}));
     map.insert("address".to_string(),   Box::new(AddressCommand{}));
+    map.insert("info".to_string(),      Box::new(InfoCommand{}));
+    map.insert("send".to_string(),      Box::new(SendCommand{}));
 
     Box::new(map)
 }

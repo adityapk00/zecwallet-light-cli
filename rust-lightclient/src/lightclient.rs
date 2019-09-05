@@ -17,7 +17,7 @@ use tower_hyper::{client, util};
 use tower_util::MakeService;
 use futures::stream::Stream;
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TxFilter};
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TxFilter, Empty};
 use crate::grpc_client::client::CompactTxStreamer;
 
 // Used below to return the grpc "Client" type to calling methods
@@ -58,6 +58,26 @@ impl LightClient {
     pub fn do_address(&self) {        
         println!("Address: {}", self.wallet.address());
         println!("Balance: {}", self.wallet.balance());
+    }
+
+    pub fn do_info(&self) {
+        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+
+        let say_hello = self.make_grpc_client(uri).unwrap()
+            .and_then(move |mut client| {
+                client.get_lightd_info(Request::new(Empty{}))
+            })
+            .and_then(move |response| {
+                //let tx = Transaction::read(&response.into_inner().data[..]).unwrap();
+                println!("{:?}", response.into_inner());
+
+                Ok(())
+            })
+            .map_err(|e| {
+                println!("ERR = {:?}", e);
+            });
+
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
     }
 
     pub fn do_sync(&self) {
