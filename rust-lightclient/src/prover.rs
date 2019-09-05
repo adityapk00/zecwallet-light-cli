@@ -2,10 +2,11 @@
 
 use bellman::groth16::{prepare_verifying_key, Parameters, PreparedVerifyingKey};
 use pairing::bls12_381::{Bls12, Fr};
-use sapling_crypto::{
+use zcash_primitives::{
     jubjub::{edwards, fs::Fs, Unknown},
     primitives::{Diversifier, PaymentAddress, ProofGenerationKey},
     redjubjub::{PublicKey, Signature},
+    transaction::components::Amount
 };
 use zcash_primitives::{
     merkle_tree::CommitmentTreeWitness, prover::TxProver, sapling::Node,
@@ -114,7 +115,7 @@ impl TxProver for InMemTxProver {
     fn binding_sig(
         &self,
         ctx: &mut Self::SaplingProvingContext,
-        value_balance: i64,
+        value_balance: Amount,
         sighash: &[u8; 32],
     ) -> Result<Signature, ()> {
         ctx.binding_sig(value_balance, sighash, &JUBJUB)
