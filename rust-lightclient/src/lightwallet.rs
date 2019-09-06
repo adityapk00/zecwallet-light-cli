@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use pairing::bls12_381::{Bls12, Fr, FrRepr};
+use pairing::bls12_381::{Bls12};
 use zcash_primitives::primitives::{Diversifier, Note, PaymentAddress, /*read_note */ };
 use std::cmp;
 use std::collections::HashMap;
@@ -31,7 +31,8 @@ use zcash_primitives::{
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
     JUBJUB,
 };
-use zcash_primitives::jubjub::{edwards, FixedGenerators, JubjubEngine, JubjubParams, PrimeOrder,
+use zcash_primitives::jubjub::{
+    JubjubEngine,
     fs::{Fs, FsRepr},    
 };
 
@@ -137,6 +138,10 @@ pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
 }
 
 impl SaplingNoteData {
+    fn serialized_version() -> u64 {
+        1
+    }
+
     fn new(
         extfvk: &ExtendedFullViewingKey,
         output: zcash_client_backend::wallet::WalletShieldedOutput
@@ -166,27 +171,21 @@ impl SaplingNoteData {
 
     // Reading a note also needs the corresponding address to read from.
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
-        println!("Trying to read sapling note data");
-        // Read the version number first
         let version = reader.read_u64::<LittleEndian>()?;
-        println!("SaplingNoteData version {}", version);
+        assert_eq!(version, SaplingNoteData::serialized_version());
 
         let account = reader.read_u64::<LittleEndian>()? as usize;
 
-        println!("Trying to read extfvk");
         let extfvk = ExtendedFullViewingKey::read(&mut reader)?;
 
-        println!("Trying to read diversifier");
         let mut diversifier_bytes = [0u8; 11];
         reader.read_exact(&mut diversifier_bytes)?;
         let diversifier = Diversifier{0: diversifier_bytes};
 
         // To recover the note, read the value and r, and then use the payment address
         // to recreate the note
-        println!("Reading value and r");
         let (value, r) = read_note(&mut reader)?; // TODO: This method is in a different package, because of some fields that are private
 
-        println!("Reading note");
         let maybe_note = extfvk.fvk.vk.into_payment_address(diversifier, &JUBJUB).unwrap().create_note(value, r, &JUBJUB);
 
         let note = match maybe_note {
@@ -228,11 +227,10 @@ impl SaplingNoteData {
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         // Write a version number first, so we can later upgrade this if needed.
-        writer.write_u64::<LittleEndian>(1)?;
+        writer.write_u64::<LittleEndian>(SaplingNoteData::serialized_version())?;
 
         writer.write_u64::<LittleEndian>(self.account as u64)?;
 
-        println!("Writing extfvk {:?}", self.extfvk);
         self.extfvk.write(&mut writer)?;
 
         writer.write_all(&self.diversifier.0)?;
@@ -262,11 +260,12 @@ pub struct WalletTx {
 }
 
 impl WalletTx {
-    
+    pub fn serialized_version() -> u64 {
+        return 1;
+    }
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        println!("Wallet version {}", version);
-        // TODO Assert version?
+        assert_eq!(version, WalletTx::serialized_version());
 
         let block = reader.read_i32::<LittleEndian>()?;
 
@@ -279,7 +278,7 @@ impl WalletTx {
     }
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        writer.write_u64::<LittleEndian>(1)?;
+        writer.write_u64::<LittleEndian>(WalletTx::serialized_version())?;
 
         writer.write_i32::<LittleEndian>(self.block)?;
 
@@ -324,13 +323,14 @@ pub struct LightWallet {
 }
 
 impl LightWallet {
-    pub fn new() -> Self {
+    pub fn serialized_version() -> u64 {
+        return 1;
+    }
 
+    pub fn new() -> Self {
         let extsk = ExtendedSpendingKey::master(&[1; 32]);  // New key
         let extfvk = ExtendedFullViewingKey::from(&extsk);
         let address = extfvk.default_address().unwrap().1;
-
-        println!("extfvk is {:?}", extfvk);
 
         LightWallet {
             extsks: [extsk],
@@ -343,7 +343,7 @@ impl LightWallet {
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        println!("LightWallet version {}", version);
+        assert_eq!(version, LightWallet::serialized_version());
 
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
 
@@ -371,7 +371,7 @@ impl LightWallet {
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         // Write the version
-        writer.write_u64::<LittleEndian>(1)?;
+        writer.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
 
         // TODO: Write the keys properly. Right now, they're just hardcoded
 
