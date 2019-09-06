@@ -23,28 +23,28 @@ rustyline = "5.0.2"
 
 
 [dependencies.bellman]
-git = "https://github.com/str4d/librustzcash.git"
-branch = "note-spending-v6"
+git = "https://github.com/adityapk00/librustzcash.git"
+branch = "lightclient-work"
 default-features = false
 features = ["groth16"]
 
 [dependencies.pairing]
-git = "https://github.com/str4d/librustzcash.git"
-branch = "note-spending-v6"
+git = "https://github.com/adityapk00/librustzcash.git"
+branch = "lightclient-work"
 
 [dependencies.zcash_client_backend]
-git = "https://github.com/str4d/librustzcash.git"
-branch = "note-spending-v6"
+git = "https://github.com/adityapk00/librustzcash.git"
+branch = "lightclient-work"
 default-features = false
 
 [dependencies.zcash_primitives]
-git = "https://github.com/str4d/librustzcash.git"
-branch = "note-spending-v6"
+git = "https://github.com/adityapk00/librustzcash.git"
+branch = "lightclient-work"
 default-features = false
 
 [dependencies.zcash_proofs]
-git = "https://github.com/str4d/librustzcash.git"
-branch = "note-spending-v6"
+git = "https://github.com/adityapk00/librustzcash.git"
+branch = "lightclient-work"
 default-features = false
 
 
