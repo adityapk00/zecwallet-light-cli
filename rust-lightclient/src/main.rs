@@ -16,7 +16,10 @@ pub mod grpc_client {
 
 
 pub fn main() {
-    let mut light_client = LightClient::new();
+    let mut lightclient = LightClient::new();
+
+    // At startup, read the wallet.dat 
+    commands::do_user_command(&"read".to_string(), &mut lightclient);
 
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
@@ -24,18 +27,25 @@ pub fn main() {
         println!("No previous history.");
     }
     loop {
-        let readline = rl.readline(&format!("Block:{} (h for help) >> ", light_client.last_scanned_height()));
+        let readline = rl.readline(&format!("Block:{} (h for help) >> ", lightclient.last_scanned_height()));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
-                commands::do_user_command(line, &mut light_client);
+                commands::do_user_command(&line, &mut lightclient);
+
+                // Special check for Quit command.
+                if line == "quit" {
+                    break;
+                }
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
+                lightclient.do_save();
                 break
             },
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
+                lightclient.do_save();
                 break
             },
             Err(err) => {

@@ -1,22 +1,22 @@
 pub extern crate ff;
 
 use std::time::SystemTime;
-
 use std::io::{self, Read, Write};
-
-
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use pairing::bls12_381::{Bls12};
-use zcash_primitives::primitives::{Diversifier, Note, PaymentAddress, /*read_note */ };
 use std::cmp;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
 use protobuf::*;
+
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use pairing::bls12_381::{Bls12};
+use ff::{PrimeField, PrimeFieldRepr};
+
 use zcash_client_backend::{
     constants::testnet::HRP_SAPLING_PAYMENT_ADDRESS, encoding::encode_payment_address,
     proto::compact_formats::CompactBlock, welding_rig::scan_block,
 };
-use ff::{PrimeField, PrimeFieldRepr};
+
 use zcash_primitives::{
     block::BlockHash,
     merkle_tree::{CommitmentTree, IncrementalWitness},
@@ -30,20 +30,15 @@ use zcash_primitives::{
     note_encryption::{Memo, try_sapling_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
     JUBJUB,
-};
-use zcash_primitives::jubjub::{
-    JubjubEngine,
-    fs::{Fs, FsRepr},    
+    primitives::{Diversifier, Note, PaymentAddress},
+    jubjub::{
+        JubjubEngine,
+        fs::{Fs, FsRepr},    
+    }
 };
 
 use crate::address;
 use crate::prover;
-
-// When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
-// allocator.
-#[cfg(feature = "wee_alloc")]
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 const ANCHOR_OFFSET: u32 = 10;
 
