@@ -1,4 +1,7 @@
 use std::time::SystemTime;
+use std::io::{self, Read, Write};
+
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use pairing::bls12_381::Bls12;
 use zcash_primitives::primitives::{Diversifier, Note, PaymentAddress};
@@ -53,6 +56,29 @@ struct BlockData {
     tree: CommitmentTree<Node>,
 }
 
+impl BlockData {
+    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let height = reader.read_i32::<LittleEndian>()?;
+        
+        let mut hash_bytes = [0; 32];
+        reader.read_exact(&mut hash_bytes)?;
+
+        let tree = CommitmentTree::<Node>::read(&mut reader)?;
+
+        Ok(BlockData{
+            height, 
+            hash: BlockHash{ 0: hash_bytes }, 
+            tree
+        })
+    }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        writer.write_i32::<LittleEndian>(self.height)?;
+        writer.write_all(&self.hash.0)?;
+        self.tree.write(writer)
+    }
+}
+
 pub struct SaplingNoteData {
     account: usize,
     diversifier: Diversifier,
@@ -79,6 +105,7 @@ impl SaplingNoteData {
             nf
         };
 
+
         SaplingNoteData {
             account: output.account,
             diversifier: output.to.diversifier,
@@ -89,7 +116,10 @@ impl SaplingNoteData {
             memo: None
         }
     }
-}
+
+    fn print_note(&self) {
+        
+    }
 
 pub struct WalletTx {
     block: i32,

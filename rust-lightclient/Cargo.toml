@@ -20,7 +20,7 @@ tower-util = "0.1"
 hex = "0.3"
 protobuf = "2"
 rustyline = "5.0.2"
-
+byteorder = "1"
 
 [dependencies.bellman]
 git = "https://github.com/adityapk00/librustzcash.git"
