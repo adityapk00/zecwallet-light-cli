@@ -1,10 +1,13 @@
+pub extern crate ff;
+
 use std::time::SystemTime;
+
 use std::io::{self, Read, Write};
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use pairing::bls12_381::Bls12;
-use zcash_primitives::primitives::{Diversifier, Note, PaymentAddress};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use pairing::bls12_381::{Bls12, Fr, FrRepr};
+use zcash_primitives::primitives::{Diversifier, Note, PaymentAddress, /*read_note */ };
 use std::cmp;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -13,10 +16,12 @@ use zcash_client_backend::{
     constants::testnet::HRP_SAPLING_PAYMENT_ADDRESS, encoding::encode_payment_address,
     proto::compact_formats::CompactBlock, welding_rig::scan_block,
 };
+use ff::{PrimeField, PrimeFieldRepr};
 use zcash_primitives::{
     block::BlockHash,
     merkle_tree::{CommitmentTree, IncrementalWitness},
     sapling::Node,
+    serialize::{Vector, Optional},
     transaction::{
         builder::{Builder},
         components::Amount, components::amount::DEFAULT_FEE,
@@ -25,6 +30,9 @@ use zcash_primitives::{
     note_encryption::{Memo, try_sapling_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
     JUBJUB,
+};
+use zcash_primitives::jubjub::{edwards, FixedGenerators, JubjubEngine, JubjubParams, PrimeOrder,
+    fs::{Fs, FsRepr},    
 };
 
 use crate::address;
@@ -65,6 +73,12 @@ impl BlockData {
 
         let tree = CommitmentTree::<Node>::read(&mut reader)?;
 
+        let endtag = reader.read_u64::<LittleEndian>()?;
+        if endtag != 11 {
+            println!("End tag for blockdata {}", endtag);        
+        }
+
+
         Ok(BlockData{
             height, 
             hash: BlockHash{ 0: hash_bytes }, 
@@ -75,18 +89,51 @@ impl BlockData {
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         writer.write_i32::<LittleEndian>(self.height)?;
         writer.write_all(&self.hash.0)?;
-        self.tree.write(writer)
+        self.tree.write(&mut writer)?;
+        writer.write_u64::<LittleEndian>(11)
     }
 }
 
+
 pub struct SaplingNoteData {
     account: usize,
+    extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here. 
     diversifier: Diversifier,
     note: Note<Bls12>,
     witnesses: Vec<IncrementalWitness<Node>>,
     nullifier: [u8; 32],
     spent: Option<TxId>,
     pub memo:  Option<Memo>
+}
+
+
+/// Reads an FsRepr from [u8] of length 32
+/// This will panic (abort) if length provided is
+/// not correct
+/// TODO: This is duplicate from rustzcash.rs
+fn read_fs(from: &[u8]) -> FsRepr {
+    assert_eq!(from.len(), 32);
+
+    let mut f = <<Bls12 as JubjubEngine>::Fs as PrimeField>::Repr::default();
+    f.read_le(from).expect("length is 32 bytes");
+
+    f
+}
+
+// Reading a note also needs the corresponding address to read from.
+pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
+    let value = reader.read_u64::<LittleEndian>()?;
+
+    let mut r_bytes: [u8; 32] = [0; 32];
+    reader.read_exact(&mut r_bytes)?;
+
+    let r = match Fs::from_repr(read_fs(&r_bytes)) {
+        Ok(r) => r,
+        Err(_) => return Err(io::Error::new(
+            io::ErrorKind::InvalidInput, "Couldn't parse randomness"))
+    };
+
+    Ok((value, r))
 }
 
 impl SaplingNoteData {
@@ -105,9 +152,9 @@ impl SaplingNoteData {
             nf
         };
 
-
         SaplingNoteData {
             account: output.account,
+            extfvk: extfvk.clone(),
             diversifier: output.to.diversifier,
             note: output.note,
             witnesses: vec![witness],
@@ -117,13 +164,129 @@ impl SaplingNoteData {
         }
     }
 
-    fn print_note(&self) {
-        
+    // Reading a note also needs the corresponding address to read from.
+    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        println!("Trying to read sapling note data");
+        // Read the version number first
+        let version = reader.read_u64::<LittleEndian>()?;
+        println!("SaplingNoteData version {}", version);
+
+        let account = reader.read_u64::<LittleEndian>()? as usize;
+
+        println!("Trying to read extfvk");
+        let extfvk = ExtendedFullViewingKey::read(&mut reader)?;
+
+        println!("Trying to read diversifier");
+        let mut diversifier_bytes = [0u8; 11];
+        reader.read_exact(&mut diversifier_bytes)?;
+        let diversifier = Diversifier{0: diversifier_bytes};
+
+        // To recover the note, read the value and r, and then use the payment address
+        // to recreate the note
+        println!("Reading value and r");
+        let (value, r) = read_note(&mut reader)?; // TODO: This method is in a different package, because of some fields that are private
+
+        println!("Reading note");
+        let maybe_note = extfvk.fvk.vk.into_payment_address(diversifier, &JUBJUB).unwrap().create_note(value, r, &JUBJUB);
+
+        let note = match maybe_note {
+            Some(n)  => Ok(n),
+            None     => Err(io::Error::new(io::ErrorKind::InvalidInput, "Couldn't create the note for the address"))
+        }?;
+
+        let witnesses = Vector::read(&mut reader, |r| IncrementalWitness::<Node>::read(r))?;
+
+        let mut nullifier = [0u8; 32];
+        reader.read_exact(&mut nullifier)?;
+
+        let spent = Optional::read(&mut reader, |r| {
+            let mut txid_bytes = [0u8; 32];
+            r.read_exact(&mut txid_bytes)?;
+            Ok(TxId{0: txid_bytes})
+        })?;
+
+        let memo = Optional::read(&mut reader, |r| {
+            let mut memo_bytes = [0u8; 512];
+            r.read_exact(&mut memo_bytes)?;
+            match Memo::from_bytes(&memo_bytes) {
+                Some(m) => Ok(m),
+                None    => Err(io::Error::new(io::ErrorKind::InvalidInput, "Couldn't create the memo"))
+            }
+        })?;
+
+        Ok(SaplingNoteData {
+            account,
+            extfvk,
+            diversifier,
+            note,
+            witnesses,
+            nullifier,
+            spent,
+            memo
+        })
     }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        // Write a version number first, so we can later upgrade this if needed.
+        writer.write_u64::<LittleEndian>(1)?;
+
+        writer.write_u64::<LittleEndian>(self.account as u64)?;
+
+        println!("Writing extfvk {:?}", self.extfvk);
+        self.extfvk.write(&mut writer)?;
+
+        writer.write_all(&self.diversifier.0)?;
+
+        // Writing the note means writing the note.value and note.r. The Note is recoverable
+        // from these 2 values and the Payment address. 
+        writer.write_u64::<LittleEndian>(self.note.value)?;
+
+        let mut rcm = [0; 32];
+        self.note.r.into_repr().write_le(&mut rcm[..])?;
+        writer.write_all(&rcm)?;
+
+        Vector::write(&mut writer, &self.witnesses, |wr, wi| wi.write(wr) )?;
+
+        writer.write_all(&self.nullifier)?;
+        Optional::write(&mut writer, &self.spent, |w, t| w.write_all(&t.0))?;
+
+        Optional::write(&mut writer, &self.memo, |w, m| w.write_all(m.as_bytes()))?;
+
+        Ok(())
+    }
+}
 
 pub struct WalletTx {
     block: i32,
     pub notes: Vec<SaplingNoteData>,
+}
+
+impl WalletTx {
+    
+    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let version = reader.read_u64::<LittleEndian>()?;
+        println!("Wallet version {}", version);
+        // TODO Assert version?
+
+        let block = reader.read_i32::<LittleEndian>()?;
+
+        let notes = Vector::read(&mut reader, |r| SaplingNoteData::read(r))?;
+
+        Ok(WalletTx{
+            block,
+            notes
+        })
+    }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        writer.write_u64::<LittleEndian>(1)?;
+
+        writer.write_i32::<LittleEndian>(self.block)?;
+
+        Vector::write(&mut writer, &self.notes, |w, nd| nd.write(w))?;
+
+        Ok(())
+    }
 }
 
 struct SpendableNote {
@@ -167,6 +330,8 @@ impl LightWallet {
         let extfvk = ExtendedFullViewingKey::from(&extsk);
         let address = extfvk.default_address().unwrap().1;
 
+        println!("extfvk is {:?}", extfvk);
+
         LightWallet {
             extsks: [extsk],
             extfvks: [extfvk],
@@ -174,6 +339,51 @@ impl LightWallet {
             blocks: Arc::new(RwLock::new(vec![])),
             txs: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let version = reader.read_u64::<LittleEndian>()?;
+        println!("LightWallet version {}", version);
+
+        let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
+
+        let txs_tuples = Vector::read(&mut reader, |r| {
+            let mut txid_bytes = [0u8; 32];
+            r.read_exact(&mut txid_bytes)?;
+
+            Ok((TxId{0: txid_bytes}, WalletTx::read(r).unwrap()))
+        })?;
+        let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
+
+
+        let extsk = ExtendedSpendingKey::master(&[1; 32]);  // New key
+        let extfvk = ExtendedFullViewingKey::from(&extsk);
+        let address = extfvk.default_address().unwrap().1;
+
+        Ok(LightWallet{
+            extsks: [extsk],
+            extfvks: [extfvk],
+            address,
+            blocks: Arc::new(RwLock::new(blocks)),
+            txs: Arc::new(RwLock::new(txs))
+        })
+    }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        // Write the version
+        writer.write_u64::<LittleEndian>(1)?;
+
+        // TODO: Write the keys properly. Right now, they're just hardcoded
+
+        Vector::write(&mut writer, &self.blocks.read().unwrap(), |w, b| b.write(w))?;
+                
+        // The hashmap, write as a set of tuples
+        Vector::write(&mut writer, &self.txs.read().unwrap().iter().collect::<Vec<(&TxId, &WalletTx)>>(),
+                        |w, (k, v)| {
+                            w.write_all(&k.0)?;
+                            v.write(w)
+                        })?;
+        Ok(())
     }
 
     pub fn set_initial_block(&self, height: i32, hash: &str, sapling_tree: &str) -> bool {

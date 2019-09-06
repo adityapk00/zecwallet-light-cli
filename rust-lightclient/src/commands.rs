@@ -7,7 +7,7 @@ pub trait Command {
 
     fn short_help(&self) -> String;
 
-    fn exec(&self, args: &[String], lightclient: &LightClient);
+    fn exec(&self, args: &[String], lightclient: &mut LightClient);
 }
 
 struct SyncCommand {}
@@ -21,7 +21,7 @@ impl Command for SyncCommand {
         "Download CompactBlocks and sync to the server".to_string()
     }
 
-    fn exec(&self, args: &[String], lightclient: &LightClient) {
+    fn exec(&self, args: &[String], lightclient: &mut LightClient) {
         lightclient.do_sync();
     }
 }
@@ -37,7 +37,7 @@ impl Command for HelpCommand {
         "Lists all available commands".to_string()
     }
 
-    fn exec(&self, args: &[String], _: &LightClient) {
+    fn exec(&self, args: &[String], _: &mut LightClient) {
         // Print a list of all commands
         get_commands().iter().for_each(| (cmd, obj) | {
             println!("{} - {}", cmd, obj.short_help());
@@ -55,7 +55,7 @@ impl Command for InfoCommand {
         "Get the lightwalletd server's info".to_string()
     }
 
-    fn exec(&self, args: &[String], lightclient: &LightClient) {
+    fn exec(&self, args: &[String], lightclient: &mut LightClient) {
         lightclient.do_info();
     }
 }
@@ -70,7 +70,7 @@ impl Command for AddressCommand {
         "List all current addresses".to_string()
     }
 
-    fn exec(&self, args: &[String], lightclient: &LightClient) {
+    fn exec(&self, args: &[String], lightclient: &mut LightClient) {
         lightclient.do_address();
     }
 }
@@ -85,11 +85,41 @@ impl Command for SendCommand {
         "Send ZEC to the given address".to_string()
     }
 
-    fn exec(&self, args: &[String], lightclient: &LightClient) {
+    fn exec(&self, args: &[String], lightclient: &mut LightClient) {
         lightclient.do_send(
             "ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d".to_string(), 
             1500000, 
             Some("Hello from the command".to_string()));
+    }
+}
+
+struct SaveCommand {}
+impl Command for SaveCommand {
+    fn help(&self) {
+        println!("Save wallet to disk");
+    }
+
+    fn short_help(&self) -> String {
+        "Save wallet file to disk".to_string()
+    }
+
+    fn exec(&self, args: &[String], lightclient: &mut LightClient) {
+        lightclient.do_save();
+    }
+}
+
+struct ReadCommand {}
+impl Command for ReadCommand {
+        fn help(&self) {
+        println!("Read wallet from disk");
+    }
+
+    fn short_help(&self) -> String {
+        "Read wallet file from disk".to_string()
+    }
+
+    fn exec(&self, args: &[String], lightclient: &mut LightClient) {
+        lightclient.do_read();
     }
 }
 
@@ -101,11 +131,13 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("address".to_string(),   Box::new(AddressCommand{}));
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
     map.insert("send".to_string(),      Box::new(SendCommand{}));
+    map.insert("save".to_string(),      Box::new(SaveCommand{}));
+    map.insert("read".to_string(),      Box::new(ReadCommand{}));
 
     Box::new(map)
 }
 
-pub fn do_user_command(cmd: String, lightclient: &LightClient) {
+pub fn do_user_command(cmd: String, lightclient: &mut LightClient) {
     match get_commands().get(&cmd) {
         Some(cmd) => cmd.exec(&[], lightclient),
         None      => {

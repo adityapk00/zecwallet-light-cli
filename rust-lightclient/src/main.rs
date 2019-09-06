@@ -16,7 +16,7 @@ pub mod grpc_client {
 
 
 pub fn main() {
-    let light_client = LightClient::new();
+    let mut light_client = LightClient::new();
 
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
@@ -28,7 +28,7 @@ pub fn main() {
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
-                commands::do_user_command(line, &light_client);
+                commands::do_user_command(line, &mut light_client);
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");

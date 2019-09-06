@@ -1,11 +1,12 @@
 use crate::lightwallet::LightWallet;
 
+use std::fs::File;
+use std::io::prelude::*;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use std::error::Error;
-use std::io::prelude::*;
-use std::fs::File;
 
 use zcash_primitives::transaction::{TxId, Transaction};
 use zcash_primitives::note_encryption::Memo;
@@ -59,6 +60,20 @@ impl LightClient {
         println!("Address: {}", self.wallet.address());
         println!("Balance: {}", self.wallet.balance());
     }
+
+    pub fn do_read(&mut self) {
+        let mut file_buffer = File::open("wallet.dat").unwrap();
+        
+        let lw = LightWallet::read(&mut file_buffer).unwrap();
+        self.wallet = Arc::new(lw);
+    }
+
+    pub fn do_save(&self) {
+        let mut file_buffer = File::create("wallet.dat").unwrap();
+        
+        self.wallet.write(&mut file_buffer).unwrap();
+    }
+
 
     pub fn do_info(&self) {
         let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
