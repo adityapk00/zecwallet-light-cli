@@ -114,6 +114,32 @@ impl LightClient {
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
     }
 
+    pub fn do_list_transactions(&self) {
+        // Go over all the transactions
+        self.wallet.txs.read().unwrap().iter().for_each(
+            | (k, v) | {
+                println!("Block {}", v.block);
+                println!("Txid {}", k);
+                v.notes.iter().for_each( |nd| {
+                    println!("Spent in txid {}", match nd.spent {
+                        Some(txid) => format!("{}", txid),
+                        _ => "(not spent)".to_string()
+                    });
+                    println!("Value {}", nd.note.value);
+                    println!("Memo {}", match &nd.memo {
+                        Some(memo) => {
+                            match memo.to_utf8() {
+                                Some(Ok(memo_str)) => memo_str,
+                                _ => "".to_string()
+                            }
+                        }
+                        _ => "".to_string()
+                    });
+                });
+            }
+        )
+    }
+
     pub fn do_sync(&self) {
         // Sync is 3 parts
         // 1. Get the latest block
@@ -185,7 +211,7 @@ impl LightClient {
                 })
                 .collect::<Vec<(TxId, Option<Memo>)>>();
                 
-            println!("{:?}", txids_and_memos);
+            //println!("{:?}", txids_and_memos);
             // TODO: Assert that all the memos here are None
 
             txids_to_fetch = txids_and_memos.iter()
@@ -197,7 +223,7 @@ impl LightClient {
         // read the memos        
         for txid in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
-            println!("Scanning txid {}", txid);
+            println!("Fetching full Tx: {}", txid);
 
             self.fetch_full_tx(txid, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
@@ -222,7 +248,7 @@ impl LightClient {
                     })
                     .collect::<Vec<Option<String>>>();
 
-        println!("All Wallet Txns {:?}", memos);
+        //println!("All Wallet Txns {:?}", memos);
     }
 
     pub fn do_send(&self, addr: String, value: u64, memo: Option<String>) {

@@ -124,6 +124,22 @@ impl Command for ReadCommand {
     }
 }
 
+struct TransactionsCommand {}
+impl Command for TransactionsCommand {
+    fn help(&self) {
+        println!("Show transactions");
+    }
+
+    fn short_help(&self) -> String {
+        "List all transactions in the wallet".to_string()
+    }
+
+    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+        lightclient.do_list_transactions();
+    }
+
+}
+
 struct QuitCommand {}
 impl Command for QuitCommand {
         fn help(&self) {
@@ -151,6 +167,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("save".to_string(),      Box::new(SaveCommand{}));
     map.insert("read".to_string(),      Box::new(ReadCommand{}));
     map.insert("quit".to_string(),      Box::new(QuitCommand{}));
+    map.insert("list".to_string(),      Box::new(TransactionsCommand{}));
 
     Box::new(map)
 }
