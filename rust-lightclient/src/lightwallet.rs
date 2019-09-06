@@ -95,11 +95,12 @@ pub struct SaplingNoteData {
     account: usize,
     extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here. 
     diversifier: Diversifier,
-    note: Note<Bls12>,
+    pub note: Note<Bls12>,
     witnesses: Vec<IncrementalWitness<Node>>,
     nullifier: [u8; 32],
-    spent: Option<TxId>,
-    pub memo:  Option<Memo>
+    pub spent: Option<TxId>,
+    pub memo:  Option<Memo>,
+    pub is_change: bool,
 }
 
 
@@ -160,7 +161,8 @@ impl SaplingNoteData {
             witnesses: vec![witness],
             nullifier: nf,
             spent: None,
-            memo: None
+            memo: None,
+            is_change: output.is_change,
         }
     }
 
@@ -208,6 +210,8 @@ impl SaplingNoteData {
             }
         })?;
 
+        let is_change: bool = reader.read_u8()? > 0;
+
         Ok(SaplingNoteData {
             account,
             extfvk,
@@ -216,7 +220,8 @@ impl SaplingNoteData {
             witnesses,
             nullifier,
             spent,
-            memo
+            memo,
+            is_change,
         })
     }
 
@@ -245,30 +250,54 @@ impl SaplingNoteData {
 
         Optional::write(&mut writer, &self.memo, |w, m| w.write_all(m.as_bytes()))?;
 
+        writer.write_u8(if self.is_change {1} else {0})?;
+
         Ok(())
     }
 }
 
 pub struct WalletTx {
-    block: i32,
+    pub block: i32,
+
+    // Txid of this transcation. It's duplicated here (It is also the Key in the HashMap that points to this
+    // WalletTx in LightWallet::txs)
+    pub txid: TxId,
+
+    // List of all notes recieved in this tx. Note that some of these might be change notes.
     pub notes: Vec<SaplingNoteData>,
+
+    // Total shielded value spent in this Tx. Note that this is the value of notes spent,
+    // the change is returned in the notes above. Subtract the two to get the actual value spent.
+    // Also note that even after subtraction, you might need to account for transparent inputs and outputs
+    // to make sure the value is accurate.
+    pub total_shielded_value_spent: u64,
 }
 
 impl WalletTx {
     pub fn serialized_version() -> u64 {
         return 1;
     }
+
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
         assert_eq!(version, WalletTx::serialized_version());
 
         let block = reader.read_i32::<LittleEndian>()?;
 
+        let mut txid_bytes = [0u8; 32];
+        reader.read_exact(&mut txid_bytes)?;
+
+        let txid = TxId{0: txid_bytes};
+
         let notes = Vector::read(&mut reader, |r| SaplingNoteData::read(r))?;
+
+        let total_shielded_value_spent = reader.read_u64::<LittleEndian>()?;
 
         Ok(WalletTx{
             block,
-            notes
+            txid,
+            notes,
+            total_shielded_value_spent
         })
     }
 
@@ -277,7 +306,11 @@ impl WalletTx {
 
         writer.write_i32::<LittleEndian>(self.block)?;
 
+        writer.write_all(&self.txid.0)?;
+
         Vector::write(&mut writer, &self.notes, |w, nd| nd.write(w))?;
+
+        writer.write_u64::<LittleEndian>(self.total_shielded_value_spent)?;
 
         Ok(())
     }
@@ -613,7 +646,10 @@ impl LightWallet {
 
         for tx in new_txs {
             // Mark notes as spent.
+            let mut total_shielded_value_spent: u64 = 0;
+
             for spend in &tx.shielded_spends {
+                // TODO: Add up the spent value here and add it to the WalletTx as a Spent
                 let txid = nfs
                     .iter()
                     .find(|(nf, _, _)| &nf[..] == &spend.nf[..])
@@ -627,13 +663,16 @@ impl LightWallet {
                     .find(|nd| &nd.nullifier[..] == &spend.nf[..])
                     .unwrap();
                 spent_note.spent = Some(tx.txid);
+                total_shielded_value_spent += spent_note.note.value;
             }
 
             // Find the existing transaction entry, or create a new one.
             if !txs.contains_key(&tx.txid) {
                 let tx_entry = WalletTx {
                     block: block_data.height,
+                    txid: tx.txid,
                     notes: vec![],
+                    total_shielded_value_spent
                 };
                 txs.insert(tx.txid, tx_entry);
             }

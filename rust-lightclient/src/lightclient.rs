@@ -232,22 +232,21 @@ impl LightClient {
             });
         };
 
-        // Print all the memos for fun.
-        let memos = self.wallet.txs.read().unwrap()
-                    .values().flat_map(|wtx| {
-                        wtx.notes.iter().map(|nd| nd.memo.clone() ).collect::<Vec<Option<Memo>>>()
-                    })
-                    .map( |m| match m {
-                        Some(memo) => {
-                            match memo.to_utf8() {
-                                Some(Ok(memo_str)) => Some(memo_str),
-                                _ => None
-                            }
-                        }
-                        _ => None
-                    })
-                    .collect::<Vec<Option<String>>>();
-
+        // // Print all the memos for fun.
+        // let memos = self.wallet.txs.read().unwrap()
+        //             .values().flat_map(|wtx| {
+        //                 wtx.notes.iter().map(|nd| nd.memo.clone() ).collect::<Vec<Option<Memo>>>()
+        //             })
+        //             .map( |m| match m {
+        //                 Some(memo) => {
+        //                     match memo.to_utf8() {
+        //                         Some(Ok(memo_str)) => Some(memo_str),
+        //                         _ => None
+        //                     }
+        //                 }
+        //                 _ => None
+        //             })
+        //             .collect::<Vec<Option<String>>>();
         //println!("All Wallet Txns {:?}", memos);
     }
 
