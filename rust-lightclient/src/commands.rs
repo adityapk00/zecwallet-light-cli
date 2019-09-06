@@ -39,6 +39,7 @@ impl Command for HelpCommand {
 
     fn exec(&self, _args: &[String], _: &mut LightClient) {
         // Print a list of all commands
+        println!("Available commands:");
         get_commands().iter().for_each(| (cmd, obj) | {
             println!("{} - {}", cmd, obj.short_help());
         });

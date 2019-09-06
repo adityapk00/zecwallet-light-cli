@@ -1,5 +1,6 @@
 use crate::lightwallet::LightWallet;
 
+use std::path::Path;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
@@ -63,9 +64,20 @@ impl LightClient {
     }
 
     pub fn do_read(&mut self) {
+        if !Path::new("wallet.dat").exists() {
+            println!("No existing wallet");
+            return;
+        }
+
         print!("Reading wallet...");
         io::stdout().flush().ok().expect("Could not flush stdout");
-        let mut file_buffer = File::open("wallet.dat").unwrap();
+        let mut file_buffer = match File::open("wallet.dat") {
+            Ok(f)  => f,
+            Err(e) => {
+                println!("[Error: {}]", e.description());
+                return;
+            }
+        };
         
         let lw = LightWallet::read(&mut file_buffer).unwrap();
         self.wallet = Arc::new(lw);
