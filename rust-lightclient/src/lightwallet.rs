@@ -90,7 +90,6 @@ impl BlockData {
     }
 }
 
-
 pub struct SaplingNoteData {
     account: usize,
     extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here. 
@@ -253,6 +252,13 @@ impl SaplingNoteData {
         writer.write_u8(if self.is_change {1} else {0})?;
 
         Ok(())
+    }
+
+    pub fn note_address(&self) -> Option<String> {
+        match self.extfvk.fvk.vk.into_payment_address(self.diversifier, &JUBJUB) {
+            Some(pa) => Some(encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &pa)),
+            None     => None
+        }
     }
 }
 

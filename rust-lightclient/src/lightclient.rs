@@ -27,6 +27,14 @@ use crate::grpc_client::client::CompactTxStreamer;
 // Used below to return the grpc "Client" type to calling methods
 type Client = crate::grpc_client::client::CompactTxStreamer<tower_request_modifier::RequestModifier<tower_hyper::client::Connection<tower_grpc::BoxBody>, tower_grpc::BoxBody>>;
 
+#[derive(Debug)]
+pub struct TransactionListItem {
+    pub block_height: i32,    // Block height in which this transaction was confirmed
+    pub txid: String,           
+    pub amount: i64,          // Amount of this Tx. -ve values are spends, +ve are recieve
+    pub address: String,      // for recieves, it is the incoming address. For sends, it is the address sent from
+    pub memo: Option<String>, // Optional string 
+}
 
 pub struct LightClient {
     pub wallet          : Arc<LightWallet>,
@@ -118,31 +126,70 @@ impl LightClient {
     }
 
     pub fn do_list_transactions(&self) {
-        // Go over all the transactions
-        self.wallet.txs.read().unwrap().iter().for_each(
-            | (k, v) | {
-                println!("Block {}", v.block);
-                println!("Txid {}", k);
-                v.notes.iter().for_each( |nd| {
-                    println!("Spent in txid {}", match nd.spent {
-                        Some(txid) => format!("{}", txid),
-                        _ => "(not spent)".to_string()
+        // Create a list of TransactionItems
+        let mut tx_list = self.wallet.txs.read().unwrap().iter()
+            .flat_map(| (_k, v) | {
+                let mut txns = Vec::new();
+
+                if v.total_shielded_value_spent > 0 {
+                    // If money was spent, create a transaction. For this, we'll subtract
+                    // all the change notes. TODO: Add transparent change here to subtract it also
+                    let total_change: u64 = v.notes.iter()
+                        .filter( |nd| nd.is_change )
+                        .map( |nd| nd.note.value )
+                        .sum();
+
+                    // TODO: What happens if change is > than sent ?
+
+                    txns.push(TransactionListItem {
+                        block_height: v.block,
+                        txid        : format!("{}", v.txid),
+                        amount      : total_change as i64 - v.total_shielded_value_spent as i64,
+                        address     : "".to_string(), // TODO: For send, we don't have an address
+                        memo        : None
                     });
-                    println!("Value {}", nd.note.value);
-                    println!("Memo {}", match &nd.memo {
-                        Some(memo) => {
-                            match memo.to_utf8() {
-                                Some(Ok(memo_str)) => memo_str,
-                                _ => "".to_string()
-                            }
-                        }
-                        _ => "".to_string()
-                    });
-                });
-                
-                println!("Total spent: {}", v.total_shielded_value_spent);
-            }
-        )
+                } 
+
+                // For each note that is not a change, add a Tx.
+                txns.extend(v.notes.iter()
+                    .filter( |nd| !nd.is_change )
+                    .map ( |nd| 
+                        TransactionListItem {
+                            block_height: v.block,
+                            txid        : format!("{}", v.txid),
+                            amount      : nd.note.value as i64,
+                            address     : nd.note_address().unwrap(),
+                            memo        : match &nd.memo {
+                                            Some(memo) => {
+                                                match memo.to_utf8() {
+                                                    Some(Ok(memo_str)) => Some(memo_str),
+                                                    _ => None
+                                                }
+                                            }
+                                            _ => None
+                                        }
+                    })
+                );
+
+                txns
+            })
+            .collect::<Vec<TransactionListItem>>();
+
+        tx_list.sort_by( |a, b| if a.block_height == b.block_height {
+                                    a.txid.cmp(&b.txid)
+                                } else {
+                                    a.block_height.cmp(&b.block_height)
+                                }
+        );
+
+        tx_list.iter().for_each(|tx| {
+            println!("height: {}", tx.block_height);
+            println!("txid: {}", tx.txid);
+            println!("amount: {}", tx.amount);
+            println!("address: {}", tx.address);
+            println!("memo: {}", tx.memo.as_ref().unwrap_or(&"".to_string()));
+            println!("");
+        });
     }
 
     pub fn do_sync(&self) {
