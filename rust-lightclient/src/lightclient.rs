@@ -139,6 +139,8 @@ impl LightClient {
                         _ => "".to_string()
                     });
                 });
+                
+                println!("Total spent: {}", v.total_shielded_value_spent);
             }
         )
     }

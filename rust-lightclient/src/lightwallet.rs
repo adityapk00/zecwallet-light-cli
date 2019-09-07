@@ -672,12 +672,12 @@ impl LightWallet {
                     block: block_data.height,
                     txid: tx.txid,
                     notes: vec![],
-                    total_shielded_value_spent
+                    total_shielded_value_spent: 0
                 };
                 txs.insert(tx.txid, tx_entry);
             }
             let tx_entry = txs.get_mut(&tx.txid).unwrap();
-
+            tx_entry.total_shielded_value_spent = total_shielded_value_spent;
             // Save notes.
             for output in tx
                 .shielded_outputs
