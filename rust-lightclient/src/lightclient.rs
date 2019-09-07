@@ -4,6 +4,7 @@ use std::path::Path;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use std::io::{BufReader, BufWriter};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -72,7 +73,7 @@ impl LightClient {
         print!("Reading wallet...");
         io::stdout().flush().ok().expect("Could not flush stdout");
         let mut file_buffer = match File::open("wallet.dat") {
-            Ok(f)  => f,
+            Ok(f)  => BufReader::new(f),
             Err(e) => {
                 println!("[Error: {}]", e.description());
                 return;
@@ -87,7 +88,9 @@ impl LightClient {
     pub fn do_save(&self) {
         print!("Saving wallet...");
         io::stdout().flush().ok().expect("Could not flush stdout");
-        let mut file_buffer = File::create("wallet.dat").unwrap();
+        let mut file_buffer = BufWriter::with_capacity(
+            1_000_000, // 1 MB write buffer
+            File::create("wallet.dat").unwrap());
         
         self.wallet.write(&mut file_buffer).unwrap();
         println!("[OK]");
