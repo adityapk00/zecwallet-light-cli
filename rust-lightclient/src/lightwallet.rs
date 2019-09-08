@@ -28,7 +28,7 @@ use zcash_primitives::{
         TxId, Transaction
     },
     note_encryption::{Memo, try_sapling_note_decryption},
-    zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
+    zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
     primitives::{Diversifier, Note, PaymentAddress},
     jubjub::{
@@ -349,9 +349,15 @@ impl SpendableNote {
 }
 
 pub struct LightWallet {
-    extsks: [ExtendedSpendingKey; 1],
-    extfvks: [ExtendedFullViewingKey; 1],
-    address: PaymentAddress<Bls12>,
+    seed: [u8; 32], // Seed phrase for this wallet. 
+
+    // List of keys, actually in this wallet. This may include more
+    // than keys derived from the seed, for example, if user imports 
+    // a private key
+    extsks:  Vec<ExtendedSpendingKey>,
+    extfvks: Vec<ExtendedFullViewingKey>,
+    address: Vec<PaymentAddress<Bls12>>,
+    
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
 }
@@ -361,23 +367,63 @@ impl LightWallet {
         return 1;
     }
 
-    pub fn new() -> Self {
-        let extsk = ExtendedSpendingKey::master(&[1; 32]);  // New key
-        let extfvk = ExtendedFullViewingKey::from(&extsk);
+    fn get_pk_from_seed(seed: &[u8; 32]) -> 
+            (ExtendedSpendingKey, ExtendedFullViewingKey, PaymentAddress<Bls12>) {
+        let extsk: ExtendedSpendingKey = ExtendedSpendingKey::from_path(
+            &ExtendedSpendingKey::master(seed),
+            &[
+                ChildIndex::Hardened(32),
+                ChildIndex::Hardened(1),    // TODO: Cointype should be 133 for mainnet
+                ChildIndex::Hardened(0)
+            ],
+        );
+        let extfvk  = ExtendedFullViewingKey::from(&extsk);
         let address = extfvk.default_address().unwrap().1;
 
+        (extsk, extfvk, address)
+    }
+
+    pub fn new() -> Self {
+        use rand::{FromEntropy, ChaChaRng, Rng};
+
+        // Create a random seed. 
+        let mut system_rng = ChaChaRng::from_entropy();
+        let mut seed_bytes = [0u8; 32];
+        system_rng.fill(&mut seed_bytes);
+
+        // Derive only the first address
+        // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
+        // users can import a seed phrase and automatically get all used addresses
+        let (extsk, extfvk, address) = LightWallet::get_pk_from_seed(&seed_bytes);
+
         LightWallet {
-            extsks: [extsk],
-            extfvks: [extfvk],
-            address,
-            blocks: Arc::new(RwLock::new(vec![])),
-            txs: Arc::new(RwLock::new(HashMap::new())),
+            seed:    seed_bytes,
+            extsks:  vec![extsk],
+            extfvks: vec![extfvk],
+            address: vec![address],
+            blocks:  Arc::new(RwLock::new(vec![])),
+            txs:     Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
         assert_eq!(version, LightWallet::serialized_version());
+
+        // Seed
+        let mut seed_bytes = [0u8; 32];
+        reader.read_exact(&mut seed_bytes)?;
+
+        // Read the spending keys
+        let extsks = Vector::read(&mut reader, |r| ExtendedSpendingKey::read(r))?;
+
+        // Calculate the viewing keys
+        let extfvks = extsks.iter().map(|sk| ExtendedFullViewingKey::from(sk))
+            .collect::<Vec<ExtendedFullViewingKey>>();
+
+        // Calculate the addresses
+        let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
+            .collect::<Vec<PaymentAddress<Bls12>>>();
 
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
 
@@ -389,17 +435,13 @@ impl LightWallet {
         })?;
         let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
 
-
-        let extsk = ExtendedSpendingKey::master(&[1; 32]);  // New key
-        let extfvk = ExtendedFullViewingKey::from(&extsk);
-        let address = extfvk.default_address().unwrap().1;
-
         Ok(LightWallet{
-            extsks: [extsk],
-            extfvks: [extfvk],
-            address,
-            blocks: Arc::new(RwLock::new(blocks)),
-            txs: Arc::new(RwLock::new(txs))
+            seed:    seed_bytes,
+            extsks:  extsks,
+            extfvks: extfvks,
+            address: addresses,
+            blocks:  Arc::new(RwLock::new(blocks)),
+            txs:     Arc::new(RwLock::new(txs))
         })
     }
 
@@ -407,7 +449,13 @@ impl LightWallet {
         // Write the version
         writer.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
 
-        // TODO: Write the keys properly. Right now, they're just hardcoded
+        // Write the seed
+        writer.write_all(&self.seed)?;
+
+        // Write all the spending keys
+        Vector::write(&mut writer, &self.extsks, 
+             |w, sk| sk.write(w)
+        )?;
 
         Vector::write(&mut writer, &self.blocks.read().unwrap(), |w, b| b.write(w))?;
                 
@@ -487,8 +535,8 @@ impl LightWallet {
         }
     }
 
-    pub fn address(&self) -> String {
-        encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &self.address)
+    pub fn address(&self, account: usize) -> String {
+        encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &self.address[account])
     }
 
     pub fn balance(&self) -> u64 {

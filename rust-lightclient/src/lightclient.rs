@@ -68,7 +68,7 @@ impl LightClient {
     }
 
     pub fn do_address(&self) {        
-        println!("Address: {}", self.wallet.address());
+        println!("Address: {}", self.wallet.address(0));    // TODO: This is showing only the default address
         println!("Balance: {}", self.wallet.balance());
     }
 
