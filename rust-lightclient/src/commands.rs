@@ -72,7 +72,8 @@ impl Command for AddressCommand {
     }
 
     fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
-        lightclient.do_address();
+        let res = lightclient.do_address();
+        println!("{}", res.pretty(2));
     }
 }
 

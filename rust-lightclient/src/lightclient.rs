@@ -11,8 +11,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use std::error::Error;
 
+use json::{object, JsonValue};
+
 use zcash_primitives::transaction::{TxId, Transaction};
 use zcash_primitives::note_encryption::Memo;
+use zcash_client_backend::{
+    constants::testnet::HRP_SAPLING_PAYMENT_ADDRESS, encoding::encode_payment_address,
+};
 
 use futures::Future;
 use hyper::client::connect::{Destination, HttpConnector};
@@ -67,9 +72,21 @@ impl LightClient {
         self.wallet.last_scanned_height() as u64
     }
 
-    pub fn do_address(&self) {        
-        println!("Address: {}", self.wallet.address(0));    // TODO: This is showing only the default address
-        println!("Balance: {}", self.wallet.balance());
+    pub fn do_address(&self) -> json::JsonValue{       
+        let addresses = self.wallet.address.iter().map( |ad| {
+            let address = encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &ad);
+            object!{
+                "address" => address.clone(),
+                "balance" => self.wallet.balance(Some(address.clone())),
+                "verified_balance" => self.wallet.verified_balance(Some(address)),
+            }
+        }).collect::<Vec<JsonValue>>();
+
+        object!{
+            "balance" => self.wallet.balance(None),
+            "verified_balance" => self.wallet.verified_balance(None),
+            "addresses" => addresses
+        }
     }
 
     pub fn do_read(&mut self) {
@@ -223,7 +240,7 @@ impl LightClient {
             };
 
             print!("Syncing {}/{}, Balance = {}           \r", 
-                last_scanned_height, last_block, self.wallet.balance());
+                last_scanned_height, last_block, self.wallet.balance(None));
 
             self.fetch_blocks(last_scanned_height, end_height, simple_callback);
 

@@ -22,6 +22,7 @@ protobuf = "2"
 rustyline = "5.0.2"
 byteorder = "1"
 rand = "0.5.6"
+json = "0.12.0"
 
 [dependencies.bellman]
 path = "../../librustzcash/bellman"

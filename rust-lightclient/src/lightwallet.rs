@@ -356,7 +356,7 @@ pub struct LightWallet {
     // a private key
     extsks:  Vec<ExtendedSpendingKey>,
     extfvks: Vec<ExtendedFullViewingKey>,
-    address: Vec<PaymentAddress<Bls12>>,
+    pub address: Vec<PaymentAddress<Bls12>>,
     
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
@@ -539,7 +539,7 @@ impl LightWallet {
         encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &self.address[account])
     }
 
-    pub fn balance(&self) -> u64 {
+    pub fn balance(&self, addr: Option<String>) -> u64 {
         self.txs
             .read()
             .unwrap()
@@ -547,13 +547,23 @@ impl LightWallet {
             .map(|tx| {
                 tx.notes
                     .iter()
+                    .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
+                        match addr.clone() {
+                            Some(a) => a == encode_payment_address(
+                                                HRP_SAPLING_PAYMENT_ADDRESS,
+                                                &nd.extfvk.fvk.vk
+                                                    .into_payment_address(nd.diversifier, &JUBJUB).unwrap()
+                                            ),
+                            None    => true
+                        }
+                    })
                     .map(|nd| if nd.spent.is_none() { nd.note.value } else { 0 })
                     .sum::<u64>()
             })
             .sum::<u64>()
     }
 
-    pub fn verified_balance(&self) -> u64 {
+    pub fn verified_balance(&self, addr: Option<String>) -> u64 {
         let anchor_height = match self.get_target_height_and_anchor_offset() {
             Some((height, anchor_offset)) => height - anchor_offset as u32,
             None => return 0,
@@ -567,6 +577,16 @@ impl LightWallet {
                 if tx.block as u32 <= anchor_height {
                     tx.notes
                         .iter()
+                        .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
+                            match addr.clone() {
+                                Some(a) => a == encode_payment_address(
+                                                    HRP_SAPLING_PAYMENT_ADDRESS,
+                                                    &nd.extfvk.fvk.vk
+                                                        .into_payment_address(nd.diversifier, &JUBJUB).unwrap()
+                                                ),
+                                None    => true
+                            }
+                        })
                         .map(|nd| if nd.spent.is_none() { nd.note.value } else { 0 })
                         .sum::<u64>()
                 } else {
