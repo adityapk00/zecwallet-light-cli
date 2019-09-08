@@ -32,15 +32,6 @@ use crate::grpc_client::client::CompactTxStreamer;
 // Used below to return the grpc "Client" type to calling methods
 type Client = crate::grpc_client::client::CompactTxStreamer<tower_request_modifier::RequestModifier<tower_hyper::client::Connection<tower_grpc::BoxBody>, tower_grpc::BoxBody>>;
 
-#[derive(Debug)]
-pub struct TransactionListItem {
-    pub block_height: i32,    // Block height in which this transaction was confirmed
-    pub txid: String,           
-    pub amount: i64,          // Amount of this Tx. -ve values are spends, +ve are recieve
-    pub address: String,      // for recieves, it is the incoming address. For sends, it is the address sent from
-    pub memo: Option<String>, // Optional string 
-}
-
 pub struct LightClient {
     pub wallet          : Arc<LightWallet>,
     pub sapling_output  : Vec<u8>,
@@ -142,11 +133,11 @@ impl LightClient {
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
     }
 
-    pub fn do_list_transactions(&self) {
+    pub fn do_list_transactions(&self) -> JsonValue {
         // Create a list of TransactionItems
         let mut tx_list = self.wallet.txs.read().unwrap().iter()
             .flat_map(| (_k, v) | {
-                let mut txns = Vec::new();
+                let mut txns: Vec<JsonValue> = vec![];
 
                 if v.total_shielded_value_spent > 0 {
                     // If money was spent, create a transaction. For this, we'll subtract
@@ -158,12 +149,12 @@ impl LightClient {
 
                     // TODO: What happens if change is > than sent ?
 
-                    txns.push(TransactionListItem {
-                        block_height: v.block,
-                        txid        : format!("{}", v.txid),
-                        amount      : total_change as i64 - v.total_shielded_value_spent as i64,
-                        address     : "".to_string(), // TODO: For send, we don't have an address
-                        memo        : None
+                    txns.push(object! {
+                        "block_height" => v.block,
+                        "txid"         => format!("{}", v.txid),
+                        "amount"       => total_change as i64 - v.total_shielded_value_spent as i64,
+                        "address"      => None::<String>, // TODO: For send, we don't have an address
+                        "memo"         => None::<String>
                     });
                 } 
 
@@ -171,12 +162,12 @@ impl LightClient {
                 txns.extend(v.notes.iter()
                     .filter( |nd| !nd.is_change )
                     .map ( |nd| 
-                        TransactionListItem {
-                            block_height: v.block,
-                            txid        : format!("{}", v.txid),
-                            amount      : nd.note.value as i64,
-                            address     : nd.note_address().unwrap(),
-                            memo        : match &nd.memo {
+                        object! {
+                            "block_height" => v.block,
+                            "txid"         => format!("{}", v.txid),
+                            "amount"       => nd.note.value as i64,
+                            "address"      => nd.note_address().unwrap(),
+                            "memo"         => match &nd.memo {
                                             Some(memo) => {
                                                 match memo.to_utf8() {
                                                     Some(Ok(memo_str)) => Some(memo_str),
@@ -190,23 +181,16 @@ impl LightClient {
 
                 txns
             })
-            .collect::<Vec<TransactionListItem>>();
+            .collect::<Vec<JsonValue>>();
 
-        tx_list.sort_by( |a, b| if a.block_height == b.block_height {
-                                    a.txid.cmp(&b.txid)
+        tx_list.sort_by( |a, b| if a["block_height"] == b["block_height"] {
+                                    a["txid"].as_str().cmp(&b["txid"].as_str())
                                 } else {
-                                    a.block_height.cmp(&b.block_height)
+                                    a["block_height"].as_i32().cmp(&b["block_height"].as_i32())
                                 }
         );
 
-        tx_list.iter().for_each(|tx| {
-            println!("height: {}", tx.block_height);
-            println!("txid: {}", tx.txid);
-            println!("amount: {}", tx.amount);
-            println!("address: {}", tx.address);
-            println!("memo: {}", tx.memo.as_ref().unwrap_or(&"".to_string()));
-            println!("");
-        });
+        JsonValue::Array(tx_list)
     }
 
     pub fn do_sync(&self) {

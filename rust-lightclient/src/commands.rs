@@ -136,7 +136,8 @@ impl Command for TransactionsCommand {
     }
 
     fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
-        lightclient.do_list_transactions();
+        let txns = lightclient.do_list_transactions();
+        println!("{}", txns.pretty(2));
     }
 
 }
