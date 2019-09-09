@@ -42,7 +42,7 @@ use zcash_primitives::{
 use crate::address;
 use crate::prover;
 
-const ANCHOR_OFFSET: u32 = 10;
+const ANCHOR_OFFSET: u32 = 1;
 
 const SAPLING_ACTIVATION_HEIGHT: i32 = 280_000;
 
@@ -94,8 +94,8 @@ impl BlockData {
 
 pub struct SaplingNoteData {
     account: usize,
-    extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here. 
-    diversifier: Diversifier,
+    pub extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here. 
+    pub diversifier: Diversifier,
     pub note: Note<Bls12>,
     witnesses: Vec<IncrementalWitness<Node>>,
     nullifier: [u8; 32],
@@ -543,8 +543,9 @@ impl LightWallet {
         }
     }
 
-    pub fn address(&self, account: usize) -> String {
-        encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &self.address[account])
+    pub fn address_from_extfvk(extfvk: &ExtendedFullViewingKey, diversifier: Diversifier) -> String {
+        encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, 
+                                &extfvk.fvk.vk.into_payment_address(diversifier, &JUBJUB).unwrap())
     }
 
     pub fn get_seed_phrase(&self) -> String {
@@ -879,8 +880,7 @@ impl LightWallet {
         println!("{}: Adding output", now() - start_time);
         if let Err(e) = match to {
             address::RecipientAddress::Shielded(to) => {
-                // TODO Make it use encoded_memo
-                builder.add_sapling_output(ovk, to.clone(), value, None)
+                builder.add_sapling_output(ovk, to.clone(), value, encoded_memo)
             }
             address::RecipientAddress::Transparent(to) => {
                 builder.add_transparent_output(&to, value)

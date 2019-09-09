@@ -147,6 +147,25 @@ impl Command for TransactionsCommand {
 
 }
 
+
+struct NotesCommand {}
+impl Command for NotesCommand {
+    fn help(&self) {
+        println!("Show Notes");
+    }
+
+    fn short_help(&self) -> String {
+        "List all sapling notes in the wallet".to_string()
+    }
+
+    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+        let txns = lightclient.do_list_notes();
+        println!("{}", txns.pretty(2));
+    }
+
+}
+
+
 struct QuitCommand {}
 impl Command for QuitCommand {
         fn help(&self) {
@@ -174,6 +193,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("save".to_string(),      Box::new(SaveCommand{}));
     map.insert("quit".to_string(),      Box::new(QuitCommand{}));
     map.insert("list".to_string(),      Box::new(TransactionsCommand{}));
+    map.insert("notes".to_string(),     Box::new(NotesCommand{}));
     map.insert("seed".to_string(),      Box::new(SeedCommand{}));
 
     Box::new(map)

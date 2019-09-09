@@ -136,6 +136,26 @@ impl LightClient {
         self.wallet.get_seed_phrase()
     }
 
+    // Return a list of all notes, spent and unspent
+    pub fn do_list_notes(&self) -> JsonValue {
+        JsonValue::Array(
+            self.wallet.txs.read().unwrap().iter()
+                .flat_map( |(txid, wtx)| {
+                    wtx.notes.iter().map(move |nd| 
+                        object!{
+                            "created_in_block"   => wtx.block,
+                            "created_in_txid"    => format!("{}", txid),
+                            "value"              => nd.note.value,
+                            "is_change"          => nd.is_change,
+                            "address"            => LightWallet::address_from_extfvk(&nd.extfvk, nd.diversifier),
+                            "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid))
+                        }
+                    )
+                })
+                .collect::<Vec<JsonValue>>()
+        )
+    }
+
     pub fn do_list_transactions(&self) -> JsonValue {
         // Create a list of TransactionItems
         let mut tx_list = self.wallet.txs.read().unwrap().iter()

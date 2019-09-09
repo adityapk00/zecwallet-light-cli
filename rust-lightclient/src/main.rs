@@ -38,9 +38,6 @@ pub fn main() {
 
     println!("Starting Light Client");
 
-    // At startup, read the wallet.dat 
-    commands::do_user_command(&"read".to_string(), &mut lightclient);
-
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
     let _ = rl.load_history("history.txt");
