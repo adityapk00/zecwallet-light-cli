@@ -29,28 +29,22 @@ impl From<TransparentAddress> for RecipientAddress {
 
 impl RecipientAddress {
     pub fn from_str(s: &str) -> Option<Self> {
+        // Try to match a sapling z address 
         if let Some(pa) = match decode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, s) {
-            Ok(ret) => ret,
-            Err(e) => {
-                eprintln!("{}", e);
-                return None;
-            }
-        } {
-            Some(RecipientAddress::Shielded(pa))
+                                Ok(ret) => ret,
+                                Err(_)  => None
+                            } 
+        {
+            Some(RecipientAddress::Shielded(pa))    // Matched a shielded address
         } else if let Some(addr) = match decode_transparent_address(
-            &B58_PUBKEY_ADDRESS_PREFIX,
-            &B58_SCRIPT_ADDRESS_PREFIX,
-            s,
-        ) {
-            Ok(ret) => ret,
-            Err(e) => {
-                eprintln!("{}", e);
-                return None;
-            }
-        } {
-            Some(RecipientAddress::Transparent(addr))
+                                            &B58_PUBKEY_ADDRESS_PREFIX, &B58_SCRIPT_ADDRESS_PREFIX, s) {
+                                        Ok(ret) => ret,
+                                        Err(_)  => None
+                                    } 
+        {
+            Some(RecipientAddress::Transparent(addr))   // Matched a transparent address
         } else {
-            None
+            None    // Didn't match anything
         }
     }
 }
