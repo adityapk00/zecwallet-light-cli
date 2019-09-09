@@ -110,18 +110,23 @@ impl Command for SaveCommand {
     }
 }
 
-struct ReadCommand {}
-impl Command for ReadCommand {
-        fn help(&self) {
-        println!("Read wallet from disk");
+struct SeedCommand {}
+impl Command for SeedCommand {
+    fn help(&self) {
+        println!("Show the seed phrase for the wallet");
     }
 
     fn short_help(&self) -> String {
-        "Read wallet file from disk".to_string()
+        "Display the seed phrase".to_string()
     }
 
     fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
-        lightclient.do_read();
+        let phrase = lightclient.do_seed_phrase();
+
+        println!("Current seed phrase. PLEASE SAVE THIS CAREFULLY AND DO NOT SHARE IT");
+        println!();
+        println!("{}", phrase);
+        println!();
     }
 }
 
@@ -167,9 +172,9 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
     map.insert("send".to_string(),      Box::new(SendCommand{}));
     map.insert("save".to_string(),      Box::new(SaveCommand{}));
-    map.insert("read".to_string(),      Box::new(ReadCommand{}));
     map.insert("quit".to_string(),      Box::new(QuitCommand{}));
     map.insert("list".to_string(),      Box::new(TransactionsCommand{}));
+    map.insert("seed".to_string(),      Box::new(SeedCommand{}));
 
     Box::new(map)
 }

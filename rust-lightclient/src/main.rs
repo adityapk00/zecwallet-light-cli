@@ -16,8 +16,21 @@ pub mod grpc_client {
 
 
 pub fn main() {
+    use clap::{Arg, App};
+
+    let matches = App::new("Light Client")
+                    .version("1.0") 
+                    .arg(Arg::with_name("seed")
+                        .short("s")
+                        .long("seed")
+                        .value_name("seed_phrase")
+                        .help("Create a new wallet with the given 24-word seed phrase. Will fail if wallet already exists")
+                        .takes_value(true))
+                    .get_matches();
+
+    let mut lightclient = LightClient::new(matches.value_of("seed")).unwrap();
+
     println!("Starting Light Client");
-    let mut lightclient = LightClient::new();
 
     // At startup, read the wallet.dat 
     commands::do_user_command(&"read".to_string(), &mut lightclient);

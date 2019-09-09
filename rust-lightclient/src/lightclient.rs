@@ -39,24 +39,44 @@ pub struct LightClient {
 }
 
 impl LightClient {
-    pub fn new() -> Self {
-        let mut w = LightClient {
-            wallet          : Arc::new(LightWallet::new()), 
-            sapling_output  : vec![], 
-            sapling_spend   : vec![]
+    pub fn new(seed_phrase: Option<&str>) -> io::Result<Self> {
+
+        let mut lc = if Path::new("wallet.dat").exists() {
+            // Make sure that if a wallet exists, there is no seed phrase being attempted
+            if !seed_phrase.is_none() {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                    "Cannot restore from seed, because a wallet already exists"));
+            }
+
+            let mut file_buffer = BufReader::new(File::open("wallet.dat")?);
+            
+            let wallet = LightWallet::read(&mut file_buffer)?;
+             LightClient {
+                wallet          : Arc::new(wallet), 
+                sapling_output  : vec![], 
+                sapling_spend   : vec![]
+            }
+        } else {
+            let l = LightClient {
+                wallet          : Arc::new(LightWallet::new(seed_phrase).unwrap()), 
+                sapling_output  : vec![], 
+                sapling_spend   : vec![]
+            };
+
+            l.wallet.set_initial_block(500000,
+                "004fada8d4dbc5e80b13522d2c6bd0116113c9b7197f0c6be69bc7a62f2824cd",
+                "01b733e839b5f844287a6a491409a991ec70277f39a50c99163ed378d23a829a0700100001916db36dfb9a0cf26115ed050b264546c0fa23459433c31fd72f63d188202f2400011f5f4e3bd18da479f48d674dbab64454f6995b113fa21c9d8853a9e764fb3e1f01df9d2c233ca60360e3c2bb73caf5839a1be634c8b99aea22d02abda2e747d9100001970d41722c078288101acd0a75612acfb4c434f2a55aab09fb4e812accc2ba7301485150f0deac7774dcd0fe32043bde9ba2b6bbfff787ad074339af68e88ee70101601324f1421e00a43ef57f197faf385ee4cac65aab58048016ecbd94e022973701e1b17f4bd9d1b6ca1107f619ac6d27b53dd3350d5be09b08935923cbed97906c0000000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
+
+            l
         };
-
+        
         // Read Sapling Params
-        let mut f = File::open("/home/adityapk/.zcash-params/sapling-output.params").unwrap();
-        f.read_to_end(&mut w.sapling_output).unwrap();
-        let mut f = File::open("/home/adityapk/.zcash-params/sapling-spend.params").unwrap();
-        f.read_to_end(&mut w.sapling_spend).unwrap();
+        let mut f = File::open("/home/adityapk/.zcash-params/sapling-output.params")?;
+        f.read_to_end(&mut lc.sapling_output)?;
+        let mut f = File::open("/home/adityapk/.zcash-params/sapling-spend.params")?;
+        f.read_to_end(&mut lc.sapling_spend)?;
 
-        w.wallet.set_initial_block(500000,
-                            "004fada8d4dbc5e80b13522d2c6bd0116113c9b7197f0c6be69bc7a62f2824cd",
-                            "01b733e839b5f844287a6a491409a991ec70277f39a50c99163ed378d23a829a0700100001916db36dfb9a0cf26115ed050b264546c0fa23459433c31fd72f63d188202f2400011f5f4e3bd18da479f48d674dbab64454f6995b113fa21c9d8853a9e764fb3e1f01df9d2c233ca60360e3c2bb73caf5839a1be634c8b99aea22d02abda2e747d9100001970d41722c078288101acd0a75612acfb4c434f2a55aab09fb4e812accc2ba7301485150f0deac7774dcd0fe32043bde9ba2b6bbfff787ad074339af68e88ee70101601324f1421e00a43ef57f197faf385ee4cac65aab58048016ecbd94e022973701e1b17f4bd9d1b6ca1107f619ac6d27b53dd3350d5be09b08935923cbed97906c0000000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
-
-        return w;
+        Ok(lc)
     }
 
     pub fn last_scanned_height(&self) -> u64 {
@@ -78,27 +98,6 @@ impl LightClient {
             "verified_balance" => self.wallet.verified_balance(None),
             "addresses" => addresses
         }
-    }
-
-    pub fn do_read(&mut self) {
-        if !Path::new("wallet.dat").exists() {
-            println!("No existing wallet");
-            return;
-        }
-
-        print!("Reading wallet...");
-        io::stdout().flush().ok().expect("Could not flush stdout");
-        let mut file_buffer = match File::open("wallet.dat") {
-            Ok(f)  => BufReader::new(f),
-            Err(e) => {
-                println!("[Error: {}]", e.description());
-                return;
-            }
-        };
-        
-        let lw = LightWallet::read(&mut file_buffer).unwrap();
-        self.wallet = Arc::new(lw);
-        println!("[OK]");
     }
 
     pub fn do_save(&self) {
@@ -131,6 +130,10 @@ impl LightClient {
             });
 
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
+    }
+
+    pub fn do_seed_phrase(&self) -> String {
+        self.wallet.get_seed_phrase()
     }
 
     pub fn do_list_transactions(&self) -> JsonValue {
@@ -168,14 +171,14 @@ impl LightClient {
                             "amount"       => nd.note.value as i64,
                             "address"      => nd.note_address().unwrap(),
                             "memo"         => match &nd.memo {
-                                            Some(memo) => {
-                                                match memo.to_utf8() {
-                                                    Some(Ok(memo_str)) => Some(memo_str),
-                                                    _ => None
+                                                Some(memo) => {
+                                                    match memo.to_utf8() {
+                                                        Some(Ok(memo_str)) => Some(memo_str),
+                                                        _ => None
+                                                    }
                                                 }
+                                                _ => None
                                             }
-                                            _ => None
-                                        }
                     })
                 );
 

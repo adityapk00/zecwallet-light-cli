@@ -6,7 +6,9 @@ use std::cmp;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use protobuf::*;
+use protobuf::parse_from_bytes;
+
+use bip39::{Mnemonic, Language};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
@@ -383,27 +385,33 @@ impl LightWallet {
         (extsk, extfvk, address)
     }
 
-    pub fn new() -> Self {
+    pub fn new(seed_phrase: Option<&str>) -> io::Result<Self> {
         use rand::{FromEntropy, ChaChaRng, Rng};
 
-        // Create a random seed. 
-        let mut system_rng = ChaChaRng::from_entropy();
         let mut seed_bytes = [0u8; 32];
-        system_rng.fill(&mut seed_bytes);
+
+        if seed_phrase.is_none() {
+            // Create a random seed. 
+            let mut system_rng = ChaChaRng::from_entropy();
+            system_rng.fill(&mut seed_bytes);
+        } else {
+            seed_bytes.copy_from_slice(&Mnemonic::from_phrase(seed_phrase.expect("should have a seed phrase"), 
+                                        Language::English).unwrap().entropy());
+        }
 
         // Derive only the first address
         // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
         // users can import a seed phrase and automatically get all used addresses
         let (extsk, extfvk, address) = LightWallet::get_pk_from_seed(&seed_bytes);
 
-        LightWallet {
+        Ok(LightWallet {
             seed:    seed_bytes,
             extsks:  vec![extsk],
             extfvks: vec![extfvk],
             address: vec![address],
             blocks:  Arc::new(RwLock::new(vec![])),
             txs:     Arc::new(RwLock::new(HashMap::new())),
-        }
+        })
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -537,6 +545,12 @@ impl LightWallet {
 
     pub fn address(&self, account: usize) -> String {
         encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &self.address[account])
+    }
+
+    pub fn get_seed_phrase(&self) -> String {
+        Mnemonic::from_entropy(&self.seed, 
+                                Language::English,
+        ).unwrap().phrase().to_string()
     }
 
     pub fn balance(&self, addr: Option<String>) -> u64 {
