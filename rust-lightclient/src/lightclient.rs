@@ -39,8 +39,8 @@ pub struct LightClient {
 }
 
 impl LightClient {
-    pub fn new(seed_phrase: Option<&str>) -> io::Result<Self> {
 
+    pub fn new(seed_phrase: Option<&str>) -> io::Result<Self> {
         let mut lc = if Path::new("wallet.dat").exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
@@ -58,7 +58,7 @@ impl LightClient {
             }
         } else {
             let l = LightClient {
-                wallet          : Arc::new(LightWallet::new(seed_phrase).unwrap()), 
+                wallet          : Arc::new(LightWallet::new(seed_phrase)?), 
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
             };
@@ -287,23 +287,6 @@ impl LightClient {
                 light_wallet_clone.scan_full_tx(&tx);
             });
         };
-
-        // // Print all the memos for fun.
-        // let memos = self.wallet.txs.read().unwrap()
-        //             .values().flat_map(|wtx| {
-        //                 wtx.notes.iter().map(|nd| nd.memo.clone() ).collect::<Vec<Option<Memo>>>()
-        //             })
-        //             .map( |m| match m {
-        //                 Some(memo) => {
-        //                     match memo.to_utf8() {
-        //                         Some(Ok(memo_str)) => Some(memo_str),
-        //                         _ => None
-        //                     }
-        //                 }
-        //                 _ => None
-        //             })
-        //             .collect::<Vec<Option<String>>>();
-        //println!("All Wallet Txns {:?}", memos);
     }
 
     pub fn do_send(&self, addr: String, value: u64, memo: Option<String>) {

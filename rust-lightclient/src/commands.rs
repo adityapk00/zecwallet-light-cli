@@ -90,7 +90,7 @@ impl Command for SendCommand {
     fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
         lightclient.do_send(
             "ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d".to_string(), 
-            1500000, 
+            150000, 
             Some("Hello from the command".to_string()));
     }
 }
@@ -123,7 +123,7 @@ impl Command for SeedCommand {
     fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
         let phrase = lightclient.do_seed_phrase();
 
-        println!("Current seed phrase. PLEASE SAVE THIS CAREFULLY AND DO NOT SHARE IT");
+        println!("PLEASE SAVE YOUR SEED PHRASE CAREFULLY AND DO NOT SHARE IT");
         println!();
         println!("{}", phrase);
         println!();

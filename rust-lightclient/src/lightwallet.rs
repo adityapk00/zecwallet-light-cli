@@ -879,7 +879,8 @@ impl LightWallet {
         println!("{}: Adding output", now() - start_time);
         if let Err(e) = match to {
             address::RecipientAddress::Shielded(to) => {
-                builder.add_sapling_output(ovk, to.clone(), value, encoded_memo)
+                // TODO Make it use encoded_memo
+                builder.add_sapling_output(ovk, to.clone(), value, None)
             }
             address::RecipientAddress::Transparent(to) => {
                 builder.add_transparent_output(&to, value)
