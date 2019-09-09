@@ -28,7 +28,13 @@ pub fn main() {
                         .takes_value(true))
                     .get_matches();
 
-    let mut lightclient = LightClient::new(matches.value_of("seed")).unwrap();
+    let mut lightclient = match LightClient::new(matches.value_of("seed")) {
+        Ok(lc) => lc,
+        Err(e) => { 
+            eprintln!("Failed to start wallet. Error was:\n{}", e);
+            return;
+        }
+    };
 
     println!("Starting Light Client");
 

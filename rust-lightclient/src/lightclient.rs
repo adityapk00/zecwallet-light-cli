@@ -45,7 +45,7 @@ impl LightClient {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
                 return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                    "Cannot restore from seed, because a wallet already exists"));
+                    "Cannot create a new wallet from seed, because a wallet already exists"));
             }
 
             let mut file_buffer = BufReader::new(File::open("wallet.dat")?);
