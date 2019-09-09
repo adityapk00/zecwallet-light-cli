@@ -148,7 +148,8 @@ impl LightClient {
                             "value"              => nd.note.value,
                             "is_change"          => nd.is_change,
                             "address"            => LightWallet::address_from_extfvk(&nd.extfvk, nd.diversifier),
-                            "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid))
+                            "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
+                            "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
                         }
                     )
                 })

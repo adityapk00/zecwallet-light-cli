@@ -99,9 +99,11 @@ pub struct SaplingNoteData {
     pub note: Note<Bls12>,
     witnesses: Vec<IncrementalWitness<Node>>,
     nullifier: [u8; 32],
-    pub spent: Option<TxId>,
+    pub spent: Option<TxId>,             // If this note was confirmed spent
+    pub unconfirmed_spent: Option<TxId>, // If this note was spent in a send, but has not yet been confirmed.
     pub memo:  Option<Memo>,
     pub is_change: bool,
+    // TODO: We need to remove the unconfirmed_spent (i.e., set it to None) if the Tx has expired
 }
 
 
@@ -162,6 +164,7 @@ impl SaplingNoteData {
             witnesses: vec![witness],
             nullifier: nf,
             spent: None,
+            unconfirmed_spent: None,
             memo: None,
             is_change: output.is_change,
         }
@@ -196,6 +199,9 @@ impl SaplingNoteData {
         let mut nullifier = [0u8; 32];
         reader.read_exact(&mut nullifier)?;
 
+        // Note that this is only the spent field, we ignore the unconfirmed_spent field. 
+        // The reason is that unconfirmed spents are only in memory, and we need to get the actual value of spent
+        // from the blockchain anyway. 
         let spent = Optional::read(&mut reader, |r| {
             let mut txid_bytes = [0u8; 32];
             r.read_exact(&mut txid_bytes)?;
@@ -221,6 +227,7 @@ impl SaplingNoteData {
             witnesses,
             nullifier,
             spent,
+            unconfirmed_spent: None,    
             memo,
             is_change,
         })
@@ -334,7 +341,8 @@ struct SpendableNote {
 
 impl SpendableNote {
     fn from(txid: TxId, nd: &SaplingNoteData, anchor_offset: usize) -> Option<Self> {
-        if nd.spent.is_none() {
+        // Include only notes that haven't been spent, or haven't been included in an unconfirmed spend yet.
+        if nd.spent.is_none() && nd.unconfirmed_spent.is_none() {
             let witness = nd.witnesses.get(nd.witnesses.len() - anchor_offset - 1);
 
             witness.map(|w| SpendableNote {
@@ -602,7 +610,7 @@ impl LightWallet {
                                 None    => true
                             }
                         })
-                        .map(|nd| if nd.spent.is_none() { nd.note.value } else { 0 })
+                        .map(|nd| if nd.spent.is_none() && nd.unconfirmed_spent.is_none() { nd.note.value } else { 0 })
                         .sum::<u64>()
                 } else {
                     0
@@ -684,6 +692,8 @@ impl LightWallet {
         let mut txs = self.txs.write().unwrap();
 
         // Create a Vec containing all unspent nullifiers.
+        // Include only the confirmed spent nullifiers, since unconfirmed ones still need to be included
+        // during scan_block below.
         let nfs: Vec<_> = txs
             .iter()
             .map(|(txid, tx)| {
@@ -751,7 +761,11 @@ impl LightWallet {
                     .iter_mut()
                     .find(|nd| &nd.nullifier[..] == &spend.nf[..])
                     .unwrap();
+                
+                // Mark the note as spent, and remove the unconfirmed part of it
                 spent_note.spent = Some(tx.txid);
+                spent_note.unconfirmed_spent = None::<TxId>;
+
                 total_shielded_value_spent += spent_note.note.value;
             }
 
@@ -904,6 +918,7 @@ impl LightWallet {
         println!("Transaction ID: {}", tx.txid());
 
         // Mark notes as spent.
+        // TODO: This is only a non-confirmed spend, and the note should be marked as such.
         let mut txs = self.txs.write().unwrap();
         for selected in notes {
             let mut spent_note = txs
@@ -913,7 +928,7 @@ impl LightWallet {
                 .iter_mut()
                 .find(|nd| &nd.nullifier[..] == &selected.nullifier[..])
                 .unwrap();
-            spent_note.spent = Some(tx.txid());
+            spent_note.unconfirmed_spent = Some(tx.txid());
         }
 
         // Return the encoded transaction, so the caller can send it.
