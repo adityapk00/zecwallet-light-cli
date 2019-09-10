@@ -138,23 +138,39 @@ impl LightClient {
 
     // Return a list of all notes, spent and unspent
     pub fn do_list_notes(&self) -> JsonValue {
-        JsonValue::Array(
-            self.wallet.txs.read().unwrap().iter()
-                .flat_map( |(txid, wtx)| {
-                    wtx.notes.iter().map(move |nd| 
-                        object!{
-                            "created_in_block"   => wtx.block,
-                            "created_in_txid"    => format!("{}", txid),
-                            "value"              => nd.note.value,
-                            "is_change"          => nd.is_change,
-                            "address"            => LightWallet::address_from_extfvk(&nd.extfvk, nd.diversifier),
-                            "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
-                            "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
-                        }
-                    )
-                })
-                .collect::<Vec<JsonValue>>()
-        )
+        let mut unspent_notes: Vec<JsonValue> = vec![];
+        let mut spent_notes  : Vec<JsonValue> = vec![];
+        let mut pending_notes: Vec<JsonValue> = vec![];
+
+        self.wallet.txs.read().unwrap().iter()
+            .flat_map( |(txid, wtx)| {
+                wtx.notes.iter().map(move |nd| 
+                    object!{
+                        "created_in_block"   => wtx.block,
+                        "created_in_txid"    => format!("{}", txid),
+                        "value"              => nd.note.value,
+                        "is_change"          => nd.is_change,
+                        "address"            => LightWallet::address_from_extfvk(&nd.extfvk, nd.diversifier),
+                        "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
+                        "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                    }
+                )
+            })
+            .for_each( |note| {
+                if note["spent"].is_null() && note["unconfirmed_spent"].is_null() {
+                    unspent_notes.push(note);
+                } else if !note["spent"].is_null() {
+                    spent_notes.push(note);
+                } else {
+                    pending_notes.push(note);
+                }
+            });
+        
+        object!{
+            "spent_notes"   => spent_notes,
+            "unspent_notes" => unspent_notes,
+            "pending_notes" => pending_notes
+        }
     }
 
     pub fn do_list_transactions(&self) -> JsonValue {
