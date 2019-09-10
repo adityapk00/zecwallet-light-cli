@@ -310,7 +310,7 @@ impl LightClient {
         };
     }
 
-    pub fn do_send(&self, addr: String, value: u64, memo: Option<String>) {
+    pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) {
         let rawtx = self.wallet.send_to_address(
             u32::from_str_radix("2bb40e60", 16).unwrap(),   // Blossom ID
             &self.sapling_spend, &self.sapling_output,

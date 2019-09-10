@@ -7,7 +7,7 @@ pub trait Command {
 
     fn short_help(&self) -> String;
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient);
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient);
 }
 
 struct SyncCommand {}
@@ -21,7 +21,7 @@ impl Command for SyncCommand {
         "Download CompactBlocks and sync to the server".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         lightclient.do_sync();
     }
 }
@@ -37,7 +37,7 @@ impl Command for HelpCommand {
         "Lists all available commands".to_string()
     }
 
-    fn exec(&self, _args: &[String], _: &mut LightClient) {
+    fn exec(&self, _args: &[&str], _: &mut LightClient) {
         // Print a list of all commands
         println!("Available commands:");
         get_commands().iter().for_each(| (cmd, obj) | {
@@ -56,7 +56,7 @@ impl Command for InfoCommand {
         "Get the lightwalletd server's info".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         lightclient.do_info();
     }
 }
@@ -71,7 +71,7 @@ impl Command for AddressCommand {
         "List all current addresses".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         let res = lightclient.do_address();
         println!("{}", res.pretty(2));
     }
@@ -80,18 +80,33 @@ impl Command for AddressCommand {
 struct SendCommand {}
 impl Command for SendCommand {
     fn help(&self) {
-        println!("Send ZEC");
+        println!("Sends ZEC to an address");
+        println!("Usage:");
+        println!("send recipient_address value memo");
     }
 
     fn short_help(&self) -> String {
         "Send ZEC to the given address".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
-        lightclient.do_send(
-            "ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d".to_string(), 
-            50000000 - 10000, 
-            None);
+    fn exec(&self, args: &[&str], lightclient: &mut LightClient) {
+        // Parse the args. 
+        // 1 - Destination address. T or Z address
+        if args.len() != 3 {
+            self.help();
+            return;
+        }
+
+        // Make sure we can parse the amount
+        let value = match args[1].parse::<u64>() {
+            Ok(amt) => amt,
+            Err(e)  => {
+                println!("Couldn't parse amount: {}", e);
+                return;
+            }
+        };
+        
+        lightclient.do_send(args[0], value, Some(args[2].to_string()));
     }
 }
 
@@ -105,7 +120,7 @@ impl Command for SaveCommand {
         "Save wallet file to disk".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         lightclient.do_save();
     }
 }
@@ -120,7 +135,7 @@ impl Command for SeedCommand {
         "Display the seed phrase".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         let phrase = lightclient.do_seed_phrase();
 
         println!("PLEASE SAVE YOUR SEED PHRASE CAREFULLY AND DO NOT SHARE IT");
@@ -140,7 +155,7 @@ impl Command for TransactionsCommand {
         "List all transactions in the wallet".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         let txns = lightclient.do_list_transactions();
         println!("{}", txns.pretty(2));
     }
@@ -158,7 +173,7 @@ impl Command for NotesCommand {
         "List all sapling notes in the wallet".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         let txns = lightclient.do_list_notes();
         println!("{}", txns.pretty(2));
     }
@@ -176,7 +191,7 @@ impl Command for QuitCommand {
         "Quit the lightwallet, saving state to disk".to_string()
     }
 
-    fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
         lightclient.do_save();
     }
 }
@@ -199,9 +214,9 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     Box::new(map)
 }
 
-pub fn do_user_command(cmd: &String, lightclient: &mut LightClient) {
+pub fn do_user_command(cmd: &str, args: &Vec<&str>, lightclient: &mut LightClient) {
     match get_commands().get(cmd) {
-        Some(cmd) => cmd.exec(&[], lightclient),
+        Some(cmd) => cmd.exec(args, lightclient),
         None      => {
             println!("Unknown command : {}. Type 'help' for a list of commands", cmd);
         }

@@ -49,7 +49,18 @@ pub fn main() {
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
-                commands::do_user_command(&line, &mut lightclient);
+                // Parse command line arguments
+                let mut cmd_args = match shellwords::split(&line) {
+                    Ok(args) => args,
+                    Err(_)   => {
+                        println!("Mismatched Quotes");
+                        continue;
+                    }
+                };
+
+                let cmd = cmd_args.remove(0);
+                let args: Vec<&str> = cmd_args.iter().map(|s| s.as_ref()).collect();                
+                commands::do_user_command(&cmd, &args, &mut lightclient);
 
                 // Special check for Quit command.
                 if line == "quit" {
