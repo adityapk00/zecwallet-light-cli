@@ -89,8 +89,8 @@ impl Command for SendCommand {
 
     fn exec(&self, _args: &[String], lightclient: &mut LightClient) {
         lightclient.do_send(
-            "tmHYDCK6PjBMArtDXwPf5bgoFm2Na5fR6Ds".to_string(), 
-            150000, 
+            "ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d".to_string(), 
+            50000000 - 10000, 
             None);
     }
 }

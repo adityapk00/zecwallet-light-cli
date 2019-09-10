@@ -1,5 +1,3 @@
-pub extern crate ff;
-
 use std::time::SystemTime;
 use std::io::{self, Read, Write};
 use std::cmp;
@@ -29,6 +27,7 @@ use zcash_primitives::{
         components::Amount, components::amount::DEFAULT_FEE,
         TxId, Transaction
     },
+    legacy::{TransparentAddress::PublicKey},
     note_encryption::{Memo, try_sapling_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
@@ -42,9 +41,63 @@ use zcash_primitives::{
 use crate::address;
 use crate::prover;
 
+
+use sha2::{Sha256, Digest};
+
+/// Sha256(Sha256(value))
+pub fn double_sha256(payload: &[u8]) -> Vec<u8> {
+    let h1 = Sha256::digest(&payload);
+    let h2 = Sha256::digest(&h1);
+    h2.to_vec()
+}
+
+use base58::{ToBase58, FromBase58};
+
 const ANCHOR_OFFSET: u32 = 1;
 
 const SAPLING_ACTIVATION_HEIGHT: i32 = 280_000;
+
+
+/// A trait for converting a [u8] to base58 encoded string.
+pub trait ToBase58Check {
+    /// Converts a value of `self` to a base58 value, returning the owned string.
+    /// The version is a coin-specific prefix that is added. 
+    /// The suffix is any bytes that we want to add at the end (like the "iscompressed" flag for 
+    /// Secret key encoding)
+    fn to_base58check(&self, version: &[u8], suffix: &[u8]) -> String;
+}
+
+impl ToBase58Check for [u8] {
+    fn to_base58check(&self, version: &[u8], suffix: &[u8]) -> String {
+        let mut payload: Vec<u8> = Vec::new();
+        payload.extend_from_slice(version);
+        payload.extend_from_slice(self);
+        payload.extend_from_slice(suffix);
+        
+        let mut checksum = double_sha256(&payload);
+        payload.append(&mut checksum[..4].to_vec());
+        payload.to_base58()
+    }
+}
+
+pub trait FromBase58Check {
+    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8>;
+}
+
+
+impl FromBase58Check for str {
+    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8> {
+        let mut payload: Vec<u8> = Vec::new();
+        let bytes = self.from_base58().unwrap();
+
+        let start = version.len();
+        let end = bytes.len() - (4 + suffix.len());
+
+        payload.extend(&bytes[start..end]);
+        
+        payload
+    }
+}
 
 
 fn now() -> f64 {
@@ -861,32 +914,73 @@ impl LightWallet {
             .collect();
 
         // Confirm we were able to select sufficient value
-        let selected_value = notes
-            .iter()
-            .map(|selected| selected.note.value)
-            .sum::<u64>();
-        if selected_value < u64::from(target_value) {
-            eprintln!(
-                "Insufficient funds (have {}, need {:?})",
-                selected_value, target_value
-            );
-            return None;
-        }
+        // let selected_value = notes
+        //     .iter()
+        //     .map(|selected| selected.note.value)
+        //     .sum::<u64>();
+        // if selected_value < u64::from(target_value) {
+        //     eprintln!(
+        //         "Insufficient funds (have {}, need {:?})",
+        //         selected_value, target_value
+        //     );
+        //     return None;
+        // }
 
         // Create the transaction
         println!("{}: Adding {} inputs", now() - start_time, notes.len());
         let mut builder = Builder::new(height);
-        for selected in notes.iter() {
-            if let Err(e) = builder.add_sapling_spend(
-                extsk.clone(),
-                selected.diversifier,
-                selected.note.clone(),
-                selected.witness.clone(),
-            ) {
-                eprintln!("Error adding note: {:?}", e);
-                return None;
-            }
-        }
+        // for selected in notes.iter() {
+        //     if let Err(e) = builder.add_sapling_spend(
+        //         extsk.clone(),
+        //         selected.diversifier,
+        //         selected.note.clone(),
+        //         selected.witness.clone(),
+        //     ) {
+        //         eprintln!("Error adding note: {:?}", e);
+        //         return None;
+        //     }
+        // }
+
+
+        // TODO: Temp - Add a transparent input manually for testing
+        use zcash_primitives::transaction::components::{TxOut, OutPoint};
+        use zcash_primitives::legacy::Script;
+        let sk_bytes = "cPYbNomCYVh7Sih2LAFg5WEkGT6kMBfdLzWpdSm8qyrgd7viztVq".from_base58check(&[0xEF], &[0x01]);
+        println!("sk bytes {}", sk_bytes.len());
+
+        let sk = secp256k1::SecretKey::from_slice(&sk_bytes).unwrap();
+        let secp = secp256k1::Secp256k1::new();
+        let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
+
+        // Address 
+        let mut hash160 = ripemd160::Ripemd160::new();
+        hash160.input(sha2::Sha256::digest(&pk.serialize().to_vec()));
+        let addr = hash160.result().to_base58check(&[0x1D, 0x25], &[]);
+
+        println!("Address = {}", addr);
+
+        let mut script_hash = [0u8; 32];
+        script_hash.copy_from_slice(&hex::decode("d8cd8ca083b3f7e1290c51ba5fb3366fbc4e749256446638318022d8672a6862").unwrap()[0..32]);
+        script_hash.reverse();
+
+        let utxo = OutPoint {
+            hash: script_hash,
+            n: 0
+        };
+
+        let mut script_pubkey = hex::decode("76a914433bf369d77494b07f3ebdec0d09a2edfdc4481688ac").unwrap();
+        let script = Script{0: script_pubkey};
+        match script.address().unwrap() {
+            PublicKey(p) => println!("{}", p.to_base58check(&[0x1D, 0x25], &[])),
+            _ => {}
+        };
+        
+        let coin = TxOut {
+            value: Amount::from_u64(50000000).unwrap(),
+            script_pubkey: script,
+        };
+
+        builder.add_transparent_input(sk, utxo, coin).unwrap();
 
         // Compute memo if it exists
         let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap() );
