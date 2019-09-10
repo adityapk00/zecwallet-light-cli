@@ -92,7 +92,7 @@ impl Command for SendCommand {
     fn exec(&self, args: &[&str], lightclient: &mut LightClient) {
         // Parse the args. 
         // 1 - Destination address. T or Z address
-        if args.len() != 3 {
+        if args.len() < 2 || args.len() > 3 {
             self.help();
             return;
         }
@@ -105,8 +105,10 @@ impl Command for SendCommand {
                 return;
             }
         };
+
+        let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
         
-        lightclient.do_send(args[0], value, Some(args[2].to_string()));
+        lightclient.do_send(args[0], value, memo);
     }
 }
 
