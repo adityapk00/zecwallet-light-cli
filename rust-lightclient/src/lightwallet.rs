@@ -28,7 +28,7 @@ use zcash_primitives::{
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
     },
-    legacy::{Script, TransparentAddress::PublicKey},
+    legacy::{Script},
     note_encryption::{Memo, try_sapling_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
@@ -357,11 +357,13 @@ pub struct WalletTx {
     // List of all Utxos recieved in this Tx. Some of these might be change notes
     pub utxos: Vec<Utxo>,
 
-    // Total shielded value spent in this Tx. Note that this is the value of notes spent,
-    // the change is returned in the notes above. Subtract the two to get the actual value spent.
+    // Total shielded value spent in this Tx. Note that this is the value of the wallet's notes spent.
+    // Some change may be returned in one of the notes above. Subtract the two to get the actual value spent.
     // Also note that even after subtraction, you might need to account for transparent inputs and outputs
     // to make sure the value is accurate.
     pub total_shielded_value_spent: u64,
+
+    // TODO: Add total_transparent_spent, so it can be added to total_shielded_value_spent
 }
 
 impl WalletTx {
@@ -735,8 +737,8 @@ impl LightWallet {
 
     // Scan the full Tx and update memos for incoming shielded transactions
     pub fn scan_full_tx(&self, tx: &Transaction) {
+        // Scan outputs to see if anyone of them is us, and if it is, extract the memo
         for output in tx.shielded_outputs.iter() {
-
             let ivks: Vec<_> = self.extfvks.iter().map(|extfvk| extfvk.fvk.vk.ivk()).collect();
 
             let cmu = output.cmu;

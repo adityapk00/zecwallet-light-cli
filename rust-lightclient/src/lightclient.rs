@@ -316,6 +316,14 @@ impl LightClient {
         println!("Synced to {}, Downloaded {} kB                               \r", 
                 last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
 
+        // TODO: This is a super hack. Clear all UTXOs
+        {
+            let mut txs = self.wallet.txs.write().unwrap();
+            for tx in txs.values_mut() {
+                tx.utxos.clear();
+            }
+        }
+
         // Fetch UTXOs
         self.wallet.tkeys.iter()
             .map( |sk| LightWallet::address_from_sk(&sk))
