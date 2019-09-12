@@ -1061,44 +1061,6 @@ impl LightWallet {
             }
         }
  
-
-        // TODO: Temp - Add a transparent input manually for testing
-        // use zcash_primitives::transaction::components::{TxOut, OutPoint};
-        // use zcash_primitives::legacy::Script;
-        // let sk_bytes = "cVrKZtzs4xA58hkgR25uPVi7cV3x2o7fB5kZHFppSpqytD4fyHNz".from_base58check(&[0xEF], &[0x01]);
-        // println!("sk bytes {}", sk_bytes.len());
-
-        // let sk = secp256k1::SecretKey::from_slice(&sk_bytes).unwrap();
-        // let secp = secp256k1::Secp256k1::new();
-        // let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
-
-        // // Address 
-        // let mut hash160 = ripemd160::Ripemd160::new();
-        // hash160.input(sha2::Sha256::digest(&pk.serialize().to_vec()));
-        // let addr = hash160.result().to_base58check(&[0x1D, 0x25], &[]);
-
-        // println!("Address = {}", addr);
-
-        // let mut script_hash = [0u8; 32];
-        // script_hash.copy_from_slice(&hex::decode("92e600d49847b10d63cff7cf87a68e4664926f1c66c4d6ed9558d547c08927f0").unwrap()[0..32]);
-        // script_hash.reverse();
-
-        // let utxo = OutPoint::new(script_hash, 0);
-
-        // let script_pubkey = hex::decode("76a91455d60e3403d157326e3dd1341d481c197de1cf5a88ac").unwrap();
-        // let script = Script{0: script_pubkey};
-        // match script.address().unwrap() {
-        //     PublicKey(p) => println!("{}", p.to_base58check(&[0x1D, 0x25], &[])),
-        //     _ => {}
-        // };
-        
-        // let coin = TxOut {
-        //     value: Amount::from_u64(40000000).unwrap(),
-        //     script_pubkey: script,
-        // };
-
-        // builder.add_transparent_input(sk, utxo, coin).unwrap();
-
         // Compute memo if it exists
         let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap() );
 
