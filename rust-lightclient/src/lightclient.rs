@@ -435,7 +435,6 @@ impl LightClient {
                         inbound.for_each(move |b| {
                             let mut txid_bytes = [0u8; 32];
                             txid_bytes.copy_from_slice(&b.txid);
-                            txid_bytes.reverse();
 
                             let u = crate::lightwallet::Utxo {
                                 address: b.address.unwrap().address,
