@@ -42,11 +42,38 @@ message ChainSpec {}
 
 message Empty {}
 
+message LightdInfo {
+    string version = 1;
+    string vendor = 2;
+    bool   taddrSupport = 3;
+}
+
+message TransparentAddress {
+    string address = 1;
+}
+
+message Utxo {
+    TransparentAddress address = 1;
+    bytes txid = 2;
+    uint64 outputIndex = 3;
+    bytes script = 4;
+    uint64 value = 5;
+    uint64 height = 6;
+}
+
 service CompactTxStreamer {
+    // Compact Blocks
     rpc GetLatestBlock(ChainSpec) returns (BlockID) {}
     rpc GetBlock(BlockID) returns (CompactBlock) {}
     rpc GetBlockRange(BlockRange) returns (stream CompactBlock) {}
+
+    // Transactions
     rpc GetTransaction(TxFilter) returns (RawTransaction) {}
     rpc SendTransaction(RawTransaction) returns (SendResponse) {}
-    rpc GetLightdInfo(Empty) returns (SendResponse) {}
+
+    // t-Address support
+    rpc GetUtxos(TransparentAddress) returns (stream Utxo) {}
+
+    // Misc
+    rpc GetLightdInfo(Empty) returns (LightdInfo) {}
 }

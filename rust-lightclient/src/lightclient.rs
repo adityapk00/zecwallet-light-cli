@@ -26,7 +26,7 @@ use tower_hyper::{client, util};
 use tower_util::MakeService;
 use futures::stream::Stream;
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TxFilter, Empty};
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TransparentAddress, Utxo, TxFilter, Empty};
 use crate::grpc_client::client::CompactTxStreamer;
 
 // Used below to return the grpc "Client" type to calling methods
@@ -277,11 +277,17 @@ impl LightClient {
                 end_height = last_block;
             }        
         }    
-
+        
         println!("Synced to {}, Downloaded {} kB                               \r", 
                 last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
 
+        // Fetch UTXOs
+        self.fetch_utxos("tmYXBYJj1K7vhejSec5osXK2QsGa5MTisUQ".to_string(), |utxo| {
+            println!("Got txid {}", utxo.txid);
+            println!("Got script {}", hex::encode(utxo.script));
+        });
 
+        
         // Get the Raw transaction for all the wallet transactions
 
         // We need to first copy over the Txids from the wallet struct, because
@@ -382,6 +388,65 @@ impl LightClient {
 
                             b.encode(&mut encoded_buf).unwrap();
                             c(&encoded_buf);
+
+                            Ok(())
+                        })
+                        .map_err(|e| eprintln!("gRPC inbound stream error: {:?}", e))                    
+                    })
+            });
+
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
+    }
+
+    pub fn fetch_utxos<F : 'static + std::marker::Send>(&self, address: String, c: F)
+            where F : Fn(crate::lightwallet::Utxo) {
+        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+
+        let dst = Destination::try_from_uri(uri.clone()).unwrap();
+        let connector = util::Connector::new(HttpConnector::new(4));
+        let settings = client::Builder::new().http2_only(true).clone();
+        let mut make_client = client::Connect::with_builder(connector, settings);
+
+        let say_hello = make_client
+            .make_service(dst)
+            .map_err(|e| panic!("connect error: {:?}", e))
+            .and_then(move |conn| {
+
+                let conn = tower_request_modifier::Builder::new()
+                    .set_origin(uri)
+                    .build(conn)
+                    .unwrap();
+
+                // Wait until the client is ready...
+                CompactTxStreamer::new(conn)
+                    .ready()
+                    .map_err(|e| eprintln!("streaming error {:?}", e))
+            })
+            .and_then(move |mut client| {
+
+                let br = Request::new(TransparentAddress{ address });
+                client
+                    .get_utxos(br)
+                    .map_err(|e| {
+                        eprintln!("RouteChat request failed; err={:?}", e);
+                    })
+                    .and_then(move |response| {
+                        let inbound = response.into_inner();
+                        inbound.for_each(move |b| {
+                            let mut txid_bytes = [0u8; 32];
+                            txid_bytes.copy_from_slice(&b.txid);
+                            txid_bytes.reverse();
+
+                            let u = crate::lightwallet::Utxo {
+                                address: b.address.unwrap().address,
+                                txid: TxId {0: txid_bytes},
+                                output_index: b.output_index,
+                                script: b.script.to_vec(),
+                                height: b.height,
+                                value: b.value,
+                            };
+
+                            c(u);
 
                             Ok(())
                         })

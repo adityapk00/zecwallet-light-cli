@@ -324,6 +324,15 @@ impl SaplingNoteData {
     }
 }
 
+pub struct Utxo {
+    pub address: String,
+    pub txid: TxId,
+    pub output_index: u64,
+    pub script: Vec<u8>,
+    pub value: u64,
+    pub height: u64
+}
+
 pub struct WalletTx {
     pub block: i32,
 
