@@ -96,8 +96,14 @@ impl LightClient {
 
         // Collect t addresses
         let t_addresses = self.wallet.tkeys.iter().map( |pk| {
+            let address = LightWallet::address_from_pk(&pk);
+
+            // Get the balance for this address
+            let balance = self.wallet.tbalance(Some(address.clone()));
+            
             object!{
-                "address" => LightWallet::address_from_pk(&pk),
+                "address" => address,
+                "balance" => balance,
             }
         }).collect::<Vec<JsonValue>>();
 

@@ -25,8 +25,8 @@ use zcash_primitives::{
     serialize::{Vector, Optional},
     transaction::{
         builder::{Builder},
-        components::Amount, components::amount::DEFAULT_FEE,
-        TxId, Transaction
+        components::{Amount, OutPoint}, components::amount::DEFAULT_FEE,
+        TxId, Transaction, 
     },
     legacy::{TransparentAddress::PublicKey},
     note_encryption::{Memo, try_sapling_note_decryption},
@@ -336,6 +336,12 @@ pub struct Utxo {
 
     pub spent: Option<TxId>,             // If this utxo was confirmed spent
     pub unconfirmed_spent: Option<TxId>, // If this utxo was spent in a send, but has not yet been confirmed.
+}
+
+impl Into<OutPoint> for Utxo {
+    fn into(self) -> OutPoint {
+        OutPoint { hash: self.txid.0, n: self.output_index as u32 }
+    }
 }
 
 pub struct WalletTx {
@@ -654,13 +660,10 @@ impl LightWallet {
     }
 
     pub fn balance(&self, addr: Option<String>) -> u64 {
-        self.txs
-            .read()
-            .unwrap()
+        self.txs.read().unwrap()
             .values()
             .map(|tx| {
-                tx.notes
-                    .iter()
+                tx.notes.iter()
                     .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
                         match addr.clone() {
                             Some(a) => a == encode_payment_address(
@@ -672,6 +675,23 @@ impl LightWallet {
                         }
                     })
                     .map(|nd| if nd.spent.is_none() { nd.note.value } else { 0 })
+                    .sum::<u64>()
+            })
+            .sum::<u64>()
+    }
+
+    pub fn tbalance(&self, addr: Option<String>) -> u64 {
+        self.txs.read().unwrap()
+            .values()
+            .map( |tx| {
+                tx.utxos.iter()
+                    .filter( |utxo| {
+                        match addr.clone() {
+                            Some(a) => a == utxo.address,
+                            None    => true
+                        }
+                    })
+                    .map (|utxo| if utxo.spent.is_none() {utxo.value} else {0})
                     .sum::<u64>()
             })
             .sum::<u64>()
