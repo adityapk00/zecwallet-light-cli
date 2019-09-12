@@ -13,7 +13,8 @@ use pairing::bls12_381::{Bls12};
 use ff::{PrimeField, PrimeFieldRepr};
 
 use zcash_client_backend::{
-    constants::testnet::HRP_SAPLING_PAYMENT_ADDRESS, encoding::encode_payment_address,
+    constants::testnet::{HRP_SAPLING_PAYMENT_ADDRESS,B58_PUBKEY_ADDRESS_PREFIX,}, 
+    encoding::encode_payment_address,
     proto::compact_formats::CompactBlock, welding_rig::scan_block,
 };
 
@@ -324,13 +325,17 @@ impl SaplingNoteData {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Utxo {
     pub address: String,
     pub txid: TxId,
     pub output_index: u64,
     pub script: Vec<u8>,
     pub value: u64,
-    pub height: u64
+    pub height: i32,
+
+    pub spent: Option<TxId>,             // If this utxo was confirmed spent
+    pub unconfirmed_spent: Option<TxId>, // If this utxo was spent in a send, but has not yet been confirmed.
 }
 
 pub struct WalletTx {
@@ -340,8 +345,11 @@ pub struct WalletTx {
     // WalletTx in LightWallet::txs)
     pub txid: TxId,
 
-    // List of all notes recieved in this tx. Note that some of these might be change notes.
+    // List of all notes recieved in this tx. Some of these might be change notes.
     pub notes: Vec<SaplingNoteData>,
+
+    // List of all Utxos recieved in this Tx. Some of these might be change notes
+    pub utxos: Vec<Utxo>,
 
     // Total shielded value spent in this Tx. Note that this is the value of notes spent,
     // the change is returned in the notes above. Subtract the two to get the actual value spent.
@@ -374,6 +382,7 @@ impl WalletTx {
             block,
             txid,
             notes,
+            utxos: vec![],
             total_shielded_value_spent
         })
     }
@@ -430,6 +439,9 @@ pub struct LightWallet {
     extfvks: Vec<ExtendedFullViewingKey>,
     pub address: Vec<PaymentAddress<Bls12>>,
     
+    // Transparent keys. TODO: Make it not pub
+    pub tkeys: Vec<secp256k1::SecretKey>,
+
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
 }
@@ -469,6 +481,9 @@ impl LightWallet {
                                         Language::English).unwrap().entropy());
         }
 
+        // TODO: Generate transparent addresses from the seed
+        let tpk = secp256k1::SecretKey::from_slice(&[1u8; 32]).unwrap();
+
         // Derive only the first address
         // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
         // users can import a seed phrase and automatically get all used addresses
@@ -479,6 +494,7 @@ impl LightWallet {
             extsks:  vec![extsk],
             extfvks: vec![extfvk],
             address: vec![address],
+            tkeys:   vec![tpk],
             blocks:  Arc::new(RwLock::new(vec![])),
             txs:     Arc::new(RwLock::new(HashMap::new())),
         })
@@ -503,6 +519,9 @@ impl LightWallet {
         let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
             .collect::<Vec<PaymentAddress<Bls12>>>();
 
+        // TODO: Generate transparent addresses from the seed
+        let tpk = secp256k1::SecretKey::from_slice(&[1u8; 32]).unwrap();
+
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
 
         let txs_tuples = Vector::read(&mut reader, |r| {
@@ -518,6 +537,7 @@ impl LightWallet {
             extsks:  extsks,
             extfvks: extfvks,
             address: addresses,
+            tkeys:   vec![tpk],
             blocks:  Arc::new(RwLock::new(blocks)),
             txs:     Arc::new(RwLock::new(txs))
         })
@@ -618,6 +638,15 @@ impl LightWallet {
                                 &extfvk.fvk.vk.into_payment_address(diversifier, &JUBJUB).unwrap())
     }
 
+    pub fn address_from_pk(pk: &secp256k1::SecretKey) -> String {
+        // Encode into t address
+        let mut hash160 = ripemd160::Ripemd160::new();
+        hash160.input(Sha256::digest(&pk[..].to_vec()));
+            
+        // TODO: The taddr version prefix needs to be different for testnet and mainnet
+        hash160.result().to_base58check(&B58_PUBKEY_ADDRESS_PREFIX, &[])
+    }
+
     pub fn get_seed_phrase(&self) -> String {
         Mnemonic::from_entropy(&self.seed, 
                                 Language::English,
@@ -681,6 +710,7 @@ impl LightWallet {
             .sum::<u64>()
     }
 
+    // Scan the full Tx and update memos for incoming shielded transactions
     pub fn scan_full_tx(&self, tx: &Transaction) {
         for output in tx.shielded_outputs.iter() {
 
@@ -708,6 +738,27 @@ impl LightWallet {
                 }
             }
         }
+    }
+
+    pub fn scan_utxo(&self, utxo: &Utxo) {
+        // Grab a write lock to the wallet so we can update it.
+        let mut txs = self.txs.write().unwrap();
+
+        // If the Txid doesn't exist, create it
+        if !txs.contains_key(&utxo.txid) {
+                let tx_entry = WalletTx {
+                    block: utxo.height,
+                    txid: utxo.txid,
+                    notes: vec![],
+                    utxos: vec![],
+                    total_shielded_value_spent: 0
+                };
+                txs.insert(utxo.txid, tx_entry);
+            }
+        let tx_entry = txs.get_mut(&utxo.txid).unwrap();
+
+        // Add the utxo into the Wallet Tx entry
+        tx_entry.utxos.push(utxo.clone());
     }
 
     pub fn scan_block(&self, block: &[u8]) -> bool {
@@ -837,6 +888,7 @@ impl LightWallet {
                     block: block_data.height,
                     txid: tx.txid,
                     notes: vec![],
+                    utxos: vec![],
                     total_shielded_value_spent: 0
                 };
                 txs.insert(tx.txid, tx_entry);

@@ -26,7 +26,7 @@ use tower_hyper::{client, util};
 use tower_util::MakeService;
 use futures::stream::Stream;
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TransparentAddress, Utxo, TxFilter, Empty};
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TransparentAddress, TxFilter, Empty};
 use crate::grpc_client::client::CompactTxStreamer;
 
 // Used below to return the grpc "Client" type to calling methods
@@ -83,8 +83,9 @@ impl LightClient {
         self.wallet.last_scanned_height() as u64
     }
 
-    pub fn do_address(&self) -> json::JsonValue{       
-        let addresses = self.wallet.address.iter().map( |ad| {
+    pub fn do_address(&self) -> json::JsonValue {       
+        // Collect z addresses
+        let z_addresses = self.wallet.address.iter().map( |ad| {
             let address = encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &ad);
             object!{
                 "address" => address.clone(),
@@ -93,10 +94,18 @@ impl LightClient {
             }
         }).collect::<Vec<JsonValue>>();
 
+        // Collect t addresses
+        let t_addresses = self.wallet.tkeys.iter().map( |pk| {
+            object!{
+                "address" => LightWallet::address_from_pk(&pk),
+            }
+        }).collect::<Vec<JsonValue>>();
+
         object!{
-            "balance" => self.wallet.balance(None),
-            "verified_balance" => self.wallet.verified_balance(None),
-            "addresses" => addresses
+            "balance"           => self.wallet.balance(None),
+            "verified_balance"  => self.wallet.verified_balance(None),
+            "z_addresses"       => z_addresses,
+            "t_addresses"       => t_addresses,
         }
     }
 
@@ -142,6 +151,7 @@ impl LightClient {
         let mut spent_notes  : Vec<JsonValue> = vec![];
         let mut pending_notes: Vec<JsonValue> = vec![];
 
+        // Collect Sapling notes
         self.wallet.txs.read().unwrap().iter()
             .flat_map( |(txid, wtx)| {
                 wtx.notes.iter().map(move |nd| 
@@ -166,10 +176,28 @@ impl LightClient {
                 }
             });
         
+        // Collect UTXOs
+        let utxos = self.wallet.txs.read().unwrap().iter()
+            .flat_map( |(_, wtx)| {
+                wtx.utxos.iter().map(move |utxo| {
+                    object!{
+                        "created_in_block"   => wtx.block,
+                        "created_in_txid"    => format!("{}", utxo.txid),
+                        "value"              => utxo.value,
+                        "is_change"          => false,  // TODO: Identify notes as change
+                        "address"            => utxo.address.clone(),
+                        "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
+                        "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                    }
+                })
+            })
+            .collect::<Vec<JsonValue>>();
+
         object!{
             "spent_notes"   => spent_notes,
             "unspent_notes" => unspent_notes,
-            "pending_notes" => pending_notes
+            "pending_notes" => pending_notes,
+            "utxos"         => utxos,
         }
     }
 
@@ -282,11 +310,14 @@ impl LightClient {
                 last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
 
         // Fetch UTXOs
-        self.fetch_utxos("tmYXBYJj1K7vhejSec5osXK2QsGa5MTisUQ".to_string(), |utxo| {
-            println!("Got txid {}", utxo.txid);
-            println!("Got script {}", hex::encode(utxo.script));
-        });
-
+        self.wallet.tkeys.iter()
+            .map( |pk| LightWallet::address_from_pk(&pk))
+            .for_each( |taddr| {
+                let wallet = self.wallet.clone();
+                self.fetch_utxos(taddr, move |utxo| {
+                    wallet.scan_utxo(&utxo);
+                });
+            });
         
         // Get the Raw transaction for all the wallet transactions
 
@@ -441,8 +472,10 @@ impl LightClient {
                                 txid: TxId {0: txid_bytes},
                                 output_index: b.output_index,
                                 script: b.script.to_vec(),
-                                height: b.height,
+                                height: b.height as i32,
                                 value: b.value,
+                                spent: None,
+                                unconfirmed_spent: None,
                             };
 
                             c(u);
