@@ -95,8 +95,8 @@ impl LightClient {
         }).collect::<Vec<JsonValue>>();
 
         // Collect t addresses
-        let t_addresses = self.wallet.tkeys.iter().map( |pk| {
-            let address = LightWallet::address_from_pk(&pk);
+        let t_addresses = self.wallet.tkeys.iter().map( |sk| {
+            let address = LightWallet::address_from_sk(&sk);
 
             // Get the balance for this address
             let balance = self.wallet.tbalance(Some(address.clone()));
@@ -190,6 +190,7 @@ impl LightClient {
                         "created_in_block"   => wtx.block,
                         "created_in_txid"    => format!("{}", utxo.txid),
                         "value"              => utxo.value,
+                        "scriptkey"          => hex::encode(utxo.script.clone()),
                         "is_change"          => false,  // TODO: Identify notes as change
                         "address"            => utxo.address.clone(),
                         "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
@@ -317,7 +318,7 @@ impl LightClient {
 
         // Fetch UTXOs
         self.wallet.tkeys.iter()
-            .map( |pk| LightWallet::address_from_pk(&pk))
+            .map( |sk| LightWallet::address_from_sk(&sk))
             .for_each( |taddr| {
                 let wallet = self.wallet.clone();
                 self.fetch_utxos(taddr, move |utxo| {

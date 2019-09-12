@@ -25,10 +25,10 @@ use zcash_primitives::{
     serialize::{Vector, Optional},
     transaction::{
         builder::{Builder},
-        components::{Amount, OutPoint}, components::amount::DEFAULT_FEE,
+        components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
     },
-    legacy::{TransparentAddress::PublicKey},
+    legacy::{Script, TransparentAddress::PublicKey},
     note_encryption::{Memo, try_sapling_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
@@ -338,8 +338,8 @@ pub struct Utxo {
     pub unconfirmed_spent: Option<TxId>, // If this utxo was spent in a send, but has not yet been confirmed.
 }
 
-impl Into<OutPoint> for Utxo {
-    fn into(self) -> OutPoint {
+impl Utxo {
+    fn to_outpoint(&self) -> OutPoint {
         OutPoint { hash: self.txid.0, n: self.output_index as u32 }
     }
 }
@@ -644,10 +644,13 @@ impl LightWallet {
                                 &extfvk.fvk.vk.into_payment_address(diversifier, &JUBJUB).unwrap())
     }
 
-    pub fn address_from_pk(pk: &secp256k1::SecretKey) -> String {
+    pub fn address_from_sk(sk: &secp256k1::SecretKey) -> String {
+        let secp = secp256k1::Secp256k1::new();
+        let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
+
         // Encode into t address
         let mut hash160 = ripemd160::Ripemd160::new();
-        hash160.input(Sha256::digest(&pk[..].to_vec()));
+        hash160.input(Sha256::digest(&pk.serialize()[..].to_vec()));
             
         // TODO: The taddr version prefix needs to be different for testnet and mainnet
         hash160.result().to_base58check(&B58_PUBKEY_ADDRESS_PREFIX, &[])
@@ -949,6 +952,7 @@ impl LightWallet {
             to
         );
 
+        // TODO: This only spends from the first address right now.
         let extsk = &self.extsks[0];
         let extfvk = &self.extfvks[0];
         let ovk = extfvk.fvk.ovk;
@@ -974,11 +978,7 @@ impl LightWallet {
         // Select notes to cover the target value
         println!("{}: Selecting notes", now() - start_time);
         let target_value = value + DEFAULT_FEE ;
-        let notes: Vec<_> = self
-            .txs
-            .read()
-            .unwrap()
-            .iter()
+        let notes: Vec<_> = self.txs.read().unwrap().iter()
             .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
             .flatten()
             .filter_map(|(txid, note)| SpendableNote::from(txid, note, anchor_offset))
@@ -994,11 +994,50 @@ impl LightWallet {
             })
             .collect();
 
+        let mut builder = Builder::new(height);
+
+        // A note on t addresses
+        // Funds recieved by t-addresses can't be explicitly spent in ZecWallet. 
+        // ZecWallet will lazily consolidate all t address funds into your shielded addresses. 
+        // Specifically, if you send an outgoing transaction that is sent to a shielded address,
+        // ZecWallet will add all your t-address funds into that transaction, and send them to your shielded
+        // address as change.
+        let tinputs = self.txs.read().unwrap().iter()
+            .flat_map(|(_, wtx)| { 
+                wtx.utxos.iter().map(|utxo| {
+                    let outpoint: OutPoint = utxo.to_outpoint();
+
+                    let coin = TxOut {
+                        value: Amount::from_u64(utxo.value).unwrap(),
+                        script_pubkey: Script { 0: utxo.script.clone() },
+                    };
+
+                    (outpoint, coin)
+                })
+            }).collect::<Vec<(OutPoint, TxOut)>>();
+
+        if let Err(e) = match to {
+            address::RecipientAddress::Shielded(_) => {
+                // The destination is a sapling address, so add all transparent inputs
+                // TODO: This only spends from the first address right now.
+                let sk = self.tkeys[0];
+
+                // Add all tinputs
+                tinputs.iter().map( |(outpoint, coin)| {
+                    builder.add_transparent_input(sk, outpoint.clone(), coin.clone())
+                }).collect::<Result<Vec<_>, _>>()
+            }
+            _ => {Ok(vec![])}
+        } { 
+            eprintln!("Error adding transparent inputs: {:?}", e);
+            return None;
+        }
+
         // Confirm we were able to select sufficient value
-        let selected_value = notes
-            .iter()
-            .map(|selected| selected.note.value)
-            .sum::<u64>();
+        // TODO: If we're sending to a t-address, we could also use t-address inputs
+        let selected_value = notes.iter().map(|selected| selected.note.value).sum::<u64>() 
+            + tinputs.iter().map::<u64, _>(|(_, coin)| coin.value.into()).sum::<u64>();
+
         if selected_value < u64::from(target_value) {
             eprintln!(
                 "Insufficient funds (have {}, need {:?})",
@@ -1008,8 +1047,8 @@ impl LightWallet {
         }
 
         // Create the transaction
-        println!("{}: Adding {} inputs", now() - start_time, notes.len());
-        let mut builder = Builder::new(height);
+        println!("{}: Adding {} notes and {} utxos", now() - start_time, notes.len(), tinputs.len());
+
         for selected in notes.iter() {
             if let Err(e) = builder.add_sapling_spend(
                 extsk.clone(),
@@ -1021,7 +1060,7 @@ impl LightWallet {
                 return None;
             }
         }
-
+ 
 
         // TODO: Temp - Add a transparent input manually for testing
         // use zcash_primitives::transaction::components::{TxOut, OutPoint};
