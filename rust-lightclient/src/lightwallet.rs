@@ -538,7 +538,7 @@ pub struct LightWallet {
     pub tkeys: Vec<secp256k1::SecretKey>,
 
     // Current UTXOs that can be spent
-    utxos: Arc<RwLock<Vec<Utxo>>>,
+    pub utxos: Arc<RwLock<Vec<Utxo>>>,
 
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
@@ -801,19 +801,14 @@ impl LightWallet {
     }
 
     pub fn tbalance(&self, addr: Option<String>) -> u64 {
-        self.txs.read().unwrap()
-            .values()
-            .map( |tx| {
-                tx.utxos.iter()
-                    .filter( |utxo| {
-                        match addr.clone() {
-                            Some(a) => a == utxo.address,
-                            None    => true
-                        }
-                    })
-                    .map (|utxo| if utxo.spent.is_none() {utxo.value} else {0})
-                    .sum::<u64>()
+        self.utxos.read().unwrap().iter()
+            .filter(|utxo| {
+                match addr.clone() {
+                    Some(a) => utxo.address == a,
+                    None    => true,
+                }
             })
+            .map(|utxo| utxo.value )
             .sum::<u64>()
     }
 
@@ -1206,19 +1201,18 @@ impl LightWallet {
         // Specifically, if you send an outgoing transaction that is sent to a shielded address,
         // ZecWallet will add all your t-address funds into that transaction, and send them to your shielded
         // address as change.
-        let tinputs = self.txs.read().unwrap().iter()
-            .flat_map(|(_, wtx)| { 
-                wtx.utxos.iter().map(|utxo| {
-                    let outpoint: OutPoint = utxo.to_outpoint();
+        let tinputs = self.utxos.read().unwrap().iter()
+            .map(|utxo| {
+                let outpoint: OutPoint = utxo.to_outpoint();
 
-                    let coin = TxOut {
-                        value: Amount::from_u64(utxo.value).unwrap(),
-                        script_pubkey: Script { 0: utxo.script.clone() },
-                    };
+                let coin = TxOut {
+                    value: Amount::from_u64(utxo.value).unwrap(),
+                    script_pubkey: Script { 0: utxo.script.clone() },
+                };
 
-                    (outpoint, coin)
-                })
-            }).collect::<Vec<(OutPoint, TxOut)>>();
+                (outpoint, coin)
+            })
+            .collect::<Vec<(OutPoint, TxOut)>>();
 
         if let Err(e) = match to {
             address::RecipientAddress::Shielded(_) => {

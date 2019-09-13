@@ -193,20 +193,18 @@ impl LightClient {
             });
         
         // Collect UTXOs
-        let utxos = self.wallet.txs.read().unwrap().iter()
-            .flat_map( |(_, wtx)| {
-                wtx.utxos.iter().map(move |utxo| {
-                    object!{
-                        "created_in_block"   => wtx.block,
-                        "created_in_txid"    => format!("{}", utxo.txid),
-                        "value"              => utxo.value,
-                        "scriptkey"          => hex::encode(utxo.script.clone()),
-                        "is_change"          => false,  // TODO: Identify notes as change
-                        "address"            => utxo.address.clone(),
-                        "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                        "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
-                    }
-                })
+        let utxos = self.wallet.utxos.read().unwrap().iter()
+            .map(|utxo| {
+                object!{
+                    "created_in_block"   => utxo.height,
+                    "created_in_txid"    => format!("{}", utxo.txid),
+                    "value"              => utxo.value,
+                    "scriptkey"          => hex::encode(utxo.script.clone()),
+                    "is_change"          => false,  // TODO: Identify notes as change
+                    "address"            => utxo.address.clone(),
+                    "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
+                    "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                }
             })
             .collect::<Vec<JsonValue>>();
 
@@ -250,7 +248,7 @@ impl LightClient {
                     });
                 } 
 
-                // For each note that is not a change, add a Tx.
+                // For each sapling note that is not a change, add a Tx.
                 txns.extend(v.notes.iter()
                     .filter( |nd| !nd.is_change )
                     .map ( |nd| 
@@ -270,6 +268,19 @@ impl LightClient {
                                             }
                     })
                 );
+
+                // Get the total transparent recieved
+                let total_transparent_received = v.utxos.iter().map(|u| u.value).sum::<u64>();
+                if total_transparent_received > v.total_transparent_value_spent {
+                    // Create a input transaction for the transparent value as well.
+                    txns.push(object!{
+                        "block_height" => v.block,
+                        "txid"         => format!("{}", v.txid),
+                        "amount"       => total_transparent_received as i64 - v.total_transparent_value_spent as i64,
+                        "address"      => v.utxos.iter().map(|u| u.address.clone()).collect::<Vec<String>>().join(","),
+                        "memo"         => None::<String>
+                    })
+                }
 
                 txns
             })
