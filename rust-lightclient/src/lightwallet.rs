@@ -28,7 +28,7 @@ use zcash_primitives::{
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
     },
-    legacy::{Script},
+    legacy::{Script, TransparentAddress},
     note_encryption::{Memo, try_sapling_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
@@ -363,12 +363,24 @@ pub struct WalletTx {
     // to make sure the value is accurate.
     pub total_shielded_value_spent: u64,
 
-    // TODO: Add total_transparent_spent, so it can be added to total_shielded_value_spent
+    // Total amount of transparent funds that belong to us that were spent in this Tx.
+    pub total_transparent_value_spent : u64,
 }
 
 impl WalletTx {
     pub fn serialized_version() -> u64 {
         return 1;
+    }
+
+    pub fn new(height: i32, txid: &TxId) -> Self {
+        WalletTx {
+            block: height,
+            txid: txid.clone(),
+            notes: vec![],
+            utxos: vec![],
+            total_shielded_value_spent: 0,
+            total_transparent_value_spent: 0
+        }
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -385,13 +397,15 @@ impl WalletTx {
         let notes = Vector::read(&mut reader, |r| SaplingNoteData::read(r))?;
 
         let total_shielded_value_spent = reader.read_u64::<LittleEndian>()?;
+        let total_transparent_value_spent = reader.read_u64::<LittleEndian>()?;
 
         Ok(WalletTx{
             block,
             txid,
             notes,
             utxos: vec![],
-            total_shielded_value_spent
+            total_shielded_value_spent,
+            total_transparent_value_spent
         })
     }
 
@@ -405,6 +419,7 @@ impl WalletTx {
         Vector::write(&mut writer, &self.notes, |w, nd| nd.write(w))?;
 
         writer.write_u64::<LittleEndian>(self.total_shielded_value_spent)?;
+        writer.write_u64::<LittleEndian>(self.total_transparent_value_spent)?;
 
         Ok(())
     }
@@ -667,7 +682,7 @@ impl LightWallet {
         // TODO: The taddr version prefix needs to be different for testnet and mainnet
         hash160.result().to_base58check(&B58_PUBKEY_ADDRESS_PREFIX, &[])
     }
-
+    
     pub fn get_seed_phrase(&self) -> String {
         Mnemonic::from_entropy(&self.seed, 
                                 Language::English,
@@ -747,7 +762,55 @@ impl LightWallet {
 
     // Scan the full Tx and update memos for incoming shielded transactions
     pub fn scan_full_tx(&self, tx: &Transaction) {
-        // Scan outputs to see if anyone of them is us, and if it is, extract the memo
+        // Scan all the inputs to see if we spent any transparent funds in this tx
+        
+        // TODO: Save this object
+        let secp = secp256k1::Secp256k1::new();
+
+        // TODO: Iterate over all transparent addresses. This is currently looking only at 
+        // the first one.
+        let pubkey = secp256k1::PublicKey::from_secret_key(&secp, &self.tkeys[0]).serialize();
+
+        let mut total_transparent_spend: u64 = 0;
+
+        println!("looking for t inputs");
+        for vin in tx.vin.iter() {    
+            println!("looking for t inputs inside");
+            match vin.script_sig.public_key() {
+                Some(pk) => {
+                    println!("One of our transparent inputs was spent. {}, {}", hex::encode(pk.to_vec()), hex::encode(pubkey.to_vec()));
+                    if pk[..] == pubkey[..] {
+                        // Find the txid in the list of utxos that we have.
+                        let txid = TxId {0: vin.prevout.hash};
+                        let value = match self.txs.read().unwrap().get(&txid) {
+                            Some(wtx) => {
+                                // One of the tx outputs is a match
+                                wtx.utxos.iter()
+                                    .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64))
+                                    .map_or(0, |u| u.value)
+                            },
+                            _ => 0
+                        };
+
+                        if value == 0 {
+                            println!("One of the inputs was a transparent address we have, but the UTXO wasn't found");
+                        }
+
+                        total_transparent_spend += value;
+                    }
+                },
+                _ => {}
+            };
+        }
+
+        {
+            // Update the WalletTx. Do it in a short scope because of the write lock.
+            self.txs.write().unwrap()
+                .get_mut(&tx.txid()).unwrap()
+                .total_transparent_value_spent = total_transparent_spend;
+        }
+
+        // Scan shielded sapling outputs to see if anyone of them is us, and if it is, extract the memo
         for output in tx.shielded_outputs.iter() {
             let ivks: Vec<_> = self.extfvks.iter().map(|extfvk| extfvk.fvk.vk.ivk()).collect();
 
@@ -781,13 +844,7 @@ impl LightWallet {
 
         // If the Txid doesn't exist, create it
         if !txs.contains_key(&utxo.txid) {
-                let tx_entry = WalletTx {
-                    block: utxo.height,
-                    txid: utxo.txid,
-                    notes: vec![],
-                    utxos: vec![],
-                    total_shielded_value_spent: 0
-                };
+                let tx_entry = WalletTx::new(utxo.height, &utxo.txid);
                 txs.insert(utxo.txid, tx_entry);
             }
         let tx_entry = txs.get_mut(&utxo.txid).unwrap();
@@ -919,13 +976,7 @@ impl LightWallet {
 
             // Find the existing transaction entry, or create a new one.
             if !txs.contains_key(&tx.txid) {
-                let tx_entry = WalletTx {
-                    block: block_data.height,
-                    txid: tx.txid,
-                    notes: vec![],
-                    utxos: vec![],
-                    total_shielded_value_spent: 0
-                };
+                let tx_entry = WalletTx::new(block_data.height as i32, &tx.txid);
                 txs.insert(tx.txid, tx_entry);
             }
             let tx_entry = txs.get_mut(&tx.txid).unwrap();

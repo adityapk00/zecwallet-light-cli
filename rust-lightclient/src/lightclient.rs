@@ -241,7 +241,9 @@ impl LightClient {
                     txns.push(object! {
                         "block_height" => v.block,
                         "txid"         => format!("{}", v.txid),
-                        "amount"       => total_change as i64 - v.total_shielded_value_spent as i64,
+                        "amount"       => total_change as i64 
+                                            - v.total_shielded_value_spent as i64 
+                                            - v.total_transparent_value_spent as i64,
                         "address"      => None::<String>, // TODO: For send, we don't have an address
                         "memo"         => None::<String>
                     });
@@ -341,23 +343,6 @@ impl LightClient {
         println!("Synced to {}, Downloaded {} kB                               \r", 
                 last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
 
-        // TODO: This is a super hack. Clear all UTXOs
-        {
-            let mut txs = self.wallet.txs.write().unwrap();
-            for tx in txs.values_mut() {
-                tx.utxos.clear();
-            }
-        }
-
-        // Fetch UTXOs
-        self.wallet.tkeys.iter()
-            .map( |sk| LightWallet::address_from_sk(&sk))
-            .for_each( |taddr| {
-                let wallet = self.wallet.clone();
-                self.fetch_utxos(taddr, move |utxo| {
-                    wallet.scan_utxo(&utxo);
-                });
-            });
         
         // Get the Raw transaction for all the wallet transactions
 
@@ -401,6 +386,28 @@ impl LightClient {
                 light_wallet_clone.scan_full_tx(&tx);
             });
         };
+
+        // Finally, fetch the UTXOs
+
+        // Get all the UTXOs for our transparent addresses
+        // TODO: This is a super hack. Clear all UTXOs
+        {
+            let mut txs = self.wallet.txs.write().unwrap();
+            for tx in txs.values_mut() {
+                tx.utxos.clear();
+            }
+        }
+
+        // Fetch UTXOs
+        self.wallet.tkeys.iter()
+            .map( |sk| LightWallet::address_from_sk(&sk))
+            .for_each( |taddr| {
+                let wallet = self.wallet.clone();
+                self.fetch_utxos(taddr, move |utxo| {
+                    wallet.scan_utxo(&utxo);
+                });
+            });
+
     }
 
     pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) {
