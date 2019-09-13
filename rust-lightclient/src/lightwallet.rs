@@ -574,6 +574,16 @@ impl LightWallet {
         Ok(())
     }
 
+    
+
+    // Clears all the downloaded blocks and resets the state back to the inital block.
+    // After this, the wallet's initial state will need to be set
+    // and the wallet will need to be rescanned
+    pub fn clear_blocks(&self) {
+        self.blocks.write().unwrap().clear();
+        self.txs.write().unwrap().clear();
+    }
+
     pub fn set_initial_block(&self, height: i32, hash: &str, sapling_tree: &str) -> bool {
         let mut blocks = self.blocks.write().unwrap();
         if !blocks.is_empty() {

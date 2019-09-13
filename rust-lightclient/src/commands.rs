@@ -26,8 +26,23 @@ impl Command for SyncCommand {
     }
 }
 
-struct HelpCommand {}
+struct RescanCommand {}
+impl Command for RescanCommand {
+    fn help(&self) {
+        println!("Rescan the wallet from it's initial state, rescanning and downloading all blocks and transactions.");
+    }
 
+    fn short_help(&self) -> String {
+        "Rescan the wallet, downloading and scanning all blocks and transactions".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
+        lightclient.do_rescan();
+    }
+}
+
+
+struct HelpCommand {}
 impl Command for HelpCommand {
     fn help(&self) {
         println!("Lists all available commands");
@@ -205,6 +220,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     let mut map: HashMap<String, Box<dyn Command>> = HashMap::new();
 
     map.insert("sync".to_string(),      Box::new(SyncCommand{}));
+    map.insert("rescan".to_string(),    Box::new(RescanCommand{}));
     map.insert("help".to_string(),      Box::new(HelpCommand{}));
     map.insert("address".to_string(),   Box::new(AddressCommand{}));
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
