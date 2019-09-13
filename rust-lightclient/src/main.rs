@@ -58,6 +58,10 @@ pub fn main() {
                     }
                 };
 
+                if cmd_args.is_empty() {
+                    continue;
+                }
+
                 let cmd = cmd_args.remove(0);
                 let args: Vec<&str> = cmd_args.iter().map(|s| s.as_ref()).collect();                
                 commands::do_user_command(&cmd, &args, &mut lightclient);

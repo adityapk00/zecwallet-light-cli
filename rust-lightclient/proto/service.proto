@@ -52,6 +52,11 @@ message TransparentAddress {
     string address = 1;
 }
 
+message TransparentAddressBlockFilter {
+    string address = 1;
+    BlockRange range = 2;
+}
+
 message Utxo {
     TransparentAddress address = 1;
     bytes txid = 2;
@@ -73,6 +78,7 @@ service CompactTxStreamer {
 
     // t-Address support
     rpc GetUtxos(TransparentAddress) returns (stream Utxo) {}
+    rpc GetAddressTxids(TransparentAddressBlockFilter) returns (stream RawTransaction) {}
 
     // Misc
     rpc GetLightdInfo(Empty) returns (LightdInfo) {}

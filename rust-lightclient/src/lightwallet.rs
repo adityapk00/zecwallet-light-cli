@@ -28,7 +28,7 @@ use zcash_primitives::{
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
     },
-    legacy::{Script, TransparentAddress},
+     legacy::{Script, TransparentAddress},
     note_encryption::{Memo, try_sapling_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
@@ -339,8 +339,80 @@ pub struct Utxo {
 }
 
 impl Utxo {
+    pub fn serialized_version() -> u64 {
+        return 1;
+    }
+
     fn to_outpoint(&self) -> OutPoint {
         OutPoint { hash: self.txid.0, n: self.output_index as u32 }
+    }
+
+    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let version = reader.read_u64::<LittleEndian>()?;
+        assert_eq!(version, Utxo::serialized_version());
+
+        let address_len = reader.read_i32::<LittleEndian>()?;
+        let mut address_bytes = vec![0; address_len as usize];
+        reader.read_exact(&mut address_bytes)?;
+        let address = String::from_utf8(address_bytes).unwrap();
+        assert_eq!(address.chars().take(1).collect::<Vec<char>>()[0], 't');
+
+        let mut txid_bytes = [0; 32];
+        reader.read_exact(&mut txid_bytes)?;
+        let txid = TxId { 0: txid_bytes };
+
+        let output_index = reader.read_u64::<LittleEndian>()?;
+        let value = reader.read_u64::<LittleEndian>()?;
+        let height = reader.read_i32::<LittleEndian>()?;
+
+        let script = Vector::read(&mut reader, |r| {
+            let mut byte = [0; 1];
+            r.read_exact(&mut byte)?;
+            Ok(byte[0])
+        })?;
+
+        let spent = Optional::read(&mut reader, |r| {
+            let mut txbytes = [0u8; 32];
+            r.read_exact(&mut txbytes)?;
+            Ok(TxId{0: txbytes})
+        })?;
+
+        let unconfirmed_spent = Optional::read(&mut reader, |r| {
+            let mut txbytes = [0; 32];
+            r.read_exact(&mut txbytes)?;
+            Ok(TxId{0: txbytes})
+        })?;
+
+        Ok(Utxo {
+            address,
+            txid,
+            output_index,
+            script,
+            value,
+            height,
+            spent,
+            unconfirmed_spent,
+        })
+    }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        writer.write_u64::<LittleEndian>(Utxo::serialized_version())?;
+
+        writer.write_u32::<LittleEndian>(self.address.as_bytes().len() as u32)?;
+        writer.write_all(self.address.as_bytes())?;
+
+        writer.write_all(&self.txid.0)?;
+
+        writer.write_u64::<LittleEndian>(self.output_index)?;
+        writer.write_u64::<LittleEndian>(self.value)?;
+        writer.write_i32::<LittleEndian>(self.height)?;
+
+        Vector::write(&mut writer, &self.script, |w, b| w.write_all(&[*b]))?;
+
+        Optional::write(&mut writer, &self.spent, |w, txid| w.write_all(&txid.0))?;
+        Optional::write(&mut writer, &self.unconfirmed_spent, |w, txid| w.write_all(&txid.0))?;
+
+        Ok(())
     }
 }
 
@@ -462,8 +534,11 @@ pub struct LightWallet {
     extfvks: Vec<ExtendedFullViewingKey>,
     pub address: Vec<PaymentAddress<Bls12>>,
     
-    // Transparent keys. TODO: Make it not pub
+    // Transparent keys. TODO: Make it not pubic
     pub tkeys: Vec<secp256k1::SecretKey>,
+
+    // Current UTXOs that can be spent
+    utxos: Arc<RwLock<Vec<Utxo>>>,
 
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
@@ -518,6 +593,7 @@ impl LightWallet {
             extfvks: vec![extfvk],
             address: vec![address],
             tkeys:   vec![tpk],
+            utxos:   Arc::new(RwLock::new(vec![])),
             blocks:  Arc::new(RwLock::new(vec![])),
             txs:     Arc::new(RwLock::new(HashMap::new())),
         })
@@ -545,6 +621,8 @@ impl LightWallet {
         // TODO: Generate transparent addresses from the seed
         let tpk = secp256k1::SecretKey::from_slice(&[1u8; 32]).unwrap();
 
+        let utxos = Vector::read(&mut reader, |r| Utxo::read(r))?;
+
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
 
         let txs_tuples = Vector::read(&mut reader, |r| {
@@ -561,6 +639,7 @@ impl LightWallet {
             extfvks: extfvks,
             address: addresses,
             tkeys:   vec![tpk],
+            utxos:   Arc::new(RwLock::new(utxos)),
             blocks:  Arc::new(RwLock::new(blocks)),
             txs:     Arc::new(RwLock::new(txs))
         })
@@ -577,6 +656,8 @@ impl LightWallet {
         Vector::write(&mut writer, &self.extsks, 
              |w, sk| sk.write(w)
         )?;
+
+        Vector::write(&mut writer, &self.utxos.read().unwrap(), |w, u| u.write(w))?;
 
         Vector::write(&mut writer, &self.blocks.read().unwrap(), |w, b| b.write(w))?;
                 
@@ -683,6 +764,15 @@ impl LightWallet {
         hash160.result().to_base58check(&B58_PUBKEY_ADDRESS_PREFIX, &[])
     }
     
+    pub fn address_from_pubkeyhash(ta: Option<TransparentAddress>) -> Option<String> {
+        match ta {
+            Some(TransparentAddress::PublicKey(hash)) => {
+                Some(hash.to_base58check(&B58_PUBKEY_ADDRESS_PREFIX, &[]))
+            },
+            _ => None
+        }
+    }
+
     pub fn get_seed_phrase(&self) -> String {
         Mnemonic::from_entropy(&self.seed, 
                                 Language::English,
@@ -760,8 +850,44 @@ impl LightWallet {
             .sum::<u64>()
     }
 
+    fn add_toutput_to_wtx(&self, height: i32, txid: &TxId, vout: &TxOut, n: u64) {
+        let mut txs = self.txs.write().unwrap();
+
+        // Find the existing transaction entry, or create a new one.
+        if !txs.contains_key(&txid) {
+            let tx_entry = WalletTx::new(height, &txid);
+            txs.insert(txid.clone(), tx_entry);
+        }
+        let tx_entry = txs.get_mut(&txid).unwrap();
+
+        // Make sure the vout isn't already there.
+        match tx_entry.utxos.iter().find(|utxo| {
+            utxo.txid == *txid && utxo.output_index == n && Amount::from_u64(utxo.value).unwrap() == vout.value
+        }) {
+            Some(_) => { /* We already have the txid as an output, do nothing */}
+            None => {
+                let address = LightWallet::address_from_pubkeyhash(vout.script_pubkey.address());
+                if address.is_none() {
+                    println!("Couldn't determine address for output!");
+                }
+                //println!("Added {}, {}", txid, n);
+                // Add the utxo     
+                tx_entry.utxos.push(Utxo{
+                    address: address.unwrap(),
+                    txid: txid.clone(),
+                    output_index: n,
+                    script: vout.script_pubkey.0.clone(),
+                    value: vout.value.into(),
+                    height: height,
+                    spent: None,
+                    unconfirmed_spent: None,
+                });
+            }
+        }
+    }
+
     // Scan the full Tx and update memos for incoming shielded transactions
-    pub fn scan_full_tx(&self, tx: &Transaction) {
+    pub fn scan_full_tx(&self, tx: &Transaction, height: i32) {
         // Scan all the inputs to see if we spent any transparent funds in this tx
         
         // TODO: Save this object
@@ -773,15 +899,16 @@ impl LightWallet {
 
         let mut total_transparent_spend: u64 = 0;
 
-        println!("looking for t inputs");
         for vin in tx.vin.iter() {    
-            println!("looking for t inputs inside");
             match vin.script_sig.public_key() {
                 Some(pk) => {
-                    println!("One of our transparent inputs was spent. {}, {}", hex::encode(pk.to_vec()), hex::encode(pubkey.to_vec()));
+                    //println!("One of our transparent inputs was spent. {}, {}", hex::encode(pk.to_vec()), hex::encode(pubkey.to_vec()));
                     if pk[..] == pubkey[..] {
                         // Find the txid in the list of utxos that we have.
                         let txid = TxId {0: vin.prevout.hash};
+
+                        // println!("Looking for {}, {}", txid, vin.prevout.n);
+
                         let value = match self.txs.read().unwrap().get(&txid) {
                             Some(wtx) => {
                                 // One of the tx outputs is a match
@@ -803,10 +930,29 @@ impl LightWallet {
             };
         }
 
-        {
+        // Scan for t outputs
+        for (n, vout) in tx.vout.iter().enumerate() {
+            match vout.script_pubkey.address() {
+                Some(TransparentAddress::PublicKey(hash)) => {
+                    if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
+                        // This is out address. Add this as an output to the txid
+                        self.add_toutput_to_wtx(height, &tx.txid(), &vout, n as u64);
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        if total_transparent_spend > 0 {
             // Update the WalletTx. Do it in a short scope because of the write lock.
-            self.txs.write().unwrap()
-                .get_mut(&tx.txid()).unwrap()
+            let mut txs = self.txs.write().unwrap();
+
+            if !txs.contains_key(&tx.txid()) {
+                let tx_entry = WalletTx::new(height, &tx.txid());
+                txs.insert(tx.txid().clone(), tx_entry);
+            }
+            
+            txs.get_mut(&tx.txid()).unwrap()
                 .total_transparent_value_spent = total_transparent_spend;
         }
 
@@ -838,19 +984,14 @@ impl LightWallet {
         }
     }
 
-    pub fn scan_utxo(&self, utxo: &Utxo) {
-        // Grab a write lock to the wallet so we can update it.
-        let mut txs = self.txs.write().unwrap();
+    pub fn clear_utxos(&self) {
+        let mut utxos = self.utxos.write().unwrap();
+        utxos.clear();
+    }
 
-        // If the Txid doesn't exist, create it
-        if !txs.contains_key(&utxo.txid) {
-                let tx_entry = WalletTx::new(utxo.height, &utxo.txid);
-                txs.insert(utxo.txid, tx_entry);
-            }
-        let tx_entry = txs.get_mut(&utxo.txid).unwrap();
-
-        // Add the utxo into the Wallet Tx entry
-        tx_entry.utxos.push(utxo.clone());
+    pub fn add_utxo(&self, utxo: &Utxo) {
+        let mut utxos = self.utxos.write().unwrap();
+        utxos.push(utxo.clone());
     }
 
     pub fn scan_block(&self, block: &[u8]) -> bool {

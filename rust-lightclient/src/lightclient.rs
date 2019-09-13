@@ -26,7 +26,8 @@ use tower_hyper::{client, util};
 use tower_util::MakeService;
 use futures::stream::Stream;
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TransparentAddress, TxFilter, Empty};
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TransparentAddress, 
+                         TransparentAddressBlockFilter, TxFilter, Empty};
 use crate::grpc_client::client::CompactTxStreamer;
 
 // Used below to return the grpc "Client" type to calling methods
@@ -320,16 +321,29 @@ impl LightClient {
             let local_light_wallet = self.wallet.clone();
             let local_bytes_downloaded = bytes_downloaded.clone();
 
-            let simple_callback = move |encoded_block: &[u8]| {
-                local_light_wallet.scan_block(encoded_block);
-                local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
-            };
-
             print!("Syncing {}/{}, Balance = {}           \r", 
                 last_scanned_height, last_block, self.wallet.balance(None));
 
-            self.fetch_blocks(last_scanned_height, end_height, simple_callback);
+            // Fetch compact blocks
+            self.fetch_blocks(last_scanned_height, end_height, 
+                move |encoded_block: &[u8]| {
+                    local_light_wallet.scan_block(encoded_block);
+                    local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
+            });
 
+            // We'll also fetch all the txids that our transparent addresses are involved with
+            // TODO: Use for all t addresses
+            let address = LightWallet::address_from_sk(&self.wallet.tkeys[0]);
+            let wallet = self.wallet.clone();
+            self.fetch_transparent_txids(address, last_scanned_height, end_height, 
+                move |tx_bytes: &[u8] | {
+                    let tx = Transaction::read(tx_bytes).unwrap();
+
+                    // Scan this Tx for transparent inputs and outputs
+                    wallet.scan_full_tx(&tx, -1);   // TODO: Add the height here!
+                }
+            );
+            
             last_scanned_height = end_height + 1;
             end_height = last_scanned_height + 1000 - 1;
 
@@ -348,7 +362,7 @@ impl LightClient {
 
         // We need to first copy over the Txids from the wallet struct, because
         // we need to free the read lock from here (Because we'll self.wallet.txs later)
-        let txids_to_fetch: Vec<TxId>;
+        let txids_to_fetch: Vec<(TxId, i32)>;
         {
             // First, build a list of all the TxIDs and Memos that we need 
             // to fetch. 
@@ -361,53 +375,45 @@ impl LightClient {
                 .flat_map( |(txid, wtx)| {  // flat_map because we're collecting vector of vectors
                     wtx.notes.iter()
                         .filter( |nd| nd.memo.is_none())                // only get if memo is None (i.e., it has not been fetched)
-                        .map( |nd| (txid.clone(), nd.memo.clone()) )    // collect (txid, memo) Clone everything because we want copies, so we can release the read lock
-                        .collect::<Vec<(TxId, Option<Memo>)>>()         // convert to vector
+                        .map( |nd| (txid.clone(), nd.memo.clone(), wtx.block) )    // collect (txid, memo, height) Clone everything because we want copies, so we can release the read lock
+                        .collect::<Vec<(TxId, Option<Memo>, i32)>>()         // convert to vector
                 })
-                .collect::<Vec<(TxId, Option<Memo>)>>();
+                .collect::<Vec<(TxId, Option<Memo>, i32)>>();
                 
             //println!("{:?}", txids_and_memos);
             // TODO: Assert that all the memos here are None
 
             txids_to_fetch = txids_and_memos.iter()
-                .map( | (txid, _) | txid.clone() )  // We're only interested in the txids, so drop the Memo, which is None anyway
-                .collect::<Vec<TxId>>();            // and convert into Vec
+                .map( | (txid, _, h) | (txid.clone(), *h) )  // We're only interested in the txids, so drop the Memo, which is None anyway
+                .collect::<Vec<(TxId, i32)>>();            // and convert into Vec
         }
 
         // And go and fetch the txids, getting the full transaction, so we can 
         // read the memos        
-        for txid in txids_to_fetch {
+        for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
             println!("Fetching full Tx: {}", txid);
 
             self.fetch_full_tx(txid, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
 
-                light_wallet_clone.scan_full_tx(&tx);
+                light_wallet_clone.scan_full_tx(&tx, height);
             });
         };
 
         // Finally, fetch the UTXOs
 
-        // Get all the UTXOs for our transparent addresses
-        // TODO: This is a super hack. Clear all UTXOs
-        {
-            let mut txs = self.wallet.txs.write().unwrap();
-            for tx in txs.values_mut() {
-                tx.utxos.clear();
-            }
-        }
-
+        // Get all the UTXOs for our transparent addresses, clearing out the current list
+        self.wallet.clear_utxos();
         // Fetch UTXOs
         self.wallet.tkeys.iter()
             .map( |sk| LightWallet::address_from_sk(&sk))
             .for_each( |taddr| {
                 let wallet = self.wallet.clone();
                 self.fetch_utxos(taddr, move |utxo| {
-                    wallet.scan_utxo(&utxo);
+                   wallet.add_utxo(&utxo);
                 });
             });
-
     }
 
     pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) {
@@ -536,6 +542,56 @@ impl LightClient {
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
 
+    pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(&self, address: String, 
+        start_height: u64, end_height: u64,c: F)
+            where F : Fn(&[u8]) {
+        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+
+        let dst = Destination::try_from_uri(uri.clone()).unwrap();
+        let connector = util::Connector::new(HttpConnector::new(4));
+        let settings = client::Builder::new().http2_only(true).clone();
+        let mut make_client = client::Connect::with_builder(connector, settings);
+
+        let say_hello = make_client
+            .make_service(dst)
+            .map_err(|e| panic!("connect error: {:?}", e))
+            .and_then(move |conn| {
+
+                let conn = tower_request_modifier::Builder::new()
+                    .set_origin(uri)
+                    .build(conn)
+                    .unwrap();
+
+                // Wait until the client is ready...
+                CompactTxStreamer::new(conn)
+                    .ready()
+                    .map_err(|e| eprintln!("streaming error {:?}", e))
+            })
+            .and_then(move |mut client| {
+                let start = Some(BlockId{ height: start_height, hash: vec!()});
+                let end   = Some(BlockId{ height: end_height,   hash: vec!()});
+
+                let br = Request::new(TransparentAddressBlockFilter{ address, range: Some(BlockRange{start, end}) });
+
+                client
+                    .get_address_txids(br)
+                    .map_err(|e| {
+                        eprintln!("RouteChat request failed; err={:?}", e);
+                    })
+                    .and_then(move |response| {
+                        let inbound = response.into_inner();
+                        inbound.for_each(move |tx| {
+                            //let tx = Transaction::read(&tx.into_inner().data[..]).unwrap();
+                            c(&tx.data);
+
+                            Ok(())
+                        })
+                        .map_err(|e| eprintln!("gRPC inbound stream error: {:?}", e))                    
+                    })
+            });
+
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
+    }
 
     pub fn fetch_full_tx<F : 'static + std::marker::Send>(&self, txid: TxId, c: F)
             where F : Fn(&[u8]) {
