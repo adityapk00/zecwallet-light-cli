@@ -157,7 +157,7 @@ impl LightClient {
     }
 
     // Return a list of all notes, spent and unspent
-    pub fn do_list_notes(&self) -> JsonValue {
+    pub fn do_list_notes(&self, all_notes: bool) -> JsonValue {
         let mut unspent_notes: Vec<JsonValue> = vec![];
         let mut spent_notes  : Vec<JsonValue> = vec![];
         let mut pending_notes: Vec<JsonValue> = vec![];
@@ -165,15 +165,19 @@ impl LightClient {
         // Collect Sapling notes
         self.wallet.txs.read().unwrap().iter()
             .flat_map( |(txid, wtx)| {
-                wtx.notes.iter().map(move |nd| 
-                    object!{
-                        "created_in_block"   => wtx.block,
-                        "created_in_txid"    => format!("{}", txid),
-                        "value"              => nd.note.value,
-                        "is_change"          => nd.is_change,
-                        "address"            => LightWallet::address_from_extfvk(&nd.extfvk, nd.diversifier),
-                        "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
-                        "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                wtx.notes.iter().filter_map(move |nd| 
+                    if !all_notes && nd.spent.is_some() {
+                        None
+                    } else {
+                        Some(object!{
+                            "created_in_block"   => wtx.block,
+                            "created_in_txid"    => format!("{}", txid),
+                            "value"              => nd.note.value,
+                            "is_change"          => nd.is_change,
+                            "address"            => LightWallet::address_from_extfvk(&nd.extfvk, nd.diversifier),
+                            "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
+                            "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                        })
                     }
                 )
             })
@@ -205,12 +209,17 @@ impl LightClient {
             })
             .collect::<Vec<JsonValue>>();
 
-        object!{
-            "spent_notes"   => spent_notes,
+        let mut res = object!{
             "unspent_notes" => unspent_notes,
             "pending_notes" => pending_notes,
             "utxos"         => utxos,
+        };
+
+        if all_notes {
+            res["spent_notes"] = JsonValue::Array(spent_notes);
         }
+
+        res
     }
 
     pub fn do_list_transactions(&self) -> JsonValue {

@@ -176,7 +176,6 @@ impl Command for TransactionsCommand {
         let txns = lightclient.do_list_transactions();
         println!("{}", txns.pretty(2));
     }
-
 }
 
 
@@ -190,11 +189,27 @@ impl Command for NotesCommand {
         "List all sapling notes in the wallet".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &mut LightClient) {
-        let txns = lightclient.do_list_notes();
+    fn exec(&self, args: &[&str], lightclient: &mut LightClient) {
+        // Parse the args. 
+        if args.len() > 1 {
+            self.help();
+            return;
+        }
+
+        // Make sure we can parse the amount
+        let all_notes = if args.len() == 1 {
+            match args[0] {
+                "all" => true,
+                _     => {  println!("Invalid argument. Specify 'all' to include unspent notes");
+                            return; }
+            }
+        } else {
+            false
+        };
+
+        let txns = lightclient.do_list_notes(all_notes);
         println!("{}", txns.pretty(2));
     }
-
 }
 
 
