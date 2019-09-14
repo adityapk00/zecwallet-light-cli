@@ -904,12 +904,19 @@ impl LightWallet {
 
                         // println!("Looking for {}, {}", txid, vin.prevout.n);
 
-                        let value = match self.txs.read().unwrap().get(&txid) {
+                        let value = match self.txs.write().unwrap().get_mut(&txid) {
                             Some(wtx) => {
                                 // One of the tx outputs is a match
-                                wtx.utxos.iter()
-                                    .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64))
-                                    .map_or(0, |u| u.value)
+                                let spent_utxo = wtx.utxos.iter_mut()
+                                    .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64));
+
+                                match spent_utxo {
+                                    Some(su) => { 
+                                        su.spent = Some(txid.clone());
+                                        su.value    // Return the value of the note
+                                    },
+                                    None => 0
+                                }
                             },
                             _ => 0
                         };
