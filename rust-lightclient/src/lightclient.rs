@@ -218,6 +218,28 @@ impl LightClient {
             res["spent_notes"] = JsonValue::Array(spent_notes);
         }
 
+        // If all notes, also add historical utxos
+        if all_notes {
+            res["spent_utxos"] = JsonValue::Array(self.wallet.txs.read().unwrap().values()
+                .flat_map(|wtx| {
+                    wtx.utxos.iter()
+                        .filter(|utxo| utxo.spent.is_some())
+                        .map(|utxo| {
+                            object!{
+                                "created_in_block"   => wtx.block,
+                                "created_in_txid"    => format!("{}", utxo.txid),
+                                "value"              => utxo.value,
+                                "scriptkey"          => hex::encode(utxo.script.clone()),
+                                "is_change"          => false,  // TODO: Identify notes as change
+                                "address"            => utxo.address.clone(),
+                                "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                            }
+                        }).collect::<Vec<JsonValue>>()
+                }).collect::<Vec<JsonValue>>()
+            );
+        }
+
         res
     }
 

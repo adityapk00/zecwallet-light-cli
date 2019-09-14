@@ -11,7 +11,6 @@ pub trait Command {
 }
 
 struct SyncCommand {}
-
 impl Command for SyncCommand {
     fn help(&self) {
         println!("Type sync for syncing");
