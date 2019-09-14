@@ -896,55 +896,28 @@ impl LightWallet {
         let mut total_transparent_spend: u64 = 0;
 
         for vin in tx.vin.iter() {    
-            match vin.script_sig.public_key() {
-                Some(pk) => {
-                    //println!("One of our transparent inputs was spent. {}, {}", hex::encode(pk.to_vec()), hex::encode(pubkey.to_vec()));
-                    if pk[..] == pubkey[..] {
-                        // Find the txid in the list of utxos that we have.
-                        let txid = TxId {0: vin.prevout.hash};
+            // Find the txid in the list of utxos that we have.
+            let txid = TxId {0: vin.prevout.hash};
+            match self.txs.write().unwrap().get_mut(&txid) {
+                Some(wtx) => {
+                    //println!("Looking for {}, {}", txid, vin.prevout.n);
 
-                        // println!("Looking for {}, {}", txid, vin.prevout.n);
+                    // One of the tx outputs is a match
+                    let spent_utxo = wtx.utxos.iter_mut()
+                        .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64));
 
-                        let value = match self.txs.write().unwrap().get_mut(&txid) {
-                            Some(wtx) => {
-                                // One of the tx outputs is a match
-                                let spent_utxo = wtx.utxos.iter_mut()
-                                    .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64));
+                    match spent_utxo {
+                        Some(su) => { 
+                            su.spent = Some(txid.clone());
+                            su.unconfirmed_spent = None;
 
-                                match spent_utxo {
-                                    Some(su) => { 
-                                        su.spent = Some(txid.clone());
-                                        su.unconfirmed_spent = None;
-                                        su.value    // Return the value of the note
-                                    },
-                                    None => 0
-                                }
-                            },
-                            _ => 0
-                        };
-
-                        if value == 0 {
-                            println!("One of the inputs was a transparent address we have, but the UTXO wasn't found");
-                        }
-
-                        total_transparent_spend += value;
+                            total_transparent_spend += su.value;
+                        },
+                        _ => {}
                     }
                 },
                 _ => {}
             };
-        }
-
-        // Scan for t outputs
-        for (n, vout) in tx.vout.iter().enumerate() {
-            match vout.script_pubkey.address() {
-                Some(TransparentAddress::PublicKey(hash)) => {
-                    if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
-                        // This is out address. Add this as an output to the txid
-                        self.add_toutput_to_wtx(height, &tx.txid(), &vout, n as u64);
-                    }
-                },
-                _ => {}
-            }
         }
 
         if total_transparent_spend > 0 {
@@ -958,6 +931,19 @@ impl LightWallet {
             
             txs.get_mut(&tx.txid()).unwrap()
                 .total_transparent_value_spent = total_transparent_spend;
+        }
+
+        // Scan for t outputs
+        for (n, vout) in tx.vout.iter().enumerate() {
+            match vout.script_pubkey.address() {
+                Some(TransparentAddress::PublicKey(hash)) => {
+                    if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
+                        // This is out address. Add this as an output to the txid
+                        self.add_toutput_to_wtx(height, &tx.txid(), &vout, n as u64);
+                    }
+                },
+                _ => {}
+            }
         }
 
         // Scan shielded sapling outputs to see if anyone of them is us, and if it is, extract the memo
