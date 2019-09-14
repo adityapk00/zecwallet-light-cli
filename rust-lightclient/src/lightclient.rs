@@ -208,10 +208,33 @@ impl LightClient {
             })
             .collect::<Vec<JsonValue>>();
 
+        // Collect pending UTXOs
+        let pending_utxos = self.wallet.txs.read().unwrap().iter()
+            .flat_map( |(txid, wtx)| {
+                wtx.utxos.iter().filter_map(move |utxo| 
+                    if utxo.unconfirmed_spent.is_some() {
+                        Some(object!{
+                                "created_in_block"   => wtx.block,
+                                "created_in_txid"    => format!("{}", txid),
+                                "value"              => utxo.value,
+                                "scriptkey"          => hex::encode(utxo.script.clone()),
+                                "is_change"          => false,  // TODO: Identify notes as change
+                                "address"            => utxo.address.clone(),
+                                "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                        })
+                    } else {
+                        None
+                    }
+                )
+            })
+            .collect::<Vec<JsonValue>>();;
+
         let mut res = object!{
             "unspent_notes" => unspent_notes,
             "pending_notes" => pending_notes,
             "utxos"         => utxos,
+            "pending_utxos" => pending_utxos,
         };
 
         if all_notes {

@@ -913,6 +913,7 @@ impl LightWallet {
                                 match spent_utxo {
                                     Some(su) => { 
                                         su.spent = Some(txid.clone());
+                                        su.unconfirmed_spent = None;
                                         su.value    // Return the value of the note
                                     },
                                     None => 0
@@ -1212,6 +1213,13 @@ impl LightWallet {
             .map(|utxo| {
                 let outpoint: OutPoint = utxo.to_outpoint();
 
+                // Mark this utxo as uncofirmed spent
+                let mut txs = self.txs.write().unwrap();
+                let mut spent_utxo = txs.get_mut(&utxo.txid).unwrap().utxos.iter_mut()
+                    .find(|u| utxo.txid == u.txid && utxo.output_index == u.output_index)
+                    .unwrap();
+                spent_utxo.unconfirmed_spent = Some(utxo.txid);
+                
                 let coin = TxOut {
                     value: Amount::from_u64(utxo.value).unwrap(),
                     script_pubkey: Script { 0: utxo.script.clone() },
