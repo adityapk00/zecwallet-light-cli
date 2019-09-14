@@ -537,7 +537,8 @@ pub struct LightWallet {
     // Transparent keys. TODO: Make it not pubic
     pub tkeys: Vec<secp256k1::SecretKey>,
 
-    // Current UTXOs that can be spent
+    // Current UTXOs that can be spent.
+    // TODO: Remove this, and read from txs.values().utxos
     pub utxos: Arc<RwLock<Vec<Utxo>>>,
 
     blocks: Arc<RwLock<Vec<BlockData>>>,
