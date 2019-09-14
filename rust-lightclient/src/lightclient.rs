@@ -369,11 +369,11 @@ impl LightClient {
             let address = LightWallet::address_from_sk(&self.wallet.tkeys[0]);
             let wallet = self.wallet.clone();
             self.fetch_transparent_txids(address, last_scanned_height, end_height, 
-                move |tx_bytes: &[u8] | {
+                move |tx_bytes: &[u8], height: u64 | {
                     let tx = Transaction::read(tx_bytes).unwrap();
 
                     // Scan this Tx for transparent inputs and outputs
-                    wallet.scan_full_tx(&tx, -1);   // TODO: Add the height here!
+                    wallet.scan_full_tx(&tx, height as i32);   // TODO: Add the height here!
                 }
             );
             
@@ -577,7 +577,7 @@ impl LightClient {
 
     pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(&self, address: String, 
         start_height: u64, end_height: u64,c: F)
-            where F : Fn(&[u8]) {
+            where F : Fn(&[u8], u64) {
         let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
 
         let dst = Destination::try_from_uri(uri.clone()).unwrap();
@@ -615,7 +615,7 @@ impl LightClient {
                         let inbound = response.into_inner();
                         inbound.for_each(move |tx| {
                             //let tx = Transaction::read(&tx.into_inner().data[..]).unwrap();
-                            c(&tx.data);
+                            c(&tx.data, tx.height);
 
                             Ok(())
                         })
@@ -653,7 +653,7 @@ impl LightClient {
 
         let say_hello = self.make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
-                client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec()}))
+                client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0}))
             })
             .and_then(move |response| {
                 println!("{:?}", response.into_inner());
