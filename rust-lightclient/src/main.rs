@@ -48,8 +48,8 @@ pub fn main() {
             match command_rx.recv() {
                 Ok((cmd, args)) => {
                     let args = args.iter().map(|s| s.as_ref()).collect();
-                    commands::do_user_command(&cmd, &args, &lc);
-                    resp_tx.send("Finished command".to_string()).unwrap();
+                    let cmd_response = commands::do_user_command(&cmd, &args, &lc);
+                    resp_tx.send(cmd_response).unwrap();
 
                     if cmd == "quit" {
                         break;

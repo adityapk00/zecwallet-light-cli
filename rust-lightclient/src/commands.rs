@@ -7,7 +7,7 @@ pub trait Command {
 
     fn short_help(&self) -> String;
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient);
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String;
 }
 
 struct SyncCommand {}
@@ -20,8 +20,8 @@ impl Command for SyncCommand {
         "Download CompactBlocks and sync to the server".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
-        lightclient.do_sync();
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        lightclient.do_sync()
     }
 }
 
@@ -35,8 +35,8 @@ impl Command for RescanCommand {
         "Rescan the wallet, downloading and scanning all blocks and transactions".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
-        lightclient.do_rescan();
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        lightclient.do_rescan()
     }
 }
 
@@ -51,12 +51,15 @@ impl Command for HelpCommand {
         "Lists all available commands".to_string()
     }
 
-    fn exec(&self, _args: &[&str], _: &LightClient) {
+    fn exec(&self, _args: &[&str], _: &LightClient) -> String {
+        let mut responses = vec![];
         // Print a list of all commands
-        println!("Available commands:");
+        responses.push(format!("Available commands:"));
         get_commands().iter().for_each(| (cmd, obj) | {
-            println!("{} - {}", cmd, obj.short_help());
+            responses.push(format!("{} - {}", cmd, obj.short_help()));
         });
+
+        responses.join("\n")
     }
 }
 
@@ -70,8 +73,8 @@ impl Command for InfoCommand {
         "Get the lightwalletd server's info".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
-        lightclient.do_info();
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        lightclient.do_info()
     }
 }
 
@@ -85,9 +88,9 @@ impl Command for AddressCommand {
         "List all current addresses".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         let res = lightclient.do_address();
-        println!("{}", res.pretty(2));
+        format!("{}", res.pretty(2))
     }
 }
 
@@ -103,26 +106,24 @@ impl Command for SendCommand {
         "Send ZEC to the given address".to_string()
     }
 
-    fn exec(&self, args: &[&str], lightclient: &LightClient) {
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
         // Parse the args. 
         // 1 - Destination address. T or Z address
         if args.len() < 2 || args.len() > 3 {
-            self.help();
-            return;
+            return self.short_help();
         }
 
         // Make sure we can parse the amount
         let value = match args[1].parse::<u64>() {
             Ok(amt) => amt,
             Err(e)  => {
-                println!("Couldn't parse amount: {}", e);
-                return;
+                return format!("Couldn't parse amount: {}", e);;
             }
         };
 
         let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
         
-        lightclient.do_send(args[0], value, memo);
+        lightclient.do_send(args[0], value, memo)
     }
 }
 
@@ -136,8 +137,8 @@ impl Command for SaveCommand {
         "Save wallet file to disk".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
-        lightclient.do_save();
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        lightclient.do_save()
     }
 }
 
@@ -151,13 +152,8 @@ impl Command for SeedCommand {
         "Display the seed phrase".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
-        let phrase = lightclient.do_seed_phrase();
-
-        println!("PLEASE SAVE YOUR SEED PHRASE CAREFULLY AND DO NOT SHARE IT");
-        println!();
-        println!("{}", phrase);
-        println!();
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        lightclient.do_seed_phrase()
     }
 }
 
@@ -171,9 +167,9 @@ impl Command for TransactionsCommand {
         "List all transactions in the wallet".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         let txns = lightclient.do_list_transactions();
-        println!("{}", txns.pretty(2));
+        format!("{}", txns.pretty(2))
     }
 }
 
@@ -188,26 +184,24 @@ impl Command for NotesCommand {
         "List all sapling notes in the wallet".to_string()
     }
 
-    fn exec(&self, args: &[&str], lightclient: &LightClient) {
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
         // Parse the args. 
         if args.len() > 1 {
-            self.help();
-            return;
+            return self.short_help();
         }
 
         // Make sure we can parse the amount
         let all_notes = if args.len() == 1 {
             match args[0] {
                 "all" => true,
-                _     => {  println!("Invalid argument. Specify 'all' to include unspent notes");
-                            return; }
+                _     => return "Invalid argument. Specify 'all' to include unspent notes".to_string()
             }
         } else {
             false
         };
 
         let txns = lightclient.do_list_notes(all_notes);
-        println!("{}", txns.pretty(2));
+        format!("{}", txns.pretty(2))
     }
 }
 
@@ -222,8 +216,8 @@ impl Command for QuitCommand {
         "Quit the lightwallet, saving state to disk".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) {
-        lightclient.do_save();
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        lightclient.do_save()
     }
 }
 
@@ -248,11 +242,9 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     Box::new(map)
 }
 
-pub fn do_user_command(cmd: &str, args: &Vec<&str>, lightclient: &LightClient) {
+pub fn do_user_command(cmd: &str, args: &Vec<&str>, lightclient: &LightClient) -> String {
     match get_commands().get(cmd) {
         Some(cmd) => cmd.exec(args, lightclient),
-        None      => {
-            println!("Unknown command : {}. Type 'help' for a list of commands", cmd);
-        }
+        None      => format!("Unknown command : {}. Type 'help' for a list of commands", cmd)
     }
 }

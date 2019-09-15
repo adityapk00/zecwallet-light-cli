@@ -121,28 +121,32 @@ impl LightClient {
         }
     }
 
-    pub fn do_save(&self) {
-        print!("Saving wallet...");
+    pub fn do_save(&self) -> String {
         io::stdout().flush().ok().expect("Could not flush stdout");
         let mut file_buffer = BufWriter::with_capacity(
             1_000_000, // 1 MB write buffer
             File::create("wallet.dat").unwrap());
         
         self.wallet.write(&mut file_buffer).unwrap();
-        println!("[OK]");
+        format!("Saved Wallet")
     }
 
 
-    pub fn do_info(&self) {
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+    pub fn do_info(&self) -> String {
+        use std::cell::RefCell;
 
+        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let infostr = Arc::new(RefCell::<String>::default());
+
+        let infostrinner = infostr.clone();
         let say_hello = self.make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
                 client.get_lightd_info(Request::new(Empty{}))
             })
             .and_then(move |response| {
                 //let tx = Transaction::read(&response.into_inner().data[..]).unwrap();
-                println!("{:?}", response.into_inner());
+                //println!("{:?}", response.into_inner());
+                infostrinner.replace(format!("{:?}", response.into_inner()));
 
                 Ok(())
             })
@@ -151,6 +155,9 @@ impl LightClient {
             });
 
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
+        let ans = infostr.borrow().clone();
+
+        ans
     }
 
     pub fn do_seed_phrase(&self) -> String {
@@ -341,7 +348,7 @@ impl LightClient {
         JsonValue::Array(tx_list)
     }
 
-    pub fn do_rescan(&self) {
+    pub fn do_rescan(&self) -> String {
         // First, clear the state from the wallet
         self.wallet.clear_blocks();
 
@@ -349,10 +356,10 @@ impl LightClient {
         self.set_wallet_initial_state();
 
         // Then, do a sync, which will force a full rescan from the initial state
-        self.do_sync();
+        self.do_sync()
     }
 
-    pub fn do_sync(&self) {
+    pub fn do_sync(&self) -> String {
         // Sync is 3 parts
         // 1. Get the latest block
         // 2. Get all the blocks that we don't have
@@ -410,8 +417,8 @@ impl LightClient {
             }        
         }    
         
-        println!("Synced to {}, Downloaded {} kB                               \r", 
-                last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
+        let mut responses = vec![];
+        responses.push(format!("Synced to {}, Downloaded {} kB", last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024));
 
         
         // Get the Raw transaction for all the wallet transactions
@@ -448,7 +455,7 @@ impl LightClient {
         // read the memos        
         for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
-            println!("Fetching full Tx: {}", txid);
+            responses.push(format!("Fetching full Tx: {}", txid));
 
             self.fetch_full_tx(txid, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
@@ -470,9 +477,11 @@ impl LightClient {
                    wallet.add_utxo(&utxo);
                 });
             });
+
+        responses.join("\n")
     }
 
-    pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) {
+    pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) -> String {
         let rawtx = self.wallet.send_to_address(
             u32::from_str_radix("2bb40e60", 16).unwrap(),   // Blossom ID
             &self.sapling_spend, &self.sapling_output,
@@ -481,8 +490,8 @@ impl LightClient {
         
         match rawtx {
             Some(txbytes)   => self.broadcast_raw_tx(txbytes),
-            None            => eprintln!("No Tx to broadcast")
-        };
+            None            => format!("No Tx to broadcast")
+        }
     }
 
     pub fn fetch_blocks<F : 'static + std::marker::Send>(&self, start_height: u64, end_height: u64, c: F)
@@ -671,15 +680,20 @@ impl LightClient {
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
 
-    pub fn broadcast_raw_tx(&self, tx_bytes: Box<[u8]>) {
+    pub fn broadcast_raw_tx(&self, tx_bytes: Box<[u8]>) -> String {
+        use std::cell::RefCell;
+
         let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+
+        let infostr = Arc::new(RefCell::<String>::default());
+        let infostrinner = infostr.clone();
 
         let say_hello = self.make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
                 client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0}))
             })
             .and_then(move |response| {
-                println!("{:?}", response.into_inner());
+                infostrinner.replace(format!("{:?}", response.into_inner()));
                 Ok(())
             })
             .map_err(|e| {
@@ -687,6 +701,9 @@ impl LightClient {
             });
 
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
+
+        let ans = infostr.borrow().clone();
+        ans
     }
 
     pub fn fetch_latest_block<F : 'static + std::marker::Send>(&self, mut c : F) 
