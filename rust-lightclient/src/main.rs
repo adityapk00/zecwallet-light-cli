@@ -28,15 +28,32 @@ pub fn main() {
                         .takes_value(true))
                     .get_matches();
 
-    let mut lightclient = match LightClient::new(matches.value_of("seed")) {
-        Ok(lc) => lc,
-        Err(e) => { 
-            eprintln!("Failed to start wallet. Error was:\n{}", e);
-            return;
-        }
-    };
+    let seed: Option<String> = matches.value_of("seed").map(|s| s.to_string());
 
-    println!("Starting Light Client");
+    let (command_tx, command_rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
+    let (resp_tx, resp_rx) = std::sync::mpsc::channel::<String>();
+
+    std::thread::spawn(move || {
+        let mut lightclient = match LightClient::new(seed) {
+            Ok(lc) => lc,
+            Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
+        };
+
+        println!("Starting Light Client");
+        
+        loop {
+            match command_rx.recv() {
+                Ok((cmd, args)) => {
+                    let args = args.iter().map(|s| s.as_ref()).collect();
+                    commands::do_user_command(&cmd, &args, &mut lightclient);
+                    resp_tx.send("Finished command".to_string()).unwrap();
+                },
+                _ => {}
+            }
+        }
+
+        println!("finished running");
+    });
 
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
@@ -45,7 +62,7 @@ pub fn main() {
     println!("Ready!");
 
     loop {
-        let readline = rl.readline(&format!("Block:{} (type 'help') >> ", lightclient.last_scanned_height()));
+        let readline = rl.readline(">>"); //&format!("Block:{} (type 'help') >> ", lightclient.last_scanned_height()));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
@@ -63,8 +80,15 @@ pub fn main() {
                 }
 
                 let cmd = cmd_args.remove(0);
-                let args: Vec<&str> = cmd_args.iter().map(|s| s.as_ref()).collect();                
-                commands::do_user_command(&cmd, &args, &mut lightclient);
+                let args: Vec<String> = cmd_args;            
+                // commands::do_user_command(&cmd, &args, &mut lightclient);
+                command_tx.send((cmd, args)).unwrap();
+
+                // Wait for the response
+                match resp_rx.recv() {
+                    Ok(response) => println!("{}", response),
+                    _ => { eprintln!("Error receiveing response");}
+                }
 
                 // Special check for Quit command.
                 if line == "quit" {
@@ -73,12 +97,12 @@ pub fn main() {
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
-                lightclient.do_save();
+                //lightclient.do_save();
                 break
             },
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
-                lightclient.do_save();
+                //lightclient.do_save();
                 break
             },
             Err(err) => {

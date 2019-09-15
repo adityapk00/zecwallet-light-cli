@@ -566,7 +566,7 @@ impl LightWallet {
         (extsk, extfvk, address)
     }
 
-    pub fn new(seed_phrase: Option<&str>) -> io::Result<Self> {
+    pub fn new(seed_phrase: Option<String>) -> io::Result<Self> {
         use rand::{FromEntropy, ChaChaRng, Rng};
 
         let mut seed_bytes = [0u8; 32];

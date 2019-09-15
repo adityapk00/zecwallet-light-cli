@@ -48,7 +48,7 @@ impl LightClient {
 
     }
 
-    pub fn new(seed_phrase: Option<&str>) -> io::Result<Self> {
+    pub fn new(seed_phrase: Option<String>) -> io::Result<Self> {
         let mut lc = if Path::new("wallet.dat").exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
@@ -150,7 +150,7 @@ impl LightClient {
                 println!("ERR = {:?}", e);
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
 
     pub fn do_seed_phrase(&self) -> String {
@@ -668,7 +668,7 @@ impl LightClient {
                 println!("ERR = {:?}", e);
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
 
     pub fn broadcast_raw_tx(&self, tx_bytes: Box<[u8]>) {
@@ -686,7 +686,7 @@ impl LightClient {
                 println!("ERR = {:?}", e);
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
 
     pub fn fetch_latest_block<F : 'static + std::marker::Send>(&self, mut c : F) 
@@ -705,7 +705,7 @@ impl LightClient {
                 println!("ERR = {:?}", e);
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap()
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
     
     fn make_grpc_client(&self, uri: http::Uri) -> Result<Box<dyn Future<Item=Client, Error=tower_grpc::Status> + Send>, Box<dyn Error>> {
