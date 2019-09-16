@@ -580,8 +580,9 @@ impl LightWallet {
                                         Language::English).unwrap().entropy());
         }
 
-        // TODO: Generate transparent addresses from the seed
-        let tpk = secp256k1::SecretKey::from_slice(&[1u8; 32]).unwrap();
+        // TODO: HD-derive the address instead straight from the seed.
+        // TODO: This only reads one key for now
+        let tpk = secp256k1::SecretKey::from_slice(&seed_bytes).unwrap();
 
         // Derive only the first address
         // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
@@ -619,8 +620,9 @@ impl LightWallet {
         let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
             .collect::<Vec<PaymentAddress<Bls12>>>();
 
-        // TODO: Generate transparent addresses from the seed
-        let tpk = secp256k1::SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let mut tpk_bytes = [0u8; 32];
+        reader.read_exact(&mut tpk_bytes)?;
+        let tpk = secp256k1::SecretKey::from_slice(&tpk_bytes).unwrap();
 
         let utxos = Vector::read(&mut reader, |r| Utxo::read(r))?;
 
@@ -657,6 +659,10 @@ impl LightWallet {
         Vector::write(&mut writer, &self.extsks, 
              |w, sk| sk.write(w)
         )?;
+
+        // Write the transparent private key
+        // TODO: This only writes the first key for now
+        writer.write_all(&self.tkeys[0][..])?;
 
         Vector::write(&mut writer, &self.utxos.read().unwrap(), |w, u| u.write(w))?;
 
@@ -780,7 +786,7 @@ impl LightWallet {
         ).unwrap().phrase().to_string()
     }
 
-    pub fn balance(&self, addr: Option<String>) -> u64 {
+    pub fn zbalance(&self, addr: Option<String>) -> u64 {
         self.txs.read().unwrap()
             .values()
             .map(|tx| {
@@ -813,7 +819,7 @@ impl LightWallet {
             .sum::<u64>()
     }
 
-    pub fn verified_balance(&self, addr: Option<String>) -> u64 {
+    pub fn verified_zbalance(&self, addr: Option<String>) -> u64 {
         let anchor_height = match self.get_target_height_and_anchor_offset() {
             Some((height, anchor_offset)) => height - anchor_offset as u32,
             None => return 0,

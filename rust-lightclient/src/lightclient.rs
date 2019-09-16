@@ -95,8 +95,8 @@ impl LightClient {
             let address = encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &ad);
             object!{
                 "address" => address.clone(),
-                "balance" => self.wallet.balance(Some(address.clone())),
-                "verified_balance" => self.wallet.verified_balance(Some(address)),
+                "zbalance" => self.wallet.zbalance(Some(address.clone())),
+                "verified_zbalance" => self.wallet.verified_zbalance(Some(address)),
             }
         }).collect::<Vec<JsonValue>>();
 
@@ -114,10 +114,11 @@ impl LightClient {
         }).collect::<Vec<JsonValue>>();
 
         object!{
-            "balance"           => self.wallet.balance(None),
-            "verified_balance"  => self.wallet.verified_balance(None),
-            "z_addresses"       => z_addresses,
-            "t_addresses"       => t_addresses,
+            "zbalance"           => self.wallet.zbalance(None),
+            "verified_zbalance"  => self.wallet.verified_zbalance(None),
+            "tbalance"           => self.wallet.tbalance(None),
+            "z_addresses"        => z_addresses,
+            "t_addresses"        => t_addresses,
         }
     }
 
