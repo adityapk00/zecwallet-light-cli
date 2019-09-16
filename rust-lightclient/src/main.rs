@@ -4,6 +4,8 @@ mod address;
 mod prover;
 mod commands;
 
+use std::sync::Arc;
+
 use lightclient::LightClient;
 
 use rustyline::error::ReadlineError;
@@ -30,23 +32,28 @@ pub fn main() {
 
     let seed: Option<String> = matches.value_of("seed").map(|s| s.to_string());
 
+    let lightclient = match LightClient::new(seed) {
+        Ok(lc) => Arc::new(lc),
+        Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
+    };
+
     let (command_tx, command_rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
     let (resp_tx, resp_rx) = std::sync::mpsc::channel::<String>();
 
+    let lc = lightclient.clone();
     std::thread::spawn(move || {
-        let mut lightclient = match LightClient::new(seed) {
-            Ok(lc) => lc,
-            Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
-        };
-
         println!("Starting Light Client");
         
         loop {
             match command_rx.recv() {
                 Ok((cmd, args)) => {
                     let args = args.iter().map(|s| s.as_ref()).collect();
-                    commands::do_user_command(&cmd, &args, &mut lightclient);
+                    commands::do_user_command(&cmd, &args, &lc);
                     resp_tx.send("Finished command".to_string()).unwrap();
+
+                    if cmd == "quit" {
+                        break;
+                    }
                 },
                 _ => {}
             }
@@ -62,7 +69,7 @@ pub fn main() {
     println!("Ready!");
 
     loop {
-        let readline = rl.readline(">>"); //&format!("Block:{} (type 'help') >> ", lightclient.last_scanned_height()));
+        let readline = rl.readline(&format!("Block:{} (type 'help') >> ", lightclient.last_scanned_height()));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
@@ -97,12 +104,12 @@ pub fn main() {
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
-                //lightclient.do_save();
+                lightclient.do_save();
                 break
             },
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
-                //lightclient.do_save();
+                lightclient.do_save();
                 break
             },
             Err(err) => {
