@@ -5,7 +5,7 @@ mod prover;
 mod commands;
 
 use std::sync::Arc;
-
+use std::time::Duration;
 use lightclient::LightClient;
 
 use rustyline::error::ReadlineError;
@@ -49,7 +49,7 @@ pub fn main() {
     let lc = lightclient.clone();
     std::thread::spawn(move || {
         loop {
-            match command_rx.recv() {
+            match command_rx.recv_timeout(Duration::from_secs(5 * 60)) {
                 Ok((cmd, args)) => {
                     let args = args.iter().map(|s| s.as_ref()).collect();
                     let cmd_response = commands::do_user_command(&cmd, &args, &lc);
@@ -59,7 +59,10 @@ pub fn main() {
                         break;
                     }
                 },
-                _ => {}
+                Err(_) => {
+                    // Timeout. Do a sync to keep the wallet up-to-date
+                    lc.do_sync();
+                }
             }
         }
     });
@@ -90,7 +93,6 @@ pub fn main() {
 
                 let cmd = cmd_args.remove(0);
                 let args: Vec<String> = cmd_args;            
-                // commands::do_user_command(&cmd, &args, &mut lightclient);
                 command_tx.send((cmd, args)).unwrap();
 
                 // Wait for the response
@@ -106,12 +108,12 @@ pub fn main() {
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
-                lightclient.do_save();
+                println!("{}", lightclient.do_save());
                 break
             },
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
-                lightclient.do_save();
+                println!("{}", lightclient.do_save());
                 break
             },
             Err(err) => {
