@@ -33,7 +33,7 @@ pub fn main() {
                         .value_name("server")
                         .help("Lightwalletd server to connect to.")
                         .takes_value(true)
-                        .default_value("http://127.0.0.1:9067"))
+                        .default_value(lightclient::DEFAULT_SERVER))
                     .get_matches();
 
     let server  = matches.value_of("server").map(|s| s.to_string());

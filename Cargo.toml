@@ -10,6 +10,7 @@ bytes = "0.4"
 env_logger = { version = "0.5", default-features = false }
 base58 = "0.1.0"
 log = "0.4"
+dirs = "2.0.2"
 http = "0.1"
 prost = "0.5"
 tokio = "0.1"

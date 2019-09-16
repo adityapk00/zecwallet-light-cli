@@ -33,6 +33,8 @@ use crate::grpc_client::client::CompactTxStreamer;
 // Used below to return the grpc "Client" type to calling methods
 type Client = crate::grpc_client::client::CompactTxStreamer<tower_request_modifier::RequestModifier<tower_hyper::client::Connection<tower_grpc::BoxBody>, tower_grpc::BoxBody>>;
 
+pub const DEFAULT_SERVER: &str = "http://127.0.0.1:9067";
+
 pub struct LightClient {
     pub wallet          : Arc<LightWallet>,
 
@@ -44,28 +46,34 @@ pub struct LightClient {
 }
 
 impl LightClient {
-
+    
     pub fn set_wallet_initial_state(&self) {
         self.wallet.set_initial_block(500000,
                 "004fada8d4dbc5e80b13522d2c6bd0116113c9b7197f0c6be69bc7a62f2824cd",
                 "01b733e839b5f844287a6a491409a991ec70277f39a50c99163ed378d23a829a0700100001916db36dfb9a0cf26115ed050b264546c0fa23459433c31fd72f63d188202f2400011f5f4e3bd18da479f48d674dbab64454f6995b113fa21c9d8853a9e764fb3e1f01df9d2c233ca60360e3c2bb73caf5839a1be634c8b99aea22d02abda2e747d9100001970d41722c078288101acd0a75612acfb4c434f2a55aab09fb4e812accc2ba7301485150f0deac7774dcd0fe32043bde9ba2b6bbfff787ad074339af68e88ee70101601324f1421e00a43ef57f197faf385ee4cac65aab58048016ecbd94e022973701e1b17f4bd9d1b6ca1107f619ac6d27b53dd3350d5be09b08935923cbed97906c0000000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
+    }
 
+    pub fn get_wallet_path() -> Box<Path> {
+        let mut wallet_location = dirs::home_dir().expect("Couldn't determine home directory!");
+        wallet_location.push(".zcash/testnet3/zeclite.wallet.dat");
+        
+        wallet_location.into_boxed_path()
     }
 
     pub fn new(seed_phrase: Option<String>, server: Option<String>) -> io::Result<Self> {
         let server = match server {
             Some(s) => if s.starts_with("http://") {s} else { "http://".to_string() + &s}
-            None    => "http://127.0.0.1:9067".to_string()
+            None    => DEFAULT_SERVER.to_string()
         };
 
-        let mut lc = if Path::new("wallet.dat").exists() {
+        let mut lc = if LightClient::get_wallet_path().exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
                 return Err(io::Error::new(io::ErrorKind::AlreadyExists,
                     "Cannot create a new wallet from seed, because a wallet already exists"));
             }
 
-            let mut file_buffer = BufReader::new(File::open("wallet.dat")?);
+            let mut file_buffer = BufReader::new(File::open(LightClient::get_wallet_path())?);
             
             let wallet = LightWallet::read(&mut file_buffer)?;
              LightClient {
@@ -136,10 +144,9 @@ impl LightClient {
     }
 
     pub fn do_save(&self) -> String {
-        io::stdout().flush().ok().expect("Could not flush stdout");
         let mut file_buffer = BufWriter::with_capacity(
             1_000_000, // 1 MB write buffer
-            File::create("wallet.dat").unwrap());
+            File::create(LightClient::get_wallet_path()).unwrap());
         
         self.wallet.write(&mut file_buffer).unwrap();
         format!("Saved Wallet")
