@@ -79,14 +79,14 @@ impl Command for InfoCommand {
     }
 }
 
-struct AddressCommand {}
-impl Command for AddressCommand {
+struct BalanceCommand {}
+impl Command for BalanceCommand {
     fn help(&self) {
-        println!("Show my addresses");
+        println!("Show my balance");
     }
 
     fn short_help(&self) -> String {
-        "List all current addresses".to_string()
+        "Show the current ZEC balance in the wallet".to_string()
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {        
@@ -236,7 +236,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("sync".to_string(),      Box::new(SyncCommand{}));
     map.insert("rescan".to_string(),    Box::new(RescanCommand{}));
     map.insert("help".to_string(),      Box::new(HelpCommand{}));
-    map.insert("address".to_string(),   Box::new(AddressCommand{}));
+    map.insert("balance".to_string(),   Box::new(BalanceCommand{}));
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
     map.insert("send".to_string(),      Box::new(SendCommand{}));
     map.insert("save".to_string(),      Box::new(SaveCommand{}));
