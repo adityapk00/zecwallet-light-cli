@@ -7,7 +7,6 @@ edition = "2018"
 tower-grpc = { git = "https://github.com/tower-rs/tower-grpc" }
 futures = "0.1"
 bytes = "0.4"
-env_logger = { version = "0.5", default-features = false }
 base58 = "0.1.0"
 log = "0.4"
 dirs = "2.0.2"
@@ -17,7 +16,6 @@ tokio = "0.1"
 tower-request-modifier = { git = "https://github.com/tower-rs/tower-http" }
 tower-hyper = "0.1"
 hyper = "0.12"
-tower-service = "0.2"
 tower-util = "0.1"
 hex = "0.3"
 protobuf = "2"
