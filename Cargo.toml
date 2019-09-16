@@ -32,28 +32,28 @@ sha2 = "0.8.0"
 ripemd160 = "0.8.0"
 
 [dependencies.bellman]
-path = "../../librustzcash/bellman"
+path = "../librustzcash/bellman"
 default-features = false
 features = ["groth16"]
 
 [dependencies.pairing]
-path = "../../librustzcash/pairing"
+path = "../librustzcash/pairing"
 
 [dependencies.zcash_client_backend]
-path = "../../librustzcash/zcash_client_backend"
+path = "../librustzcash/zcash_client_backend"
 default-features = false
 
 [dependencies.zcash_primitives]
-path = "../../librustzcash/zcash_primitives"
+path = "../librustzcash/zcash_primitives"
 default-features = false
 features = ["transparent-inputs"]
 
 [dependencies.zcash_proofs]
-path = "../../librustzcash/zcash_proofs"
+path = "../librustzcash/zcash_proofs"
 default-features = false
 
 [dependencies.ff]
-path = "../../librustzcash/ff"
+path = "../librustzcash/ff"
 features = ["ff_derive"]
 
 [build-dependencies]
