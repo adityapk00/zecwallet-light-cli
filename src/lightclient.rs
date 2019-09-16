@@ -35,6 +35,10 @@ type Client = crate::grpc_client::client::CompactTxStreamer<tower_request_modifi
 
 pub struct LightClient {
     pub wallet          : Arc<LightWallet>,
+
+    pub server          : String,   // Connection URL
+
+    // zcash-params
     pub sapling_output  : Vec<u8>,
     pub sapling_spend   : Vec<u8>,
 }
@@ -48,7 +52,12 @@ impl LightClient {
 
     }
 
-    pub fn new(seed_phrase: Option<String>) -> io::Result<Self> {
+    pub fn new(seed_phrase: Option<String>, server: Option<String>) -> io::Result<Self> {
+        let server = match server {
+            Some(s) => if s.starts_with("http://") {s} else { "http://".to_string() + &s}
+            None    => "http://127.0.0.1:9067".to_string()
+        };
+
         let mut lc = if Path::new("wallet.dat").exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
@@ -61,12 +70,14 @@ impl LightClient {
             let wallet = LightWallet::read(&mut file_buffer)?;
              LightClient {
                 wallet          : Arc::new(wallet), 
+                server          : server.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
             }
         } else {
             let l = LightClient {
                 wallet          : Arc::new(LightWallet::new(seed_phrase)?), 
+                server          : server.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
             };
@@ -81,6 +92,8 @@ impl LightClient {
         f.read_to_end(&mut lc.sapling_output)?;
         let mut f = File::open("/home/adityapk/.zcash-params/sapling-spend.params")?;
         f.read_to_end(&mut lc.sapling_spend)?;
+
+        println!("Lightclient connecting to {}", server);
 
         Ok(lc)
     }
@@ -136,7 +149,7 @@ impl LightClient {
     pub fn do_info(&self) -> String {
         use std::cell::RefCell;
 
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let uri: http::Uri = self.server.parse().unwrap();
         let infostr = Arc::new(RefCell::<String>::default());
 
         let infostrinner = infostr.clone();
@@ -503,7 +516,7 @@ impl LightClient {
     pub fn fetch_blocks<F : 'static + std::marker::Send>(&self, start_height: u64, end_height: u64, c: F)
         where F : Fn(&[u8]) {
         // Fetch blocks
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let uri: http::Uri = self.server.parse().unwrap();
 
         let dst = Destination::try_from_uri(uri.clone()).unwrap();
         let connector = util::Connector::new(HttpConnector::new(4));
@@ -555,7 +568,7 @@ impl LightClient {
 
     pub fn fetch_utxos<F : 'static + std::marker::Send>(&self, address: String, c: F)
             where F : Fn(crate::lightwallet::Utxo) {
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let uri: http::Uri = self.server.parse().unwrap();
 
         let dst = Destination::try_from_uri(uri.clone()).unwrap();
         let connector = util::Connector::new(HttpConnector::new(4));
@@ -616,7 +629,7 @@ impl LightClient {
     pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(&self, address: String, 
         start_height: u64, end_height: u64,c: F)
             where F : Fn(&[u8], u64) {
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let uri: http::Uri = self.server.parse().unwrap();
 
         let dst = Destination::try_from_uri(uri.clone()).unwrap();
         let connector = util::Connector::new(HttpConnector::new(4));
@@ -666,7 +679,7 @@ impl LightClient {
 
     pub fn fetch_full_tx<F : 'static + std::marker::Send>(&self, txid: TxId, c: F)
             where F : Fn(&[u8]) {
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let uri: http::Uri = self.server.parse().unwrap();
 
         let say_hello = self.make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
@@ -689,7 +702,7 @@ impl LightClient {
     pub fn broadcast_raw_tx(&self, tx_bytes: Box<[u8]>) -> String {
         use std::cell::RefCell;
 
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let uri: http::Uri = self.server.parse().unwrap();
 
         let infostr = Arc::new(RefCell::<String>::default());
         let infostrinner = infostr.clone();
@@ -714,7 +727,7 @@ impl LightClient {
 
     pub fn fetch_latest_block<F : 'static + std::marker::Send>(&self, mut c : F) 
         where F : FnMut(BlockId) {
-        let uri: http::Uri = format!("http://127.0.0.1:9067").parse().unwrap();
+        let uri: http::Uri = self.server.parse().unwrap();
 
         let say_hello = self.make_grpc_client(uri).unwrap()
             .and_then(|mut client| {

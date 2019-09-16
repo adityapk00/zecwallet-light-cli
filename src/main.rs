@@ -28,13 +28,20 @@ pub fn main() {
                         .value_name("seed_phrase")
                         .help("Create a new wallet with the given 24-word seed phrase. Will fail if wallet already exists")
                         .takes_value(true))
+                    .arg(Arg::with_name("server")
+                        .long("server")
+                        .value_name("server")
+                        .help("Lightwalletd server to connect to.")
+                        .takes_value(true)
+                        .default_value("http://127.0.0.1:9067"))
                     .get_matches();
 
-    let seed: Option<String> = matches.value_of("seed").map(|s| s.to_string());
+    let server  = matches.value_of("server").map(|s| s.to_string());
+    let seed    = matches.value_of("seed").map(|s| s.to_string());
 
     println!("Creating Light Wallet");
 
-    let lightclient = match LightClient::new(seed) {
+    let lightclient = match LightClient::new(seed, server) {
         Ok(lc) => Arc::new(lc),
         Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
     };
