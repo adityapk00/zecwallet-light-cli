@@ -365,18 +365,20 @@ impl LightClient {
         // 2. Get all the blocks that we don't have
         // 3. Find all new Txns that don't have the full Tx, and get them as full transactions 
         //    and scan them, mainly to get the memos
-        let mut last_scanned_height = self.wallet.last_scanned_height() as u64;
-        let mut end_height = last_scanned_height + 1000;
+        let mut last_scanned_height = self.wallet.last_scanned_height() as u64;        
 
         // This will hold the latest block fetched from the RPC
         let latest_block_height = Arc::new(AtomicU64::new(0));
-        // TODO: this could be a oneshot channel
-        let latest_block_height_clone = latest_block_height.clone();
+        let lbh = latest_block_height.clone();
         self.fetch_latest_block(move |block: BlockId| {
-                latest_block_height_clone.store(block.height, Ordering::SeqCst);
+                lbh.store(block.height, Ordering::SeqCst);
             });
         let last_block = latest_block_height.load(Ordering::SeqCst);
 
+        // Get the end height to scan to.
+        let mut end_height = std::cmp::min(last_scanned_height + 1000, last_block);
+
+        // Count how many bytes we've downloaded
         let bytes_downloaded = Arc::new(AtomicUsize::new(0));
 
         // Fetch CompactBlocks in increments
@@ -384,8 +386,10 @@ impl LightClient {
             let local_light_wallet = self.wallet.clone();
             let local_bytes_downloaded = bytes_downloaded.clone();
 
-            print!("Syncing {}/{}, Balance = {}           \r", 
-                last_scanned_height, last_block, self.wallet.balance(None));
+            // Show updates only if we're syncing a lot of blocks
+            if end_height - last_scanned_height > 100 {
+                print!("Syncing {}/{}\r", last_scanned_height, last_block);
+            }
 
             // Fetch compact blocks
             self.fetch_blocks(last_scanned_height, end_height, 
@@ -416,6 +420,7 @@ impl LightClient {
                 end_height = last_block;
             }        
         }    
+        println!(); // Print a new line, to finalize the syncing updates
         
         let mut responses = vec![];
         responses.push(format!("Synced to {}, Downloaded {} kB", last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024));

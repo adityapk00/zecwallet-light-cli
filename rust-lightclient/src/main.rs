@@ -32,18 +32,22 @@ pub fn main() {
 
     let seed: Option<String> = matches.value_of("seed").map(|s| s.to_string());
 
+    println!("Creating Light Wallet");
+
     let lightclient = match LightClient::new(seed) {
         Ok(lc) => Arc::new(lc),
         Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
     };
+
+    // At startup, run a sync
+    let sync_update = lightclient.do_sync();
+    println!("{}", sync_update);
 
     let (command_tx, command_rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
     let (resp_tx, resp_rx) = std::sync::mpsc::channel::<String>();
 
     let lc = lightclient.clone();
     std::thread::spawn(move || {
-        println!("Starting Light Client");
-        
         loop {
             match command_rx.recv() {
                 Ok((cmd, args)) => {
@@ -58,8 +62,6 @@ pub fn main() {
                 _ => {}
             }
         }
-
-        println!("finished running");
     });
 
     // `()` can be used when no completer is required

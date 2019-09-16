@@ -74,6 +74,7 @@ impl Command for InfoCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        lightclient.do_sync();
         lightclient.do_info()
     }
 }
@@ -88,9 +89,10 @@ impl Command for AddressCommand {
         "List all current addresses".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        let res = lightclient.do_address();
-        format!("{}", res.pretty(2))
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {        
+        lightclient.do_sync();
+        
+        format!("{}", lightclient.do_address().pretty(2))
     }
 }
 
@@ -123,6 +125,8 @@ impl Command for SendCommand {
 
         let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
         
+        lightclient.do_sync();
+
         lightclient.do_send(args[0], value, memo)
     }
 }
@@ -168,8 +172,9 @@ impl Command for TransactionsCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        let txns = lightclient.do_list_transactions();
-        format!("{}", txns.pretty(2))
+        lightclient.do_sync();
+
+        format!("{}", lightclient.do_list_transactions().pretty(2))
     }
 }
 
@@ -200,8 +205,9 @@ impl Command for NotesCommand {
             false
         };
 
-        let txns = lightclient.do_list_notes(all_notes);
-        format!("{}", txns.pretty(2))
+        lightclient.do_sync();
+        
+        format!("{}", lightclient.do_list_notes(all_notes).pretty(2))
     }
 }
 
