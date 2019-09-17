@@ -714,7 +714,12 @@ impl LightClient {
                 client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0}))
             })
             .and_then(move |response| {
-                infostrinner.replace(format!("{:?}", response.into_inner()));
+                let sendresponse = response.into_inner();
+                if sendresponse.error_code == 0 {
+                    infostrinner.replace(format!("Successfully broadcast Tx: {}", sendresponse.error_message));
+                } else {
+                    infostrinner.replace(format!("Error: {:?}", sendresponse));
+                }
                 Ok(())
             })
             .map_err(|e| {
