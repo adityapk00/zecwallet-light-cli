@@ -26,7 +26,7 @@ pub mod grpc_client {
 pub fn main() {
     // Configure logging first.    
     let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
+        .encoder(Box::new(PatternEncoder::new("{l} -{d(%Y-%m-%d %H:%M:%S)}- {m}\n")))
         .build(LightClient::get_log_path()).unwrap();
 
     let config = Config::builder()
