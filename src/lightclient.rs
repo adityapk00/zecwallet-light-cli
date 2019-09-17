@@ -273,7 +273,7 @@ impl LightClient {
             });
         
         // Collect UTXOs
-        let utxos = self.wallet.utxos.read().unwrap().iter()
+        let utxos = self.wallet.get_utxos().iter()
             .map(|utxo| {
                 object!{
                     "created_in_block"   => utxo.height,
@@ -457,6 +457,11 @@ impl LightClient {
         // Get the end height to scan to.
         let mut end_height = std::cmp::min(last_scanned_height + 1000, last_block);
 
+        // If there's nothing to scan, just return
+        if last_scanned_height == last_block {
+            return "".to_string();
+        }
+
         // Count how many bytes we've downloaded
         let bytes_downloaded = Arc::new(AtomicUsize::new(0));
 
@@ -553,20 +558,6 @@ impl LightClient {
             });
         };
 
-        // Finally, fetch the UTXOs
-
-        // Get all the UTXOs for our transparent addresses, clearing out the current list
-        self.wallet.clear_utxos();
-        // Fetch UTXOs
-        self.wallet.tkeys.iter()
-            .map( |sk| LightWallet::address_from_sk(&sk))
-            .for_each( |taddr| {
-                let wallet = self.wallet.clone();
-                self.fetch_utxos(taddr, move |utxo| {
-                   wallet.add_utxo(&utxo);
-                });
-            });
-
         responses.join("\n")
     }
 
@@ -627,66 +618,6 @@ impl LightClient {
 
                             b.encode(&mut encoded_buf).unwrap();
                             c(&encoded_buf);
-
-                            Ok(())
-                        })
-                        .map_err(|e| eprintln!("gRPC inbound stream error: {:?}", e))                    
-                    })
-            });
-
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
-    }
-
-    pub fn fetch_utxos<F : 'static + std::marker::Send>(&self, address: String, c: F)
-            where F : Fn(crate::lightwallet::Utxo) {
-        let uri: http::Uri = self.server.parse().unwrap();
-
-        let dst = Destination::try_from_uri(uri.clone()).unwrap();
-        let connector = util::Connector::new(HttpConnector::new(4));
-        let settings = client::Builder::new().http2_only(true).clone();
-        let mut make_client = client::Connect::with_builder(connector, settings);
-
-        let say_hello = make_client
-            .make_service(dst)
-            .map_err(|e| panic!("connect error: {:?}", e))
-            .and_then(move |conn| {
-
-                let conn = tower_request_modifier::Builder::new()
-                    .set_origin(uri)
-                    .build(conn)
-                    .unwrap();
-
-                // Wait until the client is ready...
-                CompactTxStreamer::new(conn)
-                    .ready()
-                    .map_err(|e| eprintln!("streaming error {:?}", e))
-            })
-            .and_then(move |mut client| {
-
-                let br = Request::new(TransparentAddress{ address });
-                client
-                    .get_utxos(br)
-                    .map_err(|e| {
-                        eprintln!("RouteChat request failed; err={:?}", e);
-                    })
-                    .and_then(move |response| {
-                        let inbound = response.into_inner();
-                        inbound.for_each(move |b| {
-                            let mut txid_bytes = [0u8; 32];
-                            txid_bytes.copy_from_slice(&b.txid);
-
-                            let u = crate::lightwallet::Utxo {
-                                address: b.address.unwrap().address,
-                                txid: TxId {0: txid_bytes},
-                                output_index: b.output_index,
-                                script: b.script.to_vec(),
-                                height: b.height as i32,
-                                value: b.value,
-                                spent: None,
-                                unconfirmed_spent: None,
-                            };
-
-                            c(u);
 
                             Ok(())
                         })

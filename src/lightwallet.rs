@@ -469,6 +469,7 @@ impl WalletTx {
         let txid = TxId{0: txid_bytes};
 
         let notes = Vector::read(&mut reader, |r| SaplingNoteData::read(r))?;
+        let utxos = Vector::read(&mut reader, |r| Utxo::read(r))?;
 
         let total_shielded_value_spent = reader.read_u64::<LittleEndian>()?;
         let total_transparent_value_spent = reader.read_u64::<LittleEndian>()?;
@@ -477,7 +478,7 @@ impl WalletTx {
             block,
             txid,
             notes,
-            utxos: vec![],
+            utxos,
             total_shielded_value_spent,
             total_transparent_value_spent
         })
@@ -491,6 +492,7 @@ impl WalletTx {
         writer.write_all(&self.txid.0)?;
 
         Vector::write(&mut writer, &self.notes, |w, nd| nd.write(w))?;
+        Vector::write(&mut writer, &self.utxos, |w, u| u.write(w))?;
 
         writer.write_u64::<LittleEndian>(self.total_shielded_value_spent)?;
         writer.write_u64::<LittleEndian>(self.total_transparent_value_spent)?;
@@ -538,10 +540,6 @@ pub struct LightWallet {
     
     // Transparent keys. TODO: Make it not pubic
     pub tkeys: Vec<secp256k1::SecretKey>,
-
-    // Current UTXOs that can be spent.
-    // TODO: Remove this, and read from txs.values().utxos
-    pub utxos: Arc<RwLock<Vec<Utxo>>>,
 
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
@@ -597,7 +595,6 @@ impl LightWallet {
             extfvks: vec![extfvk],
             address: vec![address],
             tkeys:   vec![tpk],
-            utxos:   Arc::new(RwLock::new(vec![])),
             blocks:  Arc::new(RwLock::new(vec![])),
             txs:     Arc::new(RwLock::new(HashMap::new())),
         })
@@ -627,8 +624,6 @@ impl LightWallet {
         reader.read_exact(&mut tpk_bytes)?;
         let tpk = secp256k1::SecretKey::from_slice(&tpk_bytes).unwrap();
 
-        let utxos = Vector::read(&mut reader, |r| Utxo::read(r))?;
-
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
 
         let txs_tuples = Vector::read(&mut reader, |r| {
@@ -645,7 +640,6 @@ impl LightWallet {
             extfvks: extfvks,
             address: addresses,
             tkeys:   vec![tpk],
-            utxos:   Arc::new(RwLock::new(utxos)),
             blocks:  Arc::new(RwLock::new(blocks)),
             txs:     Arc::new(RwLock::new(txs))
         })
@@ -666,8 +660,6 @@ impl LightWallet {
         // Write the transparent private key
         // TODO: This only writes the first key for now
         writer.write_all(&self.tkeys[0][..])?;
-
-        Vector::write(&mut writer, &self.utxos.read().unwrap(), |w, u| u.write(w))?;
 
         Vector::write(&mut writer, &self.blocks.read().unwrap(), |w, b| b.write(w))?;
                 
@@ -829,8 +821,20 @@ impl LightWallet {
             .sum::<u64>()
     }
 
+    // Get all (unspent) utxos. Unconfirmed spent utxos are included
+    pub fn get_utxos(&self) -> Vec<Utxo> {
+        let txs = self.txs.read().unwrap();
+
+        txs.values()
+            .flat_map(|tx| {
+                tx.utxos.iter().filter(|utxo| utxo.spent.is_none())
+            })
+            .map(|utxo| utxo.clone())
+            .collect::<Vec<Utxo>>()
+    }
+
     pub fn tbalance(&self, addr: Option<String>) -> u64 {
-        self.utxos.read().unwrap().iter()
+        self.get_utxos().iter()
             .filter(|utxo| {
                 match addr.clone() {
                     Some(a) => utxo.address == a,
@@ -1004,16 +1008,6 @@ impl LightWallet {
                 }
             }
         }
-    }
-
-    pub fn clear_utxos(&self) {
-        let mut utxos = self.utxos.write().unwrap();
-        utxos.clear();
-    }
-
-    pub fn add_utxo(&self, utxo: &Utxo) {
-        let mut utxos = self.utxos.write().unwrap();
-        utxos.push(utxo.clone());
     }
 
     pub fn scan_block(&self, block: &[u8]) -> bool {
@@ -1240,7 +1234,7 @@ impl LightWallet {
         // Specifically, if you send an outgoing transaction that is sent to a shielded address,
         // ZecWallet will add all your t-address funds into that transaction, and send them to your shielded
         // address as change.
-        let tinputs = self.utxos.read().unwrap().iter()
+        let tinputs = self.get_utxos().iter()
             .map(|utxo| {
                 let outpoint: OutPoint = utxo.to_outpoint();
 
