@@ -9,6 +9,7 @@ futures = "0.1"
 bytes = "0.4"
 base58 = "0.1.0"
 log = "0.4"
+log4rs = { version = "0.8.3", default-features = false, features = ["file", "file_appender"]}
 dirs = "2.0.2"
 http = "0.1"
 prost = "0.5"

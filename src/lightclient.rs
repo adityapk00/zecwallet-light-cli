@@ -1,5 +1,7 @@
 use crate::lightwallet::LightWallet;
 
+use log::info;
+
 use std::path::Path;
 use std::fs::File;
 use std::io;
@@ -32,7 +34,8 @@ use crate::grpc_client::client::CompactTxStreamer;
 type Client = crate::grpc_client::client::CompactTxStreamer<tower_request_modifier::RequestModifier<tower_hyper::client::Connection<tower_grpc::BoxBody>, tower_grpc::BoxBody>>;
 
 pub const DEFAULT_SERVER: &str = "http://127.0.0.1:9067";
-pub const WALLET_NAME: &str = "zeclite.wallet.dat";
+pub const WALLET_NAME: &str    = "zeclite.wallet.dat";
+pub const LOGFILE_NAME: &str   = "zeclite.debug.log";
 
 pub struct LightClient {
     pub wallet          : Arc<LightWallet>,
@@ -53,35 +56,47 @@ impl LightClient {
     }
 
     pub fn get_params_path(name: &str) -> Box<Path> {
-            let mut params_location;
+        let mut params_location;
 
-            if cfg!(target_os="macos") || cfg!(target_os="windows") {
-                params_location  = dirs::data_dir()
-                    .expect("Couldn't determine app data directory!");
-                params_location.push("ZcashParams");
-            } else {
-                params_location  = dirs::home_dir()
-                    .expect("Couldn't determine home directory!");
-                params_location.push(".zcash-params");
-            };
+        if cfg!(target_os="macos") || cfg!(target_os="windows") {
+            params_location  = dirs::data_dir()
+                .expect("Couldn't determine app data directory!");
+            params_location.push("ZcashParams");
+        } else {
+            params_location  = dirs::home_dir()
+                .expect("Couldn't determine home directory!");
+            params_location.push(".zcash-params");
+        };
 
         params_location.push(name);
         params_location.into_boxed_path()
     }
 
-    pub fn get_wallet_path() -> Box<Path> {
-        let mut wallet_location; 
+    pub fn get_zcash_data_path() -> Box<Path> {
+        let mut zcash_data_location; 
         if cfg!(target_os="macos") || cfg!(target_os="windows") {
-            wallet_location = dirs::data_dir().expect("Couldn't determine app data directory!");
-            wallet_location.push("Zcash/testnet3");
+            zcash_data_location = dirs::data_dir().expect("Couldn't determine app data directory!");
+            zcash_data_location.push("Zcash/testnet3");
         } else {
-            wallet_location = dirs::home_dir().expect("Couldn't determine home directory!");
-            wallet_location.push(".zcash/testnet3");
+            zcash_data_location = dirs::home_dir().expect("Couldn't determine home directory!");
+            zcash_data_location.push(".zcash/testnet3");
         };
 
+        zcash_data_location.into_boxed_path()
+    }
+
+    pub fn get_wallet_path() -> Box<Path> {
+        let mut wallet_location = LightClient::get_zcash_data_path().into_path_buf();
         wallet_location.push(WALLET_NAME);
         
         wallet_location.into_boxed_path()
+    }
+
+    pub fn get_log_path() -> Box<Path> {
+        let mut log_path = LightClient::get_zcash_data_path().into_path_buf();
+        log_path.push(LOGFILE_NAME);
+
+        log_path.into_boxed_path()
     }
 
     pub fn new(seed_phrase: Option<String>, server: Option<String>) -> io::Result<Self> {
@@ -118,6 +133,7 @@ impl LightClient {
 
             l
         };
+
         
         // Read Sapling Params
         let mut f = match File::open(LightClient::get_params_path("sapling-output.params")) {
@@ -134,6 +150,7 @@ impl LightClient {
         };
         f.read_to_end(&mut lc.sapling_spend)?;
 
+        info!("Created LightClient to {}", &server);
         println!("Lightclient connecting to {}", server);
 
         Ok(lc)
@@ -182,6 +199,8 @@ impl LightClient {
             File::create(LightClient::get_wallet_path()).unwrap());
         
         self.wallet.write(&mut file_buffer).unwrap();
+        info!("Saved wallet");
+
         format!("Saved Wallet")
     }
 
@@ -403,14 +422,18 @@ impl LightClient {
     }
 
     pub fn do_rescan(&self) -> String {
+        info!("Rescan starting");
         // First, clear the state from the wallet
         self.wallet.clear_blocks();
 
         // Then set the inital block
         self.set_wallet_initial_state();
-
+        
         // Then, do a sync, which will force a full rescan from the initial state
-        self.do_sync()
+        let response = self.do_sync();
+        info!("Rescan finished");
+
+        response
     }
 
     pub fn do_sync(&self) -> String {
@@ -429,6 +452,8 @@ impl LightClient {
             });
         let last_block = latest_block_height.load(Ordering::SeqCst);
 
+        info!("Latest block is {}", last_block);
+
         // Get the end height to scan to.
         let mut end_height = std::cmp::min(last_scanned_height + 1000, last_block);
 
@@ -446,6 +471,7 @@ impl LightClient {
             }
 
             // Fetch compact blocks
+            info!("Fetching blocks {}-{}", last_scanned_height, end_height);
             self.fetch_blocks(last_scanned_height, end_height, 
                 move |encoded_block: &[u8]| {
                     local_light_wallet.scan_block(encoded_block);
@@ -477,8 +503,9 @@ impl LightClient {
         println!(); // Print a new line, to finalize the syncing updates
         
         let mut responses = vec![];
-        responses.push(format!("Synced to {}, Downloaded {} kB", last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024));
 
+        info!("Synced to {}, Downloaded {} kB", last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
+        responses.push(format!("Synced to {}, Downloaded {} kB", last_block, bytes_downloaded.load(Ordering::SeqCst) / 1024));
         
         // Get the Raw transaction for all the wallet transactions
 
@@ -509,11 +536,13 @@ impl LightClient {
                 .map( | (txid, _, h) | (txid.clone(), *h) )  // We're only interested in the txids, so drop the Memo, which is None anyway
                 .collect::<Vec<(TxId, i32)>>();            // and convert into Vec
         }
+        info!("Fetching {} new txids", txids_to_fetch.len());
 
         // And go and fetch the txids, getting the full transaction, so we can 
         // read the memos        
         for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
+            info!("Fetching full Tx: {}", txid);
             responses.push(format!("Fetching full Tx: {}", txid));
 
             self.fetch_full_tx(txid, move |tx_bytes: &[u8] | {
@@ -541,6 +570,7 @@ impl LightClient {
     }
 
     pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) -> String {
+        info!("Creating transaction");
         let rawtx = self.wallet.send_to_address(
             u32::from_str_radix("2bb40e60", 16).unwrap(),   // Blossom ID
             &self.sapling_spend, &self.sapling_output,

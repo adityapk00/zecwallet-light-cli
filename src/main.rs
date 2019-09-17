@@ -6,21 +6,41 @@ mod commands;
 
 use std::sync::Arc;
 use std::time::Duration;
+
 use lightclient::LightClient;
+
+use log::{info, LevelFilter};
+use log4rs::append::file::FileAppender;
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::config::{Appender, Config, Root};
 
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+
+use clap::{Arg, App};
 
 pub mod grpc_client {
     include!(concat!(env!("OUT_DIR"), "/cash.z.wallet.sdk.rpc.rs"));
 }
 
-
-
 pub fn main() {
-    use clap::{Arg, App};
+    // Configure logging first.    
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
+        .build(LightClient::get_log_path()).unwrap();
 
-    let matches = App::new("Light Client")
+    let config = Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(Root::builder()
+                   .appender("logfile")
+                   .build(LevelFilter::Info)).unwrap();
+
+    log4rs::init_config(config).unwrap();
+
+    info!("Starting ZecLite CLI");
+
+    // Get command line arguments
+    let matches = App::new("ZecLite CLI")
                     .version("1.0") 
                     .arg(Arg::with_name("seed")
                         .short("s")
@@ -46,6 +66,9 @@ pub fn main() {
         Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
     };
 
+    // After getting the lightclient, ask server for info
+    info!("{}", lightclient.do_info());
+
     // At startup, run a sync
     let sync_update = lightclient.do_sync();
     println!("{}", sync_update);
@@ -63,6 +86,7 @@ pub fn main() {
                     resp_tx.send(cmd_response).unwrap();
 
                     if cmd == "quit" {
+                        info!("Quit");
                         break;
                     }
                 },
