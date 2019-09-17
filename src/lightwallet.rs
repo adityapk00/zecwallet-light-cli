@@ -4,7 +4,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use log::info;
+use log::{info, error};
 
 use protobuf::parse_from_bytes;
 
@@ -724,6 +724,25 @@ impl LightWallet {
         }
     }
 
+    // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
+    pub fn get_sapling_tree(&self) -> Result<(i32, String, String), String> {
+        let blocks = self.blocks.read().unwrap();
+
+        let block = match blocks.last() {
+            Some(block) => block,
+            None => return Err("Couldn't get a block height!".to_string())
+        };
+
+        let mut write_buf = vec![];
+        block.tree.write(&mut write_buf).map_err(|e| format!("Error writing commitment tree {}", e))?;
+
+        let mut blockhash = vec![];
+        blockhash.extend_from_slice(&block.hash.0);
+        blockhash.reverse();
+
+        Ok((block.height, hex::encode(blockhash), hex::encode(write_buf)))
+    }
+
     pub fn last_scanned_height(&self) -> i32 {
         self.blocks
             .read()
@@ -1143,6 +1162,14 @@ impl LightWallet {
 
         // Store scanned data for this block.
         self.blocks.write().unwrap().push(block_data);
+
+        // Print info about the block every 10,000 blocks
+        if height % 10_000 == 0 {
+            match self.get_sapling_tree() {
+                Ok((h, hash, stree)) => info!("Sapling tree at height {}/{} - {}", h, hash, stree),
+                Err(e) => error!("Couldn't determine sapling tree: {}", e)
+            }
+        }
 
         true
     }

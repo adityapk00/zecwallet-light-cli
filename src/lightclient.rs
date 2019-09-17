@@ -1,6 +1,6 @@
 use crate::lightwallet::LightWallet;
 
-use log::info;
+use log::{info, error};
 
 use std::path::Path;
 use std::fs::File;
@@ -33,7 +33,7 @@ use crate::grpc_client::client::CompactTxStreamer;
 // Used below to return the grpc "Client" type to calling methods
 type Client = crate::grpc_client::client::CompactTxStreamer<tower_request_modifier::RequestModifier<tower_hyper::client::Connection<tower_grpc::BoxBody>, tower_grpc::BoxBody>>;
 
-pub const DEFAULT_SERVER: &str = "http://127.0.0.1:9067";
+pub const DEFAULT_SERVER: &str = "http://3.15.168.203:9067";
 pub const WALLET_NAME: &str    = "zeclite.wallet.dat";
 pub const LOGFILE_NAME: &str   = "zeclite.debug.log";
 
@@ -50,9 +50,9 @@ pub struct LightClient {
 impl LightClient {
     
     pub fn set_wallet_initial_state(&self) {
-        self.wallet.set_initial_block(500000,
-                "004fada8d4dbc5e80b13522d2c6bd0116113c9b7197f0c6be69bc7a62f2824cd",
-                "01b733e839b5f844287a6a491409a991ec70277f39a50c99163ed378d23a829a0700100001916db36dfb9a0cf26115ed050b264546c0fa23459433c31fd72f63d188202f2400011f5f4e3bd18da479f48d674dbab64454f6995b113fa21c9d8853a9e764fb3e1f01df9d2c233ca60360e3c2bb73caf5839a1be634c8b99aea22d02abda2e747d9100001970d41722c078288101acd0a75612acfb4c434f2a55aab09fb4e812accc2ba7301485150f0deac7774dcd0fe32043bde9ba2b6bbfff787ad074339af68e88ee70101601324f1421e00a43ef57f197faf385ee4cac65aab58048016ecbd94e022973701e1b17f4bd9d1b6ca1107f619ac6d27b53dd3350d5be09b08935923cbed97906c0000000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
+        self.wallet.set_initial_block(600000,
+                "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
+                "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
     }
 
     pub fn get_params_path(name: &str) -> Box<Path> {
@@ -468,6 +468,7 @@ impl LightClient {
             // Show updates only if we're syncing a lot of blocks
             if end_height - last_scanned_height > 100 {
                 print!("Syncing {}/{}\r", last_scanned_height, last_block);
+                io::stdout().flush().ok().expect("Could not flush stdout");
             }
 
             // Fetch compact blocks
