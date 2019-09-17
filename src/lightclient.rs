@@ -1,6 +1,6 @@
 use crate::lightwallet::LightWallet;
 
-use log::{info, error};
+use log::{info};
 
 use std::path::Path;
 use std::fs::File;
