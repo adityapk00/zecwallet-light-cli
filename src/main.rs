@@ -139,11 +139,13 @@ pub fn main() {
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
+                info!("CTRL-C");
                 println!("{}", lightclient.do_save());
                 break
             },
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
+                info!("CTRL-D");
                 println!("{}", lightclient.do_save());
                 break
             },

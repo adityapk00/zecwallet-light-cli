@@ -4,6 +4,8 @@ use std::cmp;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use log::info;
+
 use protobuf::parse_from_bytes;
 
 use bip39::{Mnemonic, Language};
@@ -604,6 +606,7 @@ impl LightWallet {
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
         assert_eq!(version, LightWallet::serialized_version());
+        info!("Reading wallet version {}", version);
 
         // Seed
         let mut seed_bytes = [0u8; 32];
@@ -866,13 +869,15 @@ impl LightWallet {
         match tx_entry.utxos.iter().find(|utxo| {
             utxo.txid == *txid && utxo.output_index == n && Amount::from_u64(utxo.value).unwrap() == vout.value
         }) {
-            Some(_) => { /* We already have the txid as an output, do nothing */}
+            Some(utxo) => { 
+                info!("Already have {}:{}", utxo.txid, utxo.output_index);
+            }
             None => {
                 let address = LightWallet::address_from_pubkeyhash(vout.script_pubkey.address());
                 if address.is_none() {
                     println!("Couldn't determine address for output!");
                 }
-                //println!("Added {}, {}", txid, n);
+                info!("Added to wallet {}:{}", txid, n);
                 // Add the utxo     
                 tx_entry.utxos.push(Utxo{
                     address: address.unwrap(),
@@ -913,7 +918,8 @@ impl LightWallet {
                         .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64));
 
                     match spent_utxo {
-                        Some(su) => { 
+                        Some(su) => {
+                            info!("Spent utxo from {} was spent in {}", txid, tx.txid());
                             su.spent = Some(txid.clone());
                             su.unconfirmed_spent = None;
 
@@ -968,6 +974,7 @@ impl LightWallet {
                 };
 
                 {
+                    info!("A sapling note was spent in {}", tx.txid());
                     // Update the WalletTx 
                     // Do it in a short scope because of the write lock.
                     let mut txs = self.txs.write().unwrap();
@@ -1089,6 +1096,8 @@ impl LightWallet {
             // Mark notes as spent.
             let mut total_shielded_value_spent: u64 = 0;
 
+            info!("Txid {} belongs to wallet", tx.txid);
+
             for spend in &tx.shielded_spends {
                 // TODO: Add up the spent value here and add it to the WalletTx as a Spent
                 let txid = nfs
@@ -1105,6 +1114,7 @@ impl LightWallet {
                     .unwrap();
                 
                 // Mark the note as spent, and remove the unconfirmed part of it
+                info!("Marked a note as spent");
                 spent_note.spent = Some(tx.txid);
                 spent_note.unconfirmed_spent = None::<TxId>;
 
@@ -1123,6 +1133,7 @@ impl LightWallet {
                 .shielded_outputs
                 .into_iter()
             {
+                info!("Received sapling output");
                 tx_entry.notes.push(SaplingNoteData::new(
                     &self.extfvks[output.account],
                     output
