@@ -27,7 +27,7 @@ impl Command for SyncCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_sync()
+        lightclient.do_sync(true)
     }
 }
 
@@ -116,7 +116,7 @@ impl Command for InfoCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_sync();
+        lightclient.do_sync(true);
         lightclient.do_info()
     }
 }
@@ -139,7 +139,7 @@ impl Command for BalanceCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {        
-        lightclient.do_sync();
+        lightclient.do_sync(true);
         
         format!("{}", lightclient.do_address().pretty(2))
     }
@@ -181,7 +181,7 @@ impl Command for SendCommand {
 
         let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
         
-        lightclient.do_sync();
+        lightclient.do_sync(true);
 
         lightclient.do_send(args[0], value, memo)
     }
@@ -249,7 +249,7 @@ impl Command for TransactionsCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_sync();
+        lightclient.do_sync(true);
 
         format!("{}", lightclient.do_list_transactions().pretty(2))
     }
@@ -289,7 +289,7 @@ impl Command for NotesCommand {
             false
         };
 
-        lightclient.do_sync();
+        lightclient.do_sync(true);
         
         format!("{}", lightclient.do_list_notes(all_notes).pretty(2))
     }

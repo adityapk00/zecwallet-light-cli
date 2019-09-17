@@ -70,7 +70,7 @@ pub fn main() {
     info!("{}", lightclient.do_info());
 
     // At startup, run a sync
-    let sync_update = lightclient.do_sync();
+    let sync_update = lightclient.do_sync(true);
     println!("{}", sync_update);
 
     let (command_tx, command_rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
@@ -91,8 +91,8 @@ pub fn main() {
                     }
                 },
                 Err(_) => {
-                    // Timeout. Do a sync to keep the wallet up-to-date
-                    lc.do_sync();
+                    // Timeout. Do a sync to keep the wallet up-to-date. False to whether to print updates on the console
+                    lc.do_sync(false);
                 }
             }
         }

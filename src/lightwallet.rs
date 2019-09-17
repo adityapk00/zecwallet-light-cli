@@ -1235,24 +1235,9 @@ impl LightWallet {
         // ZecWallet will add all your t-address funds into that transaction, and send them to your shielded
         // address as change.
         let tinputs = self.get_utxos().iter()
-            .map(|utxo| {
-                let outpoint: OutPoint = utxo.to_outpoint();
-
-                // Mark this utxo as uncofirmed spent
-                let mut txs = self.txs.write().unwrap();
-                let mut spent_utxo = txs.get_mut(&utxo.txid).unwrap().utxos.iter_mut()
-                    .find(|u| utxo.txid == u.txid && utxo.output_index == u.output_index)
-                    .unwrap();
-                spent_utxo.unconfirmed_spent = Some(utxo.txid);
-                
-                let coin = TxOut {
-                    value: Amount::from_u64(utxo.value).unwrap(),
-                    script_pubkey: Script { 0: utxo.script.clone() },
-                };
-
-                (outpoint, coin)
-            })
-            .collect::<Vec<(OutPoint, TxOut)>>();
+            .filter(|utxo| utxo.unconfirmed_spent.is_none()) // Remove any unconfirmed spends
+            .map(|utxo| utxo.clone())
+            .collect::<Vec<Utxo>>();
 
         if let Err(e) = match to {
             address::RecipientAddress::Shielded(_) => {
@@ -1261,20 +1246,28 @@ impl LightWallet {
                 let sk = self.tkeys[0];
 
                 // Add all tinputs
-                tinputs.iter().map( |(outpoint, coin)| {
-                    builder.add_transparent_input(sk, outpoint.clone(), coin.clone())
-                }).collect::<Result<Vec<_>, _>>()
-            }
-            _ => {Ok(vec![])}
+                tinputs.iter()
+                    .map(|utxo| {
+                        let outpoint: OutPoint = utxo.to_outpoint();
+                
+                        let coin = TxOut {
+                            value: Amount::from_u64(utxo.value).unwrap(),
+                            script_pubkey: Script { 0: utxo.script.clone() },
+                        };
+
+                        builder.add_transparent_input(sk, outpoint.clone(), coin.clone())
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            },            
+            _ => Ok(vec![])
         } { 
             eprintln!("Error adding transparent inputs: {:?}", e);
             return None;
         }
 
         // Confirm we were able to select sufficient value
-        // TODO: If we're sending to a t-address, we could also use t-address inputs
         let selected_value = notes.iter().map(|selected| selected.note.value).sum::<u64>() 
-            + tinputs.iter().map::<u64, _>(|(_, coin)| coin.value.into()).sum::<u64>();
+                             + tinputs.iter().map::<u64, _>(|utxo| utxo.value.into()).sum::<u64>();
 
         if selected_value < u64::from(target_value) {
             eprintln!(
@@ -1329,17 +1322,24 @@ impl LightWallet {
         println!("Transaction ID: {}", tx.txid());
 
         // Mark notes as spent.
-        // TODO: This is only a non-confirmed spend, and the note should be marked as such.
-        let mut txs = self.txs.write().unwrap();
-        for selected in notes {
-            let mut spent_note = txs
-                .get_mut(&selected.txid)
-                .unwrap()
-                .notes
-                .iter_mut()
-                .find(|nd| &nd.nullifier[..] == &selected.nullifier[..])
-                .unwrap();
-            spent_note.unconfirmed_spent = Some(tx.txid());
+        {
+            // Mark sapling notes as unconfirmed spent
+            let mut txs = self.txs.write().unwrap();
+            for selected in notes {
+                let mut spent_note = txs.get_mut(&selected.txid).unwrap()
+                                        .notes.iter_mut()
+                                        .find(|nd| &nd.nullifier[..] == &selected.nullifier[..])
+                                        .unwrap();
+                spent_note.unconfirmed_spent = Some(tx.txid());
+            }
+
+            // Mark this utxo as unconfirmed spent
+            for utxo in tinputs {
+                let mut spent_utxo = txs.get_mut(&utxo.txid).unwrap().utxos.iter_mut()
+                                        .find(|u| utxo.txid == u.txid && utxo.output_index == u.output_index)
+                                        .unwrap();
+                spent_utxo.unconfirmed_spent = Some(tx.txid());
+            }
         }
 
         // Return the encoded transaction, so the caller can send it.

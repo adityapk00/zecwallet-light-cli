@@ -274,6 +274,7 @@ impl LightClient {
         
         // Collect UTXOs
         let utxos = self.wallet.get_utxos().iter()
+            .filter(|utxo| utxo.unconfirmed_spent.is_none())    // Filter out unconfirmed from the list of utxos
             .map(|utxo| {
                 object!{
                     "created_in_block"   => utxo.height,
@@ -289,25 +290,20 @@ impl LightClient {
             .collect::<Vec<JsonValue>>();
 
         // Collect pending UTXOs
-        let pending_utxos = self.wallet.txs.read().unwrap().iter()
-            .flat_map( |(txid, wtx)| {
-                wtx.utxos.iter().filter_map(move |utxo| 
-                    if utxo.unconfirmed_spent.is_some() {
-                        Some(object!{
-                                "created_in_block"   => wtx.block,
-                                "created_in_txid"    => format!("{}", txid),
-                                "value"              => utxo.value,
-                                "scriptkey"          => hex::encode(utxo.script.clone()),
-                                "is_change"          => false,  // TODO: Identify notes as change
-                                "address"            => utxo.address.clone(),
-                                "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
-                        })
-                    } else {
-                        None
-                    }
-                )
-            })
+        let pending_utxos = self.wallet.get_utxos().iter()
+            .filter(|utxo| utxo.unconfirmed_spent.is_some())    // Filter to include only unconfirmed utxos
+            .map(|utxo| 
+                object!{
+                    "created_in_block"   => utxo.height,
+                    "created_in_txid"    => format!("{}", utxo.txid),
+                    "value"              => utxo.value,
+                    "scriptkey"          => hex::encode(utxo.script.clone()),
+                    "is_change"          => false,  // TODO: Identify notes as change
+                    "address"            => utxo.address.clone(),
+                    "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
+                    "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                }
+            )
             .collect::<Vec<JsonValue>>();;
 
         let mut res = object!{
@@ -430,13 +426,13 @@ impl LightClient {
         self.set_wallet_initial_state();
         
         // Then, do a sync, which will force a full rescan from the initial state
-        let response = self.do_sync();
+        let response = self.do_sync(true);
         info!("Rescan finished");
 
         response
     }
 
-    pub fn do_sync(&self) -> String {
+    pub fn do_sync(&self, print_updates: bool) -> String {
         // Sync is 3 parts
         // 1. Get the latest block
         // 2. Get all the blocks that we don't have
@@ -471,7 +467,7 @@ impl LightClient {
             let local_bytes_downloaded = bytes_downloaded.clone();
 
             // Show updates only if we're syncing a lot of blocks
-            if end_height - last_scanned_height > 100 {
+            if print_updates && end_height - last_scanned_height > 100 {
                 print!("Syncing {}/{}\r", last_scanned_height, last_block);
                 io::stdout().flush().ok().expect("Could not flush stdout");
             }
@@ -505,8 +501,10 @@ impl LightClient {
             } else if end_height > last_block {
                 end_height = last_block;
             }        
-        }    
-        println!(); // Print a new line, to finalize the syncing updates
+        }
+        if print_updates{
+            println!(""); // New line to finish up the updates
+        }
         
         let mut responses = vec![];
 
