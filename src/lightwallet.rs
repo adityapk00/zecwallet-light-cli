@@ -316,6 +316,9 @@ impl SaplingNoteData {
 
         writer.write_u8(if self.is_change {1} else {0})?;
 
+        // Note that we don't write the unconfirmed_spent field, because if the wallet is restarted, 
+        // we don't want to be beholden to any expired txns
+
         Ok(())
     }
 
@@ -379,11 +382,7 @@ impl Utxo {
             Ok(TxId{0: txbytes})
         })?;
 
-        let unconfirmed_spent = Optional::read(&mut reader, |r| {
-            let mut txbytes = [0; 32];
-            r.read_exact(&mut txbytes)?;
-            Ok(TxId{0: txbytes})
-        })?;
+        // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
 
         Ok(Utxo {
             address,
@@ -393,7 +392,7 @@ impl Utxo {
             value,
             height,
             spent,
-            unconfirmed_spent,
+            unconfirmed_spent: None::<TxId>,
         })
     }
 
@@ -412,7 +411,8 @@ impl Utxo {
         Vector::write(&mut writer, &self.script, |w, b| w.write_all(&[*b]))?;
 
         Optional::write(&mut writer, &self.spent, |w, txid| w.write_all(&txid.0))?;
-        Optional::write(&mut writer, &self.unconfirmed_spent, |w, txid| w.write_all(&txid.0))?;
+
+        // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
 
         Ok(())
     }
