@@ -4,12 +4,10 @@ use std::path::Path;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Error, ErrorKind};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-use std::error::Error;
 
 use json::{object, JsonValue};
 
@@ -34,6 +32,7 @@ use crate::grpc_client::client::CompactTxStreamer;
 type Client = crate::grpc_client::client::CompactTxStreamer<tower_request_modifier::RequestModifier<tower_hyper::client::Connection<tower_grpc::BoxBody>, tower_grpc::BoxBody>>;
 
 pub const DEFAULT_SERVER: &str = "http://127.0.0.1:9067";
+pub const WALLET_NAME: &str = "zeclite.wallet.dat";
 
 pub struct LightClient {
     pub wallet          : Arc<LightWallet>,
@@ -53,9 +52,34 @@ impl LightClient {
                 "01b733e839b5f844287a6a491409a991ec70277f39a50c99163ed378d23a829a0700100001916db36dfb9a0cf26115ed050b264546c0fa23459433c31fd72f63d188202f2400011f5f4e3bd18da479f48d674dbab64454f6995b113fa21c9d8853a9e764fb3e1f01df9d2c233ca60360e3c2bb73caf5839a1be634c8b99aea22d02abda2e747d9100001970d41722c078288101acd0a75612acfb4c434f2a55aab09fb4e812accc2ba7301485150f0deac7774dcd0fe32043bde9ba2b6bbfff787ad074339af68e88ee70101601324f1421e00a43ef57f197faf385ee4cac65aab58048016ecbd94e022973701e1b17f4bd9d1b6ca1107f619ac6d27b53dd3350d5be09b08935923cbed97906c0000000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
     }
 
+    pub fn get_params_path(name: &str) -> Box<Path> {
+            let mut params_location;
+
+            if cfg!(target_os="macos") || cfg!(target_os="windows") {
+                params_location  = dirs::data_dir()
+                    .expect("Couldn't determine app data directory!");
+                params_location.push("ZcashParams");
+            } else {
+                params_location  = dirs::home_dir()
+                    .expect("Couldn't determine home directory!");
+                params_location.push(".zcash-params");
+            };
+
+        params_location.push(name);
+        params_location.into_boxed_path()
+    }
+
     pub fn get_wallet_path() -> Box<Path> {
-        let mut wallet_location = dirs::home_dir().expect("Couldn't determine home directory!");
-        wallet_location.push(".zcash/testnet3/zeclite.wallet.dat");
+        let mut wallet_location; 
+        if cfg!(target_os="macos") || cfg!(target_os="windows") {
+            wallet_location = dirs::data_dir().expect("Couldn't determine app data directory!");
+            wallet_location.push("Zcash/testnet3");
+        } else {
+            wallet_location = dirs::home_dir().expect("Couldn't determine home directory!");
+            wallet_location.push(".zcash/testnet3");
+        };
+
+        wallet_location.push(WALLET_NAME);
         
         wallet_location.into_boxed_path()
     }
@@ -69,7 +93,7 @@ impl LightClient {
         let mut lc = if LightClient::get_wallet_path().exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                return Err(Error::new(ErrorKind::AlreadyExists,
                     "Cannot create a new wallet from seed, because a wallet already exists"));
             }
 
@@ -96,9 +120,18 @@ impl LightClient {
         };
         
         // Read Sapling Params
-        let mut f = File::open("/home/adityapk/.zcash-params/sapling-output.params")?;
+        let mut f = match File::open(LightClient::get_params_path("sapling-output.params")) {
+            Ok(file) => file,
+            Err(_) => return Err(Error::new(ErrorKind::NotFound, 
+                            format!("Couldn't read {}", LightClient::get_params_path("sapling-output.params").display())))
+        };
         f.read_to_end(&mut lc.sapling_output)?;
-        let mut f = File::open("/home/adityapk/.zcash-params/sapling-spend.params")?;
+        
+        let mut f = match File::open(LightClient::get_params_path("sapling-spend.params")) {
+            Ok(file) => file,
+            Err(_) => return Err(Error::new(ErrorKind::NotFound, 
+                            format!("Couldn't read {}", LightClient::get_params_path("sapling-spend.params").display())))
+        };
         f.read_to_end(&mut lc.sapling_spend)?;
 
         println!("Lightclient connecting to {}", server);
@@ -751,7 +784,7 @@ impl LightClient {
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
     
-    fn make_grpc_client(&self, uri: http::Uri) -> Result<Box<dyn Future<Item=Client, Error=tower_grpc::Status> + Send>, Box<dyn Error>> {
+    fn make_grpc_client(&self, uri: http::Uri) -> Result<Box<dyn Future<Item=Client, Error=tower_grpc::Status> + Send>, Box<dyn std::error::Error>> {
         let dst = Destination::try_from_uri(uri.clone())?;
         let connector = util::Connector::new(HttpConnector::new(4));
         let settings = client::Builder::new().http2_only(true).clone();
