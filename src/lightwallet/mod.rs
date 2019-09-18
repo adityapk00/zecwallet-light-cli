@@ -29,7 +29,7 @@ use zcash_primitives::{
         TxId, Transaction, 
     },
      legacy::{Script, TransparentAddress},
-    note_encryption::{Memo, try_sapling_note_decryption},
+    note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
     primitives::{PaymentAddress},
@@ -561,6 +561,7 @@ impl LightWallet {
             let cmu = output.cmu;
             let ct  = output.enc_ciphertext;
 
+            // Search all of our keys
             for (_account, ivk) in ivks.iter().enumerate() {
                 let epk_prime = output.ephemeral_key.as_prime_order(&JUBJUB).unwrap();
 
@@ -579,6 +580,29 @@ impl LightWallet {
                         .find(|nd| nd.note == note).unwrap()
                         .memo = Some(memo);
                 }
+            }
+
+            // Also scan the output to see if it can be decoded with our OutgoingViewKey
+            // If it can, then we sent this transaction, so we should be able to get
+            // the memo and value for our records
+            let ovks: Vec<_> = self.extfvks.iter().map(|extfvk| extfvk.fvk.ovk).collect();
+            for (_account, ovk) in ovks.iter().enumerate() {
+                match try_sapling_output_recovery(ovk,
+                    &output.cv, 
+                    &output.cmu, 
+                    &output.ephemeral_key.as_prime_order(&JUBJUB).unwrap(), 
+                    &output.enc_ciphertext,
+                    &output.out_ciphertext) {
+                        Some((note, address, memo)) => {
+                            // This could be a chane or an outgoing transaction
+                            println!("Recovered outgoing for {} to {} :{:?}", 
+                                note.value,
+                                encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &address),
+                                memo.to_utf8())
+                        },
+                        None => {}
+                };
+                
             }
         }
     }
