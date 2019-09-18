@@ -26,7 +26,7 @@ use tower_hyper::{client, util};
 use tower_util::MakeService;
 use futures::stream::Stream;
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, TransparentAddress, 
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
                          TransparentAddressBlockFilter, TxFilter, Empty};
 use crate::grpc_client::client::CompactTxStreamer;
 
@@ -160,7 +160,24 @@ impl LightClient {
         self.wallet.last_scanned_height() as u64
     }
 
-    pub fn do_address(&self) -> json::JsonValue {       
+    pub fn do_address(&self) -> json::JsonValue {
+        // Collect z addresses
+        let z_addresses = self.wallet.address.iter().map( |ad| {
+            encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &ad)
+        }).collect::<Vec<String>>();
+
+        // Collect t addresses
+        let t_addresses = self.wallet.tkeys.iter().map( |sk| {
+            LightWallet::address_from_sk(&sk)
+        }).collect::<Vec<String>>();
+
+        object!{
+            "z_addresses" => z_addresses,
+            "t_addresses" => t_addresses,
+        }
+    }
+
+    pub fn do_balance(&self) -> json::JsonValue {       
         // Collect z addresses
         let z_addresses = self.wallet.address.iter().map( |ad| {
             let address = encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &ad);

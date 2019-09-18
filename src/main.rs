@@ -41,7 +41,7 @@ pub fn main() {
 
     // Get command line arguments
     let matches = App::new("ZecLite CLI")
-                    .version("1.0") 
+                    .version("0.1.0") 
                     .arg(Arg::with_name("seed")
                         .short("s")
                         .long("seed")

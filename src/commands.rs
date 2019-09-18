@@ -141,9 +141,32 @@ impl Command for BalanceCommand {
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {        
         lightclient.do_sync(true);
         
+        format!("{}", lightclient.do_balance().pretty(2))
+    }
+}
+
+
+struct AddressCommand {}
+impl Command for AddressCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("List current addresses in the wallet");
+        h.push("Usage:");
+        h.push("address");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "List all addresses in the wallet".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         format!("{}", lightclient.do_address().pretty(2))
     }
 }
+
 
 struct SendCommand {}
 impl Command for SendCommand {
@@ -327,6 +350,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("rescan".to_string(),    Box::new(RescanCommand{}));
     map.insert("help".to_string(),      Box::new(HelpCommand{}));
     map.insert("balance".to_string(),   Box::new(BalanceCommand{}));
+    map.insert("address".to_string(),   Box::new(AddressCommand{}));
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
     map.insert("send".to_string(),      Box::new(SendCommand{}));
     map.insert("save".to_string(),      Box::new(SaveCommand{}));
