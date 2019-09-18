@@ -31,3 +31,4 @@ CLI arguments you can pass to `zeclite-cli`
 * The wallet is currently testnet only
 * If you want to run your own server, please see [zeclite lightwalletd](https://github.com/adityapk00/lightwalletd), and then run `./zeclite-cli --server 127.0.0.1:9067`
 * Support for reorgs is iffy. It your wallet gets into an inconsistent state, type `rescan` to reset the wallet. 
+* The log file is in `~/.zcash/testnet3/zeclite.debug.log`

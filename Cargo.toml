@@ -60,4 +60,4 @@ features = ["ff_derive"]
 tower-grpc-build = { git = "https://github.com/tower-rs/tower-grpc",  features = ["tower-hyper"]  }
 
 [profile.release]
-#debug = true
+debug = true
