@@ -272,7 +272,7 @@ impl LightClient {
                             "created_in_txid"    => format!("{}", txid),
                             "value"              => nd.note.value,
                             "is_change"          => nd.is_change,
-                            "address"            => LightWallet::address_from_extfvk(&nd.extfvk, nd.diversifier),
+                            "address"            => nd.note_address(),
                             "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
                             "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
                         })
