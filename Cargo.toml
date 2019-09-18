@@ -30,6 +30,8 @@ clap = "2.33"
 secp256k1 = "=0.15.0"
 sha2 = "0.8.0"
 ripemd160 = "0.8.0"
+ring = "0.14.0"
+lazy_static = "1.2.0"
 
 [dependencies.bellman]
 git = "https://github.com/adityapk00/librustzcash.git"

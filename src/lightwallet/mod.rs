@@ -36,6 +36,7 @@ use zcash_primitives::{
 };
 
 pub mod data;
+pub mod extended_key;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote};
 
