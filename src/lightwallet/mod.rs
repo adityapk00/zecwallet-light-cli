@@ -1,10 +1,10 @@
 use std::time::SystemTime;
 use std::io::{self, Read, Write};
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
-use log::{info, error};
+use log::{info, warn, error};
 
 use protobuf::parse_from_bytes;
 
@@ -615,12 +615,59 @@ impl LightWallet {
         }
     }
 
-    pub fn scan_block(&self, block: &[u8]) -> bool {
+    // Invalidate all blocks including and after "at_height".
+    // Returns the number of blocks invalidated
+    pub fn invalidate_block(&self, at_height: i32) -> u64 {
+        let mut num_invalidated = 0;
+
+        // First remove the blocks
+        { 
+            let mut blks = self.blocks.write().unwrap();
+            
+            while blks.last().unwrap().height >= at_height {
+                blks.pop();
+                num_invalidated += 1;
+            }
+        }
+
+        // Next, remove transactions
+        {
+            let mut txs = self.txs.write().unwrap();
+            let txids_to_remove = txs.values()
+                .filter_map(|wtx| if wtx.block >= at_height {Some(wtx.txid.clone())} else {None})
+                .collect::<HashSet<TxId>>();
+
+            for txid in &txids_to_remove {
+                txs.remove(&txid);
+            }
+
+            // We also need to update any sapling note data and utxos in existing transactions that
+            // were spent in any of the txids that were removed
+            txs.values_mut()
+                .for_each(|wtx| {
+                    wtx.notes.iter_mut()
+                        .for_each(|nd| {
+                            if nd.spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap()) {
+                                nd.spent = None;
+                            }
+
+                            if nd.unconfirmed_spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap()) {
+                                nd.unconfirmed_spent = None;
+                            }
+                        })
+                })
+        }
+        
+        num_invalidated
+    }
+
+    // Scan a block. Will return an error with the block height that failed to scan
+    pub fn scan_block(&self, block: &[u8]) -> Result<(), i32> {
         let block: CompactBlock = match parse_from_bytes(block) {
             Ok(block) => block,
             Err(e) => {
                 eprintln!("Could not parse CompactBlock from bytes: {}", e);
-                return false;
+                return Err(-1);
             }
         };
 
@@ -630,18 +677,26 @@ impl LightWallet {
             // If the last scanned block is rescanned, check it still matches.
             if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
                 if block.hash() != hash {
-                    eprintln!("Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
-                    return false;
+                    warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
+                    return Err(height);
                 }
             }
-            return true;
+            return Ok(())
         } else if height != (self.last_scanned_height() + 1) {
-            eprintln!(
+            error!(
                 "Block is not height-sequential (expected {}, found {})",
                 self.last_scanned_height() + 1,
                 height
             );
-            return false;
+            return Err(self.last_scanned_height());
+        }
+
+        // Check to see that the previous block hash matches
+        if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
+            if block.prev_hash() != hash {
+                warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), hash);
+                return Err(height-1);
+            }
         }
 
         // Get the most recent scanned data.
@@ -770,7 +825,7 @@ impl LightWallet {
             }
         }
 
-        true
+        Ok(())
     }
 
     pub fn send_to_address(
