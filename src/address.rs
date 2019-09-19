@@ -6,7 +6,7 @@ use zcash_client_backend::encoding::{decode_payment_address, decode_transparent_
 use zcash_primitives::legacy::TransparentAddress;
 
 use zcash_client_backend::constants::testnet::{
-    B58_PUBKEY_ADDRESS_PREFIX, B58_SCRIPT_ADDRESS_PREFIX, HRP_SAPLING_PAYMENT_ADDRESS,
+    B58_PUBKEY_ADDRESS_PREFIX, B58_SCRIPT_ADDRESS_PREFIX,
 };
 
 /// An address that funds can be sent to.
@@ -28,9 +28,9 @@ impl From<TransparentAddress> for RecipientAddress {
 }
 
 impl RecipientAddress {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_str(s: &str, hrp_sapling_address: &str) -> Option<Self> {
         // Try to match a sapling z address 
-        if let Some(pa) = match decode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, s) {
+        if let Some(pa) = match decode_payment_address(hrp_sapling_address, s) {
                                 Ok(ret) => ret,
                                 Err(_)  => None
                             } 

@@ -4,11 +4,6 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
 use ff::{PrimeField, PrimeFieldRepr};
 
-use zcash_client_backend::{
-    constants::testnet::{HRP_SAPLING_PAYMENT_ADDRESS,},
-    encoding::encode_payment_address,
-};
-
 use zcash_primitives::{
     block::BlockHash,
     merkle_tree::{CommitmentTree, IncrementalWitness},
@@ -239,12 +234,6 @@ impl SaplingNoteData {
         Ok(())
     }
 
-    pub fn note_address(&self) -> Option<String> {
-        match self.extfvk.fvk.vk.into_payment_address(self.diversifier, &JUBJUB) {
-            Some(pa) => Some(encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &pa)),
-            None     => None
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

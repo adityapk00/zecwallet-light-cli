@@ -16,7 +16,7 @@ use json::{object, JsonValue};
 use zcash_primitives::transaction::{TxId, Transaction};
 use zcash_primitives::note_encryption::Memo;
 use zcash_client_backend::{
-    constants::testnet::HRP_SAPLING_PAYMENT_ADDRESS, encoding::encode_payment_address,
+    constants::testnet, constants::mainnet, constants::regtest, encoding::encode_payment_address,
 };
 
 use futures::Future;
@@ -97,10 +97,29 @@ impl LightClientConfig {
         log_path.into_boxed_path()
     }
 
+    pub fn get_initial_state(&self) -> Option<(u64, &str, &str)> {
+        match &self.chain_name[..] {
+            "test" => Some((600000,
+                        "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
+                        "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39"
+                      )),
+            _ => None
+        }
+    }
+
     pub fn get_server_or_default(server: Option<String>) -> String {
         match server {
             Some(s) => if s.starts_with("http://") {s} else { "http://".to_string() + &s}
             None    => DEFAULT_SERVER.to_string()
+        }
+    }
+
+    pub fn hrp_sapling_address(&self) -> &str {
+        match &self.chain_name[..] {
+            "main"    => mainnet::HRP_SAPLING_PAYMENT_ADDRESS,
+            "test"    => testnet::HRP_SAPLING_PAYMENT_ADDRESS,
+            "regtest" => regtest::HRP_SAPLING_PAYMENT_ADDRESS,
+            c         => panic!("Unknown chain {}", c)
         }
     }
 
@@ -119,9 +138,14 @@ pub struct LightClient {
 impl LightClient {
     
     pub fn set_wallet_initial_state(&self) {
-        self.wallet.set_initial_block(600000,
-                "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
-                "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
+        use std::convert::TryInto;
+
+        let state = self.config.get_initial_state();
+
+        match state {
+            Some((height, hash, tree)) => self.wallet.set_initial_block(height.try_into().unwrap(), hash, tree),
+            _ => true,
+        };
     }
 
     pub fn new(seed_phrase: Option<String>, config: &LightClientConfig) -> io::Result<Self> {
@@ -134,7 +158,7 @@ impl LightClient {
 
             let mut file_buffer = BufReader::new(File::open(config.get_wallet_path())?);
             
-            let wallet = LightWallet::read(&mut file_buffer)?;
+            let wallet = LightWallet::read(&mut file_buffer, config)?;
              LightClient {
                 wallet          : Arc::new(wallet), 
                 config          : config.clone(),
@@ -143,7 +167,7 @@ impl LightClient {
             }
         } else {
             let l = LightClient {
-                wallet          : Arc::new(LightWallet::new(seed_phrase)?), 
+                wallet          : Arc::new(LightWallet::new(seed_phrase, config)?), 
                 config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
@@ -183,7 +207,7 @@ impl LightClient {
     pub fn do_address(&self) -> json::JsonValue {
         // Collect z addresses
         let z_addresses = self.wallet.address.iter().map( |ad| {
-            encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &ad)
+            encode_payment_address(self.config.hrp_sapling_address(), &ad)
         }).collect::<Vec<String>>();
 
         // Collect t addresses
@@ -200,7 +224,7 @@ impl LightClient {
     pub fn do_balance(&self) -> json::JsonValue {       
         // Collect z addresses
         let z_addresses = self.wallet.address.iter().map( |ad| {
-            let address = encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &ad);
+            let address = encode_payment_address(self.config.hrp_sapling_address(), &ad);
             object!{
                 "address" => address.clone(),
                 "zbalance" => self.wallet.zbalance(Some(address.clone())),
@@ -296,7 +320,7 @@ impl LightClient {
                             "created_in_txid"    => format!("{}", txid),
                             "value"              => nd.note.value,
                             "is_change"          => nd.is_change,
-                            "address"            => nd.note_address(),
+                            "address"            => self.wallet.note_address(nd),
                             "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
                             "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
                         })
@@ -418,7 +442,7 @@ impl LightClient {
                             "block_height" => v.block,
                             "txid"         => format!("{}", v.txid),
                             "amount"       => nd.note.value as i64,
-                            "address"      => nd.note_address().unwrap(),
+                            "address"      => self.wallet.note_address(nd),
                             "memo"         => match &nd.memo {
                                                 Some(memo) => {
                                                     match memo.to_utf8() {

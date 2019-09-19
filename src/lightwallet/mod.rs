@@ -14,7 +14,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
 
 use zcash_client_backend::{
-    constants::testnet::{HRP_SAPLING_PAYMENT_ADDRESS,B58_PUBKEY_ADDRESS_PREFIX,}, 
+    constants::testnet::{B58_PUBKEY_ADDRESS_PREFIX,}, 
     encoding::encode_payment_address,
     proto::compact_formats::CompactBlock, welding_rig::scan_block,
 };
@@ -35,21 +35,21 @@ use zcash_primitives::{
     primitives::{PaymentAddress},
 };
 
-pub mod data;
-pub mod extended_key;
-
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote};
 
 use crate::address;
 use crate::prover;
-
+use crate::LightClientConfig;
 
 use sha2::{Sha256, Digest};
 
 
-const ANCHOR_OFFSET: u32 = 1;
 
-const SAPLING_ACTIVATION_HEIGHT: i32 = 280_000;
+pub mod data;
+pub mod extended_key;
+
+
+const ANCHOR_OFFSET: u32 = 1;
 
 fn now() -> f64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
@@ -122,6 +122,9 @@ pub struct LightWallet {
 
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
+
+    // Non-serialized fields
+    config: LightClientConfig,
 }
 
 impl LightWallet {
@@ -145,7 +148,7 @@ impl LightWallet {
         (extsk, extfvk, address)
     }
 
-    pub fn new(seed_phrase: Option<String>) -> io::Result<Self> {
+    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig) -> io::Result<Self> {
         use rand::{FromEntropy, ChaChaRng, Rng};
 
         let mut seed_bytes = [0u8; 32];
@@ -176,12 +179,13 @@ impl LightWallet {
             tkeys:   vec![tpk],
             blocks:  Arc::new(RwLock::new(vec![])),
             txs:     Arc::new(RwLock::new(HashMap::new())),
+            config:  config.clone(),
         })
     }
 
-    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+    pub fn read<R: Read>(mut reader: R, config: &LightClientConfig) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        assert_eq!(version, LightWallet::serialized_version());
+        assert!(version <= LightWallet::serialized_version());
         info!("Reading wallet version {}", version);
 
         // Seed
@@ -220,7 +224,8 @@ impl LightWallet {
             address: addresses,
             tkeys:   vec![tpk],
             blocks:  Arc::new(RwLock::new(blocks)),
-            txs:     Arc::new(RwLock::new(txs))
+            txs:     Arc::new(RwLock::new(txs)),
+            config:  config.clone(),
         })
     }
 
@@ -251,7 +256,12 @@ impl LightWallet {
         Ok(())
     }
 
-    
+    pub fn note_address(&self, note: &SaplingNoteData) -> Option<String> {
+        match note.extfvk.fvk.vk.into_payment_address(note.diversifier, &JUBJUB) {
+            Some(pa) => Some(encode_payment_address(self.config.hrp_sapling_address(), &pa)),
+            None     => None
+        }
+    }
 
     // Clears all the downloaded blocks and resets the state back to the inital block.
     // After this, the wallet's initial state will need to be set
@@ -315,12 +325,10 @@ impl LightWallet {
     }
 
     pub fn last_scanned_height(&self) -> i32 {
-        self.blocks
-            .read()
-            .unwrap()
+        self.blocks.read().unwrap()
             .last()
             .map(|block| block.height)
-            .unwrap_or(SAPLING_ACTIVATION_HEIGHT - 1)
+            .unwrap_or(self.config.sapling_activation_height as i32 - 1)
     }
 
     /// Determines the target height for a transaction, and the offset from which to
@@ -382,7 +390,7 @@ impl LightWallet {
                     .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
                         match addr.clone() {
                             Some(a) => a == encode_payment_address(
-                                                HRP_SAPLING_PAYMENT_ADDRESS,
+                                                self.config.hrp_sapling_address(),
                                                 &nd.extfvk.fvk.vk
                                                     .into_payment_address(nd.diversifier, &JUBJUB).unwrap()
                                             ),
@@ -436,7 +444,7 @@ impl LightWallet {
                         .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
                             match addr.clone() {
                                 Some(a) => a == encode_payment_address(
-                                                    HRP_SAPLING_PAYMENT_ADDRESS,
+                                                    self.config.hrp_sapling_address(),
                                                     &nd.extfvk.fvk.vk
                                                         .into_payment_address(nd.diversifier, &JUBJUB).unwrap()
                                                 ),
@@ -598,7 +606,7 @@ impl LightWallet {
                             // This could be a chane or an outgoing transaction
                             println!("Recovered outgoing for {} to {} :{:?}", 
                                 note.value,
-                                encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS, &address),
+                                encode_payment_address(self.config.hrp_sapling_address(), &address),
                                 memo.to_utf8())
                         },
                         None => {}
@@ -787,7 +795,7 @@ impl LightWallet {
         let extfvk = &self.extfvks[0];
         let ovk = extfvk.fvk.ovk;
 
-        let to = match address::RecipientAddress::from_str(to) {
+        let to = match address::RecipientAddress::from_str(to, self.config.hrp_sapling_address()) {
             Some(to) => to,
             None => {
                 eprintln!("Invalid recipient address");
