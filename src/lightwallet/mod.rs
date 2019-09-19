@@ -771,8 +771,7 @@ impl LightWallet {
 
             info!("Txid {} belongs to wallet", tx.txid);
 
-            for spend in &tx.shielded_spends {
-                // TODO: Add up the spent value here and add it to the WalletTx as a Spent
+            for spend in &tx.shielded_spends {                
                 let txid = nfs
                     .iter()
                     .find(|(nf, _, _)| &nf[..] == &spend.nf[..])
@@ -801,16 +800,19 @@ impl LightWallet {
             }
             let tx_entry = txs.get_mut(&tx.txid).unwrap();
             tx_entry.total_shielded_value_spent = total_shielded_value_spent;
+
             // Save notes.
             for output in tx
                 .shielded_outputs
                 .into_iter()
             {
                 info!("Received sapling output");
-                tx_entry.notes.push(SaplingNoteData::new(
-                    &self.extfvks[output.account],
-                    output
-                ));
+
+                let new_note = SaplingNoteData::new(&self.extfvks[output.account], output);
+                match tx_entry.notes.iter().find(|nd| nd.nullifier == new_note.nullifier) {
+                    None => tx_entry.notes.push(new_note),
+                    Some(_) => warn!("Tried to insert duplicate note for Tx {}", tx.txid)
+                };                
             }
         }
 
