@@ -5,10 +5,6 @@ use zcash_primitives::primitives::PaymentAddress;
 use zcash_client_backend::encoding::{decode_payment_address, decode_transparent_address};
 use zcash_primitives::legacy::TransparentAddress;
 
-use zcash_client_backend::constants::testnet::{
-    B58_PUBKEY_ADDRESS_PREFIX, B58_SCRIPT_ADDRESS_PREFIX,
-};
-
 /// An address that funds can be sent to.
 pub enum RecipientAddress {
     Shielded(PaymentAddress<Bls12>),
@@ -28,7 +24,7 @@ impl From<TransparentAddress> for RecipientAddress {
 }
 
 impl RecipientAddress {
-    pub fn from_str(s: &str, hrp_sapling_address: &str) -> Option<Self> {
+    pub fn from_str(s: &str, hrp_sapling_address: &str, b58_pubkey_address: [u8; 2], b58_script_address: [u8; 2]) -> Option<Self> {
         // Try to match a sapling z address 
         if let Some(pa) = match decode_payment_address(hrp_sapling_address, s) {
                                 Ok(ret) => ret,
@@ -37,7 +33,7 @@ impl RecipientAddress {
         {
             Some(RecipientAddress::Shielded(pa))    // Matched a shielded address
         } else if let Some(addr) = match decode_transparent_address(
-                                            &B58_PUBKEY_ADDRESS_PREFIX, &B58_SCRIPT_ADDRESS_PREFIX, s) {
+                                            &b58_pubkey_address, &b58_script_address, s) {
                                         Ok(ret) => ret,
                                         Err(_)  => None
                                     } 

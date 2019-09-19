@@ -14,7 +14,6 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
 
 use zcash_client_backend::{
-    constants::testnet::{B58_PUBKEY_ADDRESS_PREFIX,}, 
     encoding::encode_payment_address,
     proto::compact_formats::CompactBlock, welding_rig::scan_block,
 };
@@ -355,7 +354,7 @@ impl LightWallet {
         }
     }
 
-    pub fn address_from_sk(sk: &secp256k1::SecretKey) -> String {
+    pub fn address_from_sk(&self, sk: &secp256k1::SecretKey) -> String {
         let secp = secp256k1::Secp256k1::new();
         let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
 
@@ -364,13 +363,13 @@ impl LightWallet {
         hash160.input(Sha256::digest(&pk.serialize()[..].to_vec()));
             
         // TODO: The taddr version prefix needs to be different for testnet and mainnet
-        hash160.result().to_base58check(&B58_PUBKEY_ADDRESS_PREFIX, &[])
+        hash160.result().to_base58check(&self.config.base58_pubkey_address(), &[])
     }
     
-    pub fn address_from_pubkeyhash(ta: Option<TransparentAddress>) -> Option<String> {
+    pub fn address_from_pubkeyhash(&self, ta: Option<TransparentAddress>) -> Option<String> {
         match ta {
             Some(TransparentAddress::PublicKey(hash)) => {
-                Some(hash.to_base58check(&B58_PUBKEY_ADDRESS_PREFIX, &[]))
+                Some(hash.to_base58check(&self.config.base58_pubkey_address(), &[]))
             },
             _ => None
         }
@@ -478,7 +477,7 @@ impl LightWallet {
                 info!("Already have {}:{}", utxo.txid, utxo.output_index);
             }
             None => {
-                let address = LightWallet::address_from_pubkeyhash(vout.script_pubkey.address());
+                let address = self.address_from_pubkeyhash(vout.script_pubkey.address());
                 if address.is_none() {
                     println!("Couldn't determine address for output!");
                 }
@@ -795,7 +794,10 @@ impl LightWallet {
         let extfvk = &self.extfvks[0];
         let ovk = extfvk.fvk.ovk;
 
-        let to = match address::RecipientAddress::from_str(to, self.config.hrp_sapling_address()) {
+        let to = match address::RecipientAddress::from_str(to, 
+                        self.config.hrp_sapling_address(), 
+                        self.config.base58_pubkey_address(), 
+                        self.config.base58_script_address()) {
             Some(to) => to,
             None => {
                 eprintln!("Invalid recipient address");

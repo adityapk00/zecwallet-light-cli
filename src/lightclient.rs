@@ -123,6 +123,24 @@ impl LightClientConfig {
         }
     }
 
+    pub fn base58_pubkey_address(&self) -> [u8; 2] {
+        match &self.chain_name[..] {
+            "main"    => mainnet::B58_PUBKEY_ADDRESS_PREFIX,
+            "test"    => testnet::B58_PUBKEY_ADDRESS_PREFIX,
+            "regtest" => regtest::B58_PUBKEY_ADDRESS_PREFIX,
+            c         => panic!("Unknown chain {}", c)
+        }
+    }
+
+
+    pub fn base58_script_address(&self) -> [u8; 2] {
+        match &self.chain_name[..] {
+            "main"    => mainnet::B58_SCRIPT_ADDRESS_PREFIX,
+            "test"    => testnet::B58_SCRIPT_ADDRESS_PREFIX,
+            "regtest" => regtest::B58_SCRIPT_ADDRESS_PREFIX,
+            c         => panic!("Unknown chain {}", c)
+        }
+    }
 }
 
 pub struct LightClient {
@@ -212,7 +230,7 @@ impl LightClient {
 
         // Collect t addresses
         let t_addresses = self.wallet.tkeys.iter().map( |sk| {
-            LightWallet::address_from_sk(&sk)
+            self.wallet.address_from_sk(&sk)
         }).collect::<Vec<String>>();
 
         object!{
@@ -234,7 +252,7 @@ impl LightClient {
 
         // Collect t addresses
         let t_addresses = self.wallet.tkeys.iter().map( |sk| {
-            let address = LightWallet::address_from_sk(&sk);
+            let address = self.wallet.address_from_sk(&sk);
 
             // Get the balance for this address
             let balance = self.wallet.tbalance(Some(address.clone()));
@@ -547,7 +565,7 @@ impl LightClient {
 
             // We'll also fetch all the txids that our transparent addresses are involved with
             // TODO: Use for all t addresses
-            let address = LightWallet::address_from_sk(&self.wallet.tkeys[0]);
+            let address = self.wallet.address_from_sk(&self.wallet.tkeys[0]);
             let wallet = self.wallet.clone();
             self.fetch_transparent_txids(address, last_scanned_height, end_height, 
                 move |tx_bytes: &[u8], height: u64 | {
