@@ -99,11 +99,15 @@ impl LightClient {
         log_path.into_boxed_path()
     }
 
-    pub fn new(seed_phrase: Option<String>, server: Option<String>) -> io::Result<Self> {
-        let server = match server {
+    pub fn get_server_or_default(server: Option<String>) -> String {
+        match server {
             Some(s) => if s.starts_with("http://") {s} else { "http://".to_string() + &s}
             None    => DEFAULT_SERVER.to_string()
-        };
+        }
+    }
+
+    pub fn new(seed_phrase: Option<String>, server: Option<String>) -> io::Result<Self> {
+        let server = LightClient::get_server_or_default(server);
 
         let mut lc = if LightClient::get_wallet_path().exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
@@ -221,15 +225,18 @@ impl LightClient {
         format!("Saved Wallet")
     }
 
+    pub fn get_server_uri(&self) -> http::Uri {
+        self.server.parse().unwrap()
+    }
 
-    pub fn do_info(&self) -> String {
+
+    pub fn do_info(uri: http::Uri) -> String {
         use std::cell::RefCell;
 
-        let uri: http::Uri = self.server.parse().unwrap();
         let infostr = Arc::new(RefCell::<String>::default());
 
         let infostrinner = infostr.clone();
-        let say_hello = self.make_grpc_client(uri).unwrap()
+        let say_hello = LightClient::make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
                 client.get_lightd_info(Request::new(Empty{}))
             })
@@ -698,7 +705,7 @@ impl LightClient {
             where F : Fn(&[u8]) {
         let uri: http::Uri = self.server.parse().unwrap();
 
-        let say_hello = self.make_grpc_client(uri).unwrap()
+        let say_hello = LightClient::make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
                 let txfilter = TxFilter { block: None, index: 0, hash: txid.0.to_vec() };
                 client.get_transaction(Request::new(txfilter))
@@ -724,7 +731,7 @@ impl LightClient {
         let infostr = Arc::new(RefCell::<String>::default());
         let infostrinner = infostr.clone();
 
-        let say_hello = self.make_grpc_client(uri).unwrap()
+        let say_hello = LightClient::make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
                 client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0}))
             })
@@ -751,7 +758,7 @@ impl LightClient {
         where F : FnMut(BlockId) {
         let uri: http::Uri = self.server.parse().unwrap();
 
-        let say_hello = self.make_grpc_client(uri).unwrap()
+        let say_hello = LightClient::make_grpc_client(uri).unwrap()
             .and_then(|mut client| {
                 client.get_latest_block(Request::new(ChainSpec {}))
             })
@@ -766,7 +773,7 @@ impl LightClient {
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
     }
     
-    fn make_grpc_client(&self, uri: http::Uri) -> Result<Box<dyn Future<Item=Client, Error=tower_grpc::Status> + Send>, Box<dyn std::error::Error>> {
+    fn make_grpc_client(uri: http::Uri) -> Result<Box<dyn Future<Item=Client, Error=tower_grpc::Status> + Send>, Box<dyn std::error::Error>> {
         let dst = Destination::try_from_uri(uri.clone())?;
         let connector = util::Connector::new(HttpConnector::new(4));
         let settings = client::Builder::new().http2_only(true).clone();

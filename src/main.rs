@@ -59,6 +59,10 @@ pub fn main() {
     let server  = matches.value_of("server").map(|s| s.to_string());
     let seed    = matches.value_of("seed").map(|s| s.to_string());
 
+    // Do a getinfo first, before opening the wallet
+    info!("{}", LightClient::do_info(
+            LightClient::get_server_or_default(server.clone()).parse().unwrap()));
+
     println!("Creating Light Wallet");
 
     let lightclient = match LightClient::new(seed, server) {
@@ -66,8 +70,6 @@ pub fn main() {
         Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
     };
 
-    // After getting the lightclient, ask server for info
-    info!("{}", lightclient.do_info());
 
     // At startup, run a sync
     let sync_update = lightclient.do_sync(true);

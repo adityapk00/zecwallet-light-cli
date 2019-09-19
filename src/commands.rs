@@ -117,7 +117,8 @@ impl Command for InfoCommand {
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         lightclient.do_sync(true);
-        lightclient.do_info()
+        
+        LightClient::do_info(lightclient.get_server_uri())
     }
 }
 
