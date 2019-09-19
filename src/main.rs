@@ -7,7 +7,7 @@ mod commands;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lightclient::LightClient;
+use lightclient::{LightClient, LightClientConfig};
 
 use log::{info, LevelFilter};
 use log4rs::append::file::FileAppender;
@@ -24,21 +24,6 @@ pub mod grpc_client {
 }
 
 pub fn main() {
-    // Configure logging first.    
-    let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{l} -{d(%Y-%m-%d %H:%M:%S)}- {m}\n")))
-        .build(LightClient::get_log_path()).unwrap();
-
-    let config = Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .build(Root::builder()
-                   .appender("logfile")
-                   .build(LevelFilter::Info)).unwrap();
-
-    log4rs::init_config(config).unwrap();
-
-    info!("Starting ZecLite CLI");
-
     // Get command line arguments
     let matches = App::new("ZecLite CLI")
                     .version("0.1.0") 
@@ -56,20 +41,42 @@ pub fn main() {
                         .default_value(lightclient::DEFAULT_SERVER))
                     .get_matches();
 
-    let server  = matches.value_of("server").map(|s| s.to_string());
-    let seed    = matches.value_of("seed").map(|s| s.to_string());
+    let maybe_server  = matches.value_of("server").map(|s| s.to_string());
+    let seed          = matches.value_of("seed").map(|s| s.to_string());
+
+    let server = LightClientConfig::get_server_or_default(maybe_server);
 
     // Do a getinfo first, before opening the wallet
-    info!("{}", LightClient::do_info(
-            LightClient::get_server_or_default(server.clone()).parse().unwrap()));
+    let info = LightClient::get_info(server.parse().unwrap());
+    
+    // Create a Light Client Config
+    let config = lightclient::LightClientConfig {
+        server                      : server,
+        chain_name                  : info.chain_name,
+        sapling_activation_height   : info.sapling_activation_height,
+    };
 
-    println!("Creating Light Wallet");
-
-    let lightclient = match LightClient::new(seed, server) {
+    let lightclient = match LightClient::new(seed, &config) {
         Ok(lc) => Arc::new(lc),
         Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
     };
 
+    // Configure logging first.    
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{l} -{d(%Y-%m-%d %H:%M:%S)}- {m}\n")))
+        .build(config.get_log_path()).unwrap();
+    let log_config = Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(Root::builder()
+                   .appender("logfile")
+                   .build(LevelFilter::Info)).unwrap();
+
+    log4rs::init_config(log_config).unwrap();
+
+    // Startup
+    info!(""); // Blank line
+    info!("Starting ZecLite CLI");
+    info!("Light Client config {:?}", config);
 
     // At startup, run a sync
     let sync_update = lightclient.do_sync(true);

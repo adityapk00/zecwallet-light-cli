@@ -27,7 +27,7 @@ use tower_util::MakeService;
 use futures::stream::Stream;
 
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
-                         TransparentAddressBlockFilter, TxFilter, Empty};
+                         TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
 use crate::grpc_client::client::CompactTxStreamer;
 
 // Used below to return the grpc "Client" type to calling methods
@@ -37,25 +37,15 @@ pub const DEFAULT_SERVER: &str = "http://3.15.168.203:9067";
 pub const WALLET_NAME: &str    = "zeclite.wallet.dat";
 pub const LOGFILE_NAME: &str   = "zeclite.debug.log";
 
-pub struct LightClient {
-    pub wallet          : Arc<LightWallet>,
-
-    pub server          : String,   // Connection URL
-
-    // zcash-params
-    pub sapling_output  : Vec<u8>,
-    pub sapling_spend   : Vec<u8>,
+#[derive(Clone, Debug)]
+pub struct LightClientConfig {
+    pub server                      : String,
+    pub chain_name                  : String,
+    pub sapling_activation_height   : u64,
 }
 
-impl LightClient {
-    
-    pub fn set_wallet_initial_state(&self) {
-        self.wallet.set_initial_block(600000,
-                "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
-                "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
-    }
-
-    pub fn get_params_path(name: &str) -> Box<Path> {
+impl LightClientConfig {
+    pub fn get_params_path(&self, name: &str) -> Box<Path> {
         let mut params_location;
 
         if cfg!(target_os="macos") || cfg!(target_os="windows") {
@@ -72,28 +62,36 @@ impl LightClient {
         params_location.into_boxed_path()
     }
 
-    pub fn get_zcash_data_path() -> Box<Path> {
+    pub fn get_zcash_data_path(&self) -> Box<Path> {
+        
         let mut zcash_data_location; 
         if cfg!(target_os="macos") || cfg!(target_os="windows") {
             zcash_data_location = dirs::data_dir().expect("Couldn't determine app data directory!");
-            zcash_data_location.push("Zcash/testnet3");
+            zcash_data_location.push("Zcash");
         } else {
             zcash_data_location = dirs::home_dir().expect("Couldn't determine home directory!");
-            zcash_data_location.push(".zcash/testnet3");
+            zcash_data_location.push(".zcash");
+        };
+
+        match &self.chain_name[..] {
+            "main" => {},
+            "test" => zcash_data_location.push("testnet3"),
+            "regtest" => zcash_data_location.push("regtest"),
+            c         => panic!("Unknown chain {}", c),
         };
 
         zcash_data_location.into_boxed_path()
     }
 
-    pub fn get_wallet_path() -> Box<Path> {
-        let mut wallet_location = LightClient::get_zcash_data_path().into_path_buf();
+    pub fn get_wallet_path(&self) -> Box<Path> {
+        let mut wallet_location = self.get_zcash_data_path().into_path_buf();
         wallet_location.push(WALLET_NAME);
         
         wallet_location.into_boxed_path()
     }
 
-    pub fn get_log_path() -> Box<Path> {
-        let mut log_path = LightClient::get_zcash_data_path().into_path_buf();
+    pub fn get_log_path(&self) -> Box<Path> {
+        let mut log_path = self.get_zcash_data_path().into_path_buf();
         log_path.push(LOGFILE_NAME);
 
         log_path.into_boxed_path()
@@ -106,29 +104,47 @@ impl LightClient {
         }
     }
 
-    pub fn new(seed_phrase: Option<String>, server: Option<String>) -> io::Result<Self> {
-        let server = LightClient::get_server_or_default(server);
+}
 
-        let mut lc = if LightClient::get_wallet_path().exists() {
+pub struct LightClient {
+    pub wallet          : Arc<LightWallet>,
+
+    pub config          : LightClientConfig,
+
+    // zcash-params
+    pub sapling_output  : Vec<u8>,
+    pub sapling_spend   : Vec<u8>,
+}
+
+impl LightClient {
+    
+    pub fn set_wallet_initial_state(&self) {
+        self.wallet.set_initial_block(600000,
+                "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
+                "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
+    }
+
+    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig) -> io::Result<Self> {
+        let mut lc = if config.get_wallet_path().exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
                 return Err(Error::new(ErrorKind::AlreadyExists,
                     "Cannot create a new wallet from seed, because a wallet already exists"));
             }
 
-            let mut file_buffer = BufReader::new(File::open(LightClient::get_wallet_path())?);
+            let mut file_buffer = BufReader::new(File::open(config.get_wallet_path())?);
             
             let wallet = LightWallet::read(&mut file_buffer)?;
              LightClient {
                 wallet          : Arc::new(wallet), 
-                server          : server.clone(),
+                config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
             }
         } else {
             let l = LightClient {
                 wallet          : Arc::new(LightWallet::new(seed_phrase)?), 
-                server          : server.clone(),
+                config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
             };
@@ -140,22 +156,22 @@ impl LightClient {
 
         
         // Read Sapling Params
-        let mut f = match File::open(LightClient::get_params_path("sapling-output.params")) {
+        let mut f = match File::open(config.get_params_path("sapling-output.params")) {
             Ok(file) => file,
             Err(_) => return Err(Error::new(ErrorKind::NotFound, 
-                            format!("Couldn't read {}", LightClient::get_params_path("sapling-output.params").display())))
+                            format!("Couldn't read {}", config.get_params_path("sapling-output.params").display())))
         };
         f.read_to_end(&mut lc.sapling_output)?;
         
-        let mut f = match File::open(LightClient::get_params_path("sapling-spend.params")) {
+        let mut f = match File::open(config.get_params_path("sapling-spend.params")) {
             Ok(file) => file,
             Err(_) => return Err(Error::new(ErrorKind::NotFound, 
-                            format!("Couldn't read {}", LightClient::get_params_path("sapling-spend.params").display())))
+                            format!("Couldn't read {}", config.get_params_path("sapling-spend.params").display())))
         };
         f.read_to_end(&mut lc.sapling_spend)?;
 
-        info!("Created LightClient to {}", &server);
-        println!("Lightclient connecting to {}", server);
+        info!("Created LightClient to {}", &config.server);
+        println!("Lightclient connecting to {}", config.server);
 
         Ok(lc)
     }
@@ -217,7 +233,7 @@ impl LightClient {
     pub fn do_save(&self) -> String {
         let mut file_buffer = BufWriter::with_capacity(
             1_000_000, // 1 MB write buffer
-            File::create(LightClient::get_wallet_path()).unwrap());
+            File::create(self.config.get_wallet_path()).unwrap());
         
         self.wallet.write(&mut file_buffer).unwrap();
         info!("Saved wallet");
@@ -226,24 +242,21 @@ impl LightClient {
     }
 
     pub fn get_server_uri(&self) -> http::Uri {
-        self.server.parse().unwrap()
+        self.config.server.parse().unwrap()
     }
 
-
-    pub fn do_info(uri: http::Uri) -> String {
+    pub fn get_info(uri: http::Uri) -> LightdInfo {
         use std::cell::RefCell;
 
-        let infostr = Arc::new(RefCell::<String>::default());
+        let info = Arc::new(RefCell::<LightdInfo>::default());
 
-        let infostrinner = infostr.clone();
+        let info_inner = info.clone();
         let say_hello = LightClient::make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
                 client.get_lightd_info(Request::new(Empty{}))
             })
             .and_then(move |response| {
-                //let tx = Transaction::read(&response.into_inner().data[..]).unwrap();
-                //println!("{:?}", response.into_inner());
-                infostrinner.replace(format!("{:?}", response.into_inner()));
+                info_inner.replace(response.into_inner());
 
                 Ok(())
             })
@@ -252,9 +265,13 @@ impl LightClient {
             });
 
         tokio::runtime::current_thread::Runtime::new().unwrap().block_on(say_hello).unwrap();
-        let ans = infostr.borrow().clone();
+        let ans = info.borrow().clone();
 
         ans
+    }
+
+    pub fn do_info(uri: http::Uri) -> String {
+        format!("{:?}", LightClient::get_info(uri))
     }
 
     pub fn do_seed_phrase(&self) -> String {
@@ -600,7 +617,7 @@ impl LightClient {
     pub fn fetch_blocks<F : 'static + std::marker::Send>(&self, start_height: u64, end_height: u64, c: F)
         where F : Fn(&[u8]) {
         // Fetch blocks
-        let uri: http::Uri = self.server.parse().unwrap();
+        let uri: http::Uri = self.get_server_uri();
 
         let dst = Destination::try_from_uri(uri.clone()).unwrap();
         let connector = util::Connector::new(HttpConnector::new(4));
@@ -653,7 +670,7 @@ impl LightClient {
     pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(&self, address: String, 
         start_height: u64, end_height: u64,c: F)
             where F : Fn(&[u8], u64) {
-        let uri: http::Uri = self.server.parse().unwrap();
+        let uri: http::Uri =  self.get_server_uri();
 
         let dst = Destination::try_from_uri(uri.clone()).unwrap();
         let connector = util::Connector::new(HttpConnector::new(4));
@@ -703,7 +720,7 @@ impl LightClient {
 
     pub fn fetch_full_tx<F : 'static + std::marker::Send>(&self, txid: TxId, c: F)
             where F : Fn(&[u8]) {
-        let uri: http::Uri = self.server.parse().unwrap();
+        let uri: http::Uri = self.get_server_uri();
 
         let say_hello = LightClient::make_grpc_client(uri).unwrap()
             .and_then(move |mut client| {
@@ -726,7 +743,7 @@ impl LightClient {
     pub fn broadcast_raw_tx(&self, tx_bytes: Box<[u8]>) -> String {
         use std::cell::RefCell;
 
-        let uri: http::Uri = self.server.parse().unwrap();
+        let uri: http::Uri = self.get_server_uri();
 
         let infostr = Arc::new(RefCell::<String>::default());
         let infostrinner = infostr.clone();
@@ -756,7 +773,7 @@ impl LightClient {
 
     pub fn fetch_latest_block<F : 'static + std::marker::Send>(&self, mut c : F) 
         where F : FnMut(BlockId) {
-        let uri: http::Uri = self.server.parse().unwrap();
+        let uri: http::Uri = self.get_server_uri();
 
         let say_hello = LightClient::make_grpc_client(uri).unwrap()
             .and_then(|mut client| {
