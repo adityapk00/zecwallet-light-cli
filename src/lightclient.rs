@@ -624,7 +624,7 @@ impl LightClient {
             );
             
             last_scanned_height = end_height;
-            end_height = last_scanned_height + 1000 - 1;
+            end_height = last_scanned_height + 1000;
 
             if last_scanned_height >= latest_block {
                 break;
