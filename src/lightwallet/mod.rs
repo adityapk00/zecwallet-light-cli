@@ -335,7 +335,7 @@ impl LightWallet {
         }).collect::<Vec<(String, String)>>()
     }
 
-    // Clears all the downloaded blocks and resets the state back to the inital block.
+    // Clears all the downloaded blocks and resets the state back to the initial block.
     // After this, the wallet's initial state will need to be set
     // and the wallet will need to be rescanned
     pub fn clear_blocks(&self) {
@@ -1072,7 +1072,7 @@ impl LightWallet {
         let mut builder = Builder::new(height);
 
         // A note on t addresses
-        // Funds recieved by t-addresses can't be explicitly spent in ZecWallet. 
+        // Funds received by t-addresses can't be explicitly spent in ZecWallet. 
         // ZecWallet will lazily consolidate all t address funds into your shielded addresses. 
         // Specifically, if you send an outgoing transaction that is sent to a shielded address,
         // ZecWallet will add all your t-address funds into that transaction, and send them to your shielded

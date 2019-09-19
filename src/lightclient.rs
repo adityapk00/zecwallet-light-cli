@@ -646,10 +646,10 @@ impl LightClient {
                     })
                 );
 
-                // Get the total transparent recieved
+                // Get the total transparent received
                 let total_transparent_received = v.utxos.iter().map(|u| u.value).sum::<u64>();
                 if total_transparent_received > v.total_transparent_value_spent {
-                    // Create a input transaction for the transparent value as well.
+                    // Create an input transaction for the transparent value as well.
                     txns.push(object!{
                         "block_height" => v.block,
                         "txid"         => format!("{}", v.txid),
@@ -678,7 +678,7 @@ impl LightClient {
         // First, clear the state from the wallet
         self.wallet.clear_blocks();
 
-        // Then set the inital block
+        // Then set the initial block
         self.set_wallet_initial_state();
         
         // Then, do a sync, which will force a full rescan from the initial state
