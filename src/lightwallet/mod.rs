@@ -47,6 +47,7 @@ use sha2::{Sha256, Digest};
 pub mod data;
 pub mod extended_key;
 
+use extended_key::{KeyIndex, ExtendedPrivKey};
 
 const ANCHOR_OFFSET: u32 = 1;
 
@@ -161,9 +162,16 @@ impl LightWallet {
                                         Language::English).unwrap().entropy());
         }
 
-        // TODO: HD-derive the address instead straight from the seed.
         // TODO: This only reads one key for now
-        let tpk = secp256k1::SecretKey::from_slice(&seed_bytes).unwrap();
+        println!("{}", hex::encode(seed_bytes));
+        let ext_t_key = ExtendedPrivKey::with_seed(&seed_bytes).unwrap();
+        let tpk = ext_t_key
+            .derive_private_key(KeyIndex::hardened_from_normalize_index(44).unwrap()).unwrap()
+            .derive_private_key(KeyIndex::hardened_from_normalize_index(1).unwrap()).unwrap() // TODO: Cointype
+            .derive_private_key(KeyIndex::hardened_from_normalize_index(0).unwrap()).unwrap()
+            .derive_private_key(KeyIndex::Normal(0)).unwrap()
+            .derive_private_key(KeyIndex::Normal(0)).unwrap()
+            .private_key;
 
         // Derive only the first address
         // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
