@@ -34,7 +34,7 @@ use zcash_primitives::{
     primitives::{PaymentAddress},
 };
 
-use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote};
+use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 
 use crate::address;
 use crate::prover;
@@ -354,6 +354,18 @@ impl LightWallet {
         }
     }
 
+    pub fn memo_str(memo: &Option<Memo>) -> Option<String> {
+        match memo {
+            Some(memo) => {
+                match memo.to_utf8() {
+                    Some(Ok(memo_str)) => Some(memo_str),
+                    _ => None
+                }
+            }
+            _ => None
+        }
+    }
+
     pub fn address_from_sk(&self, sk: &secp256k1::SecretKey) -> String {
         let secp = secp256k1::Secp256k1::new();
         let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
@@ -593,6 +605,14 @@ impl LightWallet {
             // Also scan the output to see if it can be decoded with our OutgoingViewKey
             // If it can, then we sent this transaction, so we should be able to get
             // the memo and value for our records
+
+            // First, collect all our z addresses, to check for change
+            // Collect z addresses
+            let z_addresses = self.address.iter().map( |ad| {
+                encode_payment_address(self.config.hrp_sapling_address(), &ad)
+            }).collect::<HashSet<String>>();
+
+            // Search all ovks that we have
             let ovks: Vec<_> = self.extfvks.iter().map(|extfvk| extfvk.fvk.ovk).collect();
             for (_account, ovk) in ovks.iter().enumerate() {
                 match try_sapling_output_recovery(ovk,
@@ -601,12 +621,35 @@ impl LightWallet {
                     &output.ephemeral_key.as_prime_order(&JUBJUB).unwrap(), 
                     &output.enc_ciphertext,
                     &output.out_ciphertext) {
-                        Some((note, address, memo)) => {
-                            // This could be a chane or an outgoing transaction
-                            println!("Recovered outgoing for {} to {} :{:?}", 
-                                note.value,
-                                encode_payment_address(self.config.hrp_sapling_address(), &address),
-                                memo.to_utf8())
+                        Some((note, payment_address, memo)) => {
+                            let address = encode_payment_address(self.config.hrp_sapling_address(), 
+                                            &payment_address);
+
+                            // Check if this is a change address
+                            if z_addresses.contains(&address) {
+                                continue;
+                            }
+
+                            {
+                                // Update the WalletTx 
+                                // Do it in a short scope because of the write lock.
+                                info!("A sapling output was sent in {}", tx.txid());
+                                
+                                let mut txs = self.txs.write().unwrap();
+                                if txs.get(&tx.txid()).unwrap().outgoing_metadata.iter()
+                                        .find(|om| om.address == address && om.value == note.value)
+                                        .is_some() {
+                                    warn!("Duplicate outgoing metadata");
+                                    continue;
+                                }
+                                
+                                // Write the outgoing metadata
+                                txs.get_mut(&tx.txid()).unwrap()
+                                    .outgoing_metadata
+                                    .push(OutgoingTxMetadata{
+                                        address, value: note.value, memo,
+                                    });
+                            }
                         },
                         None => {}
                 };

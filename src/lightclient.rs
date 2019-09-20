@@ -441,14 +441,23 @@ impl LightClient {
 
                     // TODO: What happens if change is > than sent ?
 
+                    // Collect outgoing metadata
+                    let outgoing_json = v.outgoing_metadata.iter()
+                        .map(|om| 
+                            object!{
+                                "address" => om.address.clone(),
+                                "value"   => om.value,
+                                "memo"    => LightWallet::memo_str(&Some(om.memo.clone())),
+                        })
+                        .collect::<Vec<JsonValue>>();                    
+
                     txns.push(object! {
                         "block_height" => v.block,
                         "txid"         => format!("{}", v.txid),
                         "amount"       => total_change as i64 
                                             - v.total_shielded_value_spent as i64 
                                             - v.total_transparent_value_spent as i64,
-                        "address"      => None::<String>, // TODO: For send, we don't have an address
-                        "memo"         => None::<String>
+                        "outgoing_metadata" => outgoing_json,
                     });
                 } 
 
@@ -461,15 +470,7 @@ impl LightClient {
                             "txid"         => format!("{}", v.txid),
                             "amount"       => nd.note.value as i64,
                             "address"      => self.wallet.note_address(nd),
-                            "memo"         => match &nd.memo {
-                                                Some(memo) => {
-                                                    match memo.to_utf8() {
-                                                        Some(Ok(memo_str)) => Some(memo_str),
-                                                        _ => None
-                                                    }
-                                                }
-                                                _ => None
-                                            }
+                            "memo"         => LightWallet::memo_str(&nd.memo),
                     })
                 );
 

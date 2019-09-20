@@ -324,6 +324,42 @@ impl Utxo {
     }
 }
 
+pub struct OutgoingTxMetadata {
+    pub address: String,
+    pub value  : u64,
+    pub memo   : Memo,
+}
+
+impl OutgoingTxMetadata {
+    pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let address_len = reader.read_u64::<LittleEndian>()?;
+        let mut address_bytes = vec![0; address_len as usize];
+        reader.read_exact(&mut address_bytes)?;
+        let address = String::from_utf8(address_bytes).unwrap();
+
+        let value = reader.read_u64::<LittleEndian>()?;
+
+        let mut memo_bytes = [0u8; 512];
+        reader.read_exact(&mut memo_bytes)?;
+        let memo = Memo::from_bytes(&memo_bytes).unwrap();
+
+        Ok(OutgoingTxMetadata{
+            address,
+            value,
+            memo,
+        })
+    }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        // Strings are written as len + utf8
+        writer.write_u64::<LittleEndian>(self.address.as_bytes().len() as u64)?;
+        writer.write_all(self.address.as_bytes())?;
+
+        writer.write_u64::<LittleEndian>(self.value)?;
+        writer.write_all(self.memo.as_bytes())
+    }
+}
+
 pub struct WalletTx {
     pub block: i32,
 
@@ -345,11 +381,14 @@ pub struct WalletTx {
 
     // Total amount of transparent funds that belong to us that were spent in this Tx.
     pub total_transparent_value_spent : u64,
+
+    // All outgoing sapling sends to addresses outside this wallet
+    pub outgoing_metadata: Vec<OutgoingTxMetadata>,
 }
 
 impl WalletTx {
     pub fn serialized_version() -> u64 {
-        return 1;
+        return 2;
     }
 
     pub fn new(height: i32, txid: &TxId) -> Self {
@@ -359,13 +398,14 @@ impl WalletTx {
             notes: vec![],
             utxos: vec![],
             total_shielded_value_spent: 0,
-            total_transparent_value_spent: 0
+            total_transparent_value_spent: 0,
+            outgoing_metadata: vec![],
         }
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        assert_eq!(version, WalletTx::serialized_version());
+        assert!(version <= WalletTx::serialized_version());
 
         let block = reader.read_i32::<LittleEndian>()?;
 
@@ -380,13 +420,21 @@ impl WalletTx {
         let total_shielded_value_spent = reader.read_u64::<LittleEndian>()?;
         let total_transparent_value_spent = reader.read_u64::<LittleEndian>()?;
 
+
+        // Outgoing metadata was only added in version 2
+        let outgoing_metadata = match version {
+            1 => vec![],
+            _ => Vector::read(&mut reader, |r| OutgoingTxMetadata::read(r))?
+        };
+            
         Ok(WalletTx{
             block,
             txid,
             notes,
             utxos,
             total_shielded_value_spent,
-            total_transparent_value_spent
+            total_transparent_value_spent,
+            outgoing_metadata,
         })
     }
 
@@ -402,6 +450,9 @@ impl WalletTx {
 
         writer.write_u64::<LittleEndian>(self.total_shielded_value_spent)?;
         writer.write_u64::<LittleEndian>(self.total_transparent_value_spent)?;
+
+        // Write the outgoing metadata
+        Vector::write(&mut writer, &self.outgoing_metadata, |w, om| om.write(w))?;
 
         Ok(())
     }
