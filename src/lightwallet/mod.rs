@@ -151,6 +151,7 @@ impl LightWallet {
     pub fn new(seed_phrase: Option<String>, config: &LightClientConfig) -> io::Result<Self> {
         use rand::{FromEntropy, ChaChaRng, Rng};
 
+        // This is the source entropy that corresponds to the 24-word seed phrase
         let mut seed_bytes = [0u8; 32];
 
         if seed_phrase.is_none() {
@@ -159,12 +160,15 @@ impl LightWallet {
             system_rng.fill(&mut seed_bytes);
         } else {
             seed_bytes.copy_from_slice(&Mnemonic::from_phrase(seed_phrase.expect("should have a seed phrase"), 
-                                        Language::English).unwrap().entropy());
+                    Language::English).unwrap().entropy());
         }
 
+        // The seed bytes is the raw entropy. To pass it to HD wallet generation, 
+        // we need to get the 64 byte bip39 entropy
+        let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&seed_bytes, Language::English).unwrap(), "");
+
         // TODO: This only reads one key for now
-        println!("{}", hex::encode(seed_bytes));
-        let ext_t_key = ExtendedPrivKey::with_seed(&seed_bytes).unwrap();
+        let ext_t_key = ExtendedPrivKey::with_seed(&bip39_seed.as_bytes()).unwrap();
         let tpk = ext_t_key
             .derive_private_key(KeyIndex::hardened_from_normalize_index(44).unwrap()).unwrap()
             .derive_private_key(KeyIndex::hardened_from_normalize_index(1).unwrap()).unwrap() // TODO: Cointype
@@ -381,8 +385,7 @@ impl LightWallet {
         // Encode into t address
         let mut hash160 = ripemd160::Ripemd160::new();
         hash160.input(Sha256::digest(&pk.serialize()[..].to_vec()));
-            
-        // TODO: The taddr version prefix needs to be different for testnet and mainnet
+
         hash160.result().to_base58check(&self.config.base58_pubkey_address(), &[])
     }
     
