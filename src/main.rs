@@ -48,10 +48,10 @@ pub fn main() {
 
     // Do a getinfo first, before opening the wallet
     let info = LightClient::get_info(server.parse().unwrap());
-    
+
     // Create a Light Client Config
     let config = lightclient::LightClientConfig {
-        server                      : server,
+        server,
         chain_name                  : info.chain_name,
         sapling_activation_height   : info.sapling_activation_height,
     };
@@ -138,7 +138,7 @@ pub fn main() {
                 // Wait for the response
                 match resp_rx.recv() {
                     Ok(response) => println!("{}", response),
-                    _ => { eprintln!("Error receiveing response");}
+                    _ => { eprintln!("Error receiving response");}
                 }
 
                 // Special check for Quit command.
