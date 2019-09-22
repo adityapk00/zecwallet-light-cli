@@ -132,10 +132,10 @@ impl LightWallet {
         return 1;
     }
 
-    fn get_pk_from_seed(seed: &[u8; 32]) -> 
+    fn get_pk_from_bip39seed(bip39seed: &[u8]) ->
             (ExtendedSpendingKey, ExtendedFullViewingKey, PaymentAddress<Bls12>) {
         let extsk: ExtendedSpendingKey = ExtendedSpendingKey::from_path(
-            &ExtendedSpendingKey::master(seed),
+            &ExtendedSpendingKey::master(bip39seed),
             &[
                 ChildIndex::Hardened(32),
                 ChildIndex::Hardened(1),    // TODO: Cointype should be 133 for mainnet
@@ -180,7 +180,7 @@ impl LightWallet {
         // Derive only the first address
         // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
         // users can import a seed phrase and automatically get all used addresses
-        let (extsk, extfvk, address) = LightWallet::get_pk_from_seed(&seed_bytes);
+        let (extsk, extfvk, address) = LightWallet::get_pk_from_bip39seed(&bip39_seed.as_bytes());
 
         Ok(LightWallet {
             seed:    seed_bytes,
