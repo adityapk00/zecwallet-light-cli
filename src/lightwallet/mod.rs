@@ -1098,87 +1098,54 @@ pub mod tests {
         jubjub::fs::Fs,
         note_encryption::{Memo, SaplingNoteEncryption},
         primitives::{Note, PaymentAddress},
-        transaction::components::Amount,
+        transaction::{
+            TxId,
+            components::Amount,
+        },
         zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
         JUBJUB,
     };
 
-    use crate::lightwallet::LightWallet;
+    use super::LightWallet;
     use crate::LightClientConfig;
 
-    /// Create a fake CompactBlock at the given height, containing a single output paying
-    /// the given address. Returns the CompactBlock and the nullifier for the new note.
-    pub(crate) fn fake_compact_block(
-        height: i32,
-        prev_hash: BlockHash,
-        extfvk: ExtendedFullViewingKey,
-        value: Amount,
-    ) -> (CompactBlock, Vec<u8>) {
-        let to = extfvk.default_address().unwrap().1;
-
-        // Create a fake Note for the account
-        let mut rng = OsRng;
-        let note = Note {
-            g_d: to.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
-            pk_d: to.pk_d.clone(),
-            value: value.into(),
-            r: Fs::random(&mut rng),
-        };
-        let encryptor = SaplingNoteEncryption::new(
-            extfvk.fvk.ovk,
-            note.clone(),
-            to.clone(),
-            Memo::default(),
-            &mut rng,
-        );
-        let mut cmu = vec![];
-        note.cm(&JUBJUB).into_repr().write_le(&mut cmu).unwrap();
-        let mut epk = vec![];
-        encryptor.epk().write(&mut epk).unwrap();
-        let enc_ciphertext = encryptor.encrypt_note_plaintext();
-
-        // Create a fake CompactBlock containing the note
-        let mut cout = CompactOutput::new();
-        cout.set_cmu(cmu);
-        cout.set_epk(epk);
-        cout.set_ciphertext(enc_ciphertext[..52].to_vec());
-        let mut ctx = CompactTx::new();
-        let mut txid = vec![0; 32];
-        rng.fill_bytes(&mut txid);
-        ctx.set_hash(txid);
-        ctx.outputs.push(cout);
-        let mut cb = CompactBlock::new();
-        cb.set_height(height as u64);
-        cb.hash.resize(32, 0);
-        rng.fill_bytes(&mut cb.hash);
-        cb.prevHash.extend_from_slice(&prev_hash.0);
-        cb.vtx.push(ctx);
-        (cb, note.nf(&extfvk.fvk.vk, 0, &JUBJUB))
+    struct FakeCompactBlock {
+        block: CompactBlock,
     }
 
-    /// Create a fake CompactBlock at the given height, spending a single note from the
-    /// given address.
-    pub(crate) fn fake_compact_block_spending(
-        height: i32,
-        prev_hash: BlockHash,
-        (nf, in_value): (Vec<u8>, Amount),
-        extfvk: ExtendedFullViewingKey,
-        to: PaymentAddress<Bls12>,
-        value: Amount,
-    ) -> CompactBlock {
-        let mut rng = OsRng;
+    impl FakeCompactBlock {
+        fn new(height: i32, prev_hash: BlockHash) -> Self {
+            // Create a fake Note for the account
+            let mut rng = OsRng;
+            
+            let mut cb = CompactBlock::new();
 
-        // Create a fake CompactBlock containing the note
-        let mut cspend = CompactSpend::new();
-        cspend.set_nf(nf);
-        let mut ctx = CompactTx::new();
-        let mut txid = vec![0; 32];
-        rng.fill_bytes(&mut txid);
-        ctx.set_hash(txid);
-        ctx.spends.push(cspend);
+            cb.set_height(height as u64);
+            cb.hash.resize(32, 0);
+            rng.fill_bytes(&mut cb.hash);
 
-        // Create a fake Note for the payment
-        ctx.outputs.push({
+            cb.prevHash.extend_from_slice(&prev_hash.0);
+            
+            FakeCompactBlock { block: cb }
+        }
+
+        fn as_bytes(&self) -> Vec<u8> {
+            self.block.write_to_bytes().unwrap()
+        }
+
+        fn hash(&self) -> BlockHash {
+            BlockHash(self.block.hash[..].try_into().unwrap())
+        }
+
+        // Add a new tx into the block, paying the given address the amount. 
+        // Returns the nullifier of the new note.
+        fn add_tx_paying(&mut self, extfvk: ExtendedFullViewingKey, value: u64) 
+                -> (Vec<u8>, TxId) {
+            let to = extfvk.default_address().unwrap().1;
+            let value = Amount::from_u64(value).unwrap();
+
+            // Create a fake Note for the account
+            let mut rng = OsRng;
             let note = Note {
                 g_d: to.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
                 pk_d: to.pk_d.clone(),
@@ -1188,7 +1155,7 @@ pub mod tests {
             let encryptor = SaplingNoteEncryption::new(
                 extfvk.fvk.ovk,
                 note.clone(),
-                to,
+                to.clone(),
                 Memo::default(),
                 &mut rng,
             );
@@ -1198,49 +1165,102 @@ pub mod tests {
             encryptor.epk().write(&mut epk).unwrap();
             let enc_ciphertext = encryptor.encrypt_note_plaintext();
 
+            // Create a fake CompactBlock containing the note
             let mut cout = CompactOutput::new();
             cout.set_cmu(cmu);
             cout.set_epk(epk);
             cout.set_ciphertext(enc_ciphertext[..52].to_vec());
-            cout
-        });
+            let mut ctx = CompactTx::new();
+            let mut txid = vec![0; 32];
+            rng.fill_bytes(&mut txid);
+            ctx.set_hash(txid.clone());
+            ctx.outputs.push(cout);
+            
+            self.block.vtx.push(ctx);
+            (note.nf(&extfvk.fvk.vk, 0, &JUBJUB), TxId(txid[..].try_into().unwrap()))
+        }
 
-        // Create a fake Note for the change
-        ctx.outputs.push({
-            let change_addr = extfvk.default_address().unwrap().1;
-            let note = Note {
-                g_d: change_addr.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
-                pk_d: change_addr.pk_d.clone(),
-                value: (in_value - value).into(),
-                r: Fs::random(&mut rng),
-            };
-            let encryptor = SaplingNoteEncryption::new(
-                extfvk.fvk.ovk,
-                note.clone(),
-                change_addr,
-                Memo::default(),
-                &mut rng,
-            );
-            let mut cmu = vec![];
-            note.cm(&JUBJUB).into_repr().write_le(&mut cmu).unwrap();
-            let mut epk = vec![];
-            encryptor.epk().write(&mut epk).unwrap();
-            let enc_ciphertext = encryptor.encrypt_note_plaintext();
+        fn add_tx_spending(&mut self, 
+                            (nf, in_value): (Vec<u8>, u64),
+                            extfvk: ExtendedFullViewingKey,
+                            to: PaymentAddress<Bls12>,
+                            value: u64) -> TxId {
+            let mut rng = OsRng;
 
-            let mut cout = CompactOutput::new();
-            cout.set_cmu(cmu);
-            cout.set_epk(epk);
-            cout.set_ciphertext(enc_ciphertext[..52].to_vec());
-            cout
-        });
+            let in_value = Amount::from_u64(in_value).unwrap();
+            let value = Amount::from_u64(value).unwrap();
 
-        let mut cb = CompactBlock::new();
-        cb.set_height(height as u64);
-        cb.hash.resize(32, 0);
-        rng.fill_bytes(&mut cb.hash);
-        cb.prevHash.extend_from_slice(&prev_hash.0);
-        cb.vtx.push(ctx);
-        cb
+            // Create a fake CompactBlock containing the note
+            let mut cspend = CompactSpend::new();
+            cspend.set_nf(nf);
+            let mut ctx = CompactTx::new();
+            let mut txid = vec![0; 32];
+            rng.fill_bytes(&mut txid);
+            ctx.set_hash(txid.clone());
+            ctx.spends.push(cspend);
+
+            // Create a fake Note for the payment
+            ctx.outputs.push({
+                let note = Note {
+                    g_d: to.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
+                    pk_d: to.pk_d.clone(),
+                    value: value.into(),
+                    r: Fs::random(&mut rng),
+                };
+                let encryptor = SaplingNoteEncryption::new(
+                    extfvk.fvk.ovk,
+                    note.clone(),
+                    to,
+                    Memo::default(),
+                    &mut rng,
+                );
+                let mut cmu = vec![];
+                note.cm(&JUBJUB).into_repr().write_le(&mut cmu).unwrap();
+                let mut epk = vec![];
+                encryptor.epk().write(&mut epk).unwrap();
+                let enc_ciphertext = encryptor.encrypt_note_plaintext();
+
+                let mut cout = CompactOutput::new();
+                cout.set_cmu(cmu);
+                cout.set_epk(epk);
+                cout.set_ciphertext(enc_ciphertext[..52].to_vec());
+                cout
+            });
+
+            // Create a fake Note for the change
+            ctx.outputs.push({
+                let change_addr = extfvk.default_address().unwrap().1;
+                let note = Note {
+                    g_d: change_addr.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
+                    pk_d: change_addr.pk_d.clone(),
+                    value: (in_value - value).into(),
+                    r: Fs::random(&mut rng),
+                };
+                let encryptor = SaplingNoteEncryption::new(
+                    extfvk.fvk.ovk,
+                    note.clone(),
+                    change_addr,
+                    Memo::default(),
+                    &mut rng,
+                );
+                let mut cmu = vec![];
+                note.cm(&JUBJUB).into_repr().write_le(&mut cmu).unwrap();
+                let mut epk = vec![];
+                encryptor.epk().write(&mut epk).unwrap();
+                let enc_ciphertext = encryptor.encrypt_note_plaintext();
+
+                let mut cout = CompactOutput::new();
+                cout.set_cmu(cmu);
+                cout.set_epk(epk);
+                cout.set_ciphertext(enc_ciphertext[..52].to_vec());
+                cout
+            });
+
+            
+            self.block.vtx.push(ctx);         
+
+            TxId(txid[..].try_into().unwrap())
+        }
     }
 
     #[test]
@@ -1256,21 +1276,16 @@ pub mod tests {
         let address = Some(encode_payment_address(wallet.config.hrp_sapling_address(), 
                                             &wallet.extfvks[0].default_address().unwrap().1));
 
-        let (cb1, _) = fake_compact_block(
-            0,
-            BlockHash([0; 32]),
-            wallet.extfvks[0].clone(),
-            Amount::from_u64(AMOUNT1).unwrap(),
-        );
+        let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
+        cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
         
-
         // Make sure that the intial state is empty
         assert_eq!(wallet.txs.read().unwrap().len(), 0);
         assert_eq!(wallet.blocks.read().unwrap().len(), 0);
         assert_eq!(wallet.zbalance(None), 0);
         assert_eq!(wallet.zbalance(address.clone()), 0);
 
-        wallet.scan_block(&cb1.write_to_bytes().unwrap()).unwrap();
+        wallet.scan_block(&cb1.as_bytes()).unwrap();
         
         assert_eq!(wallet.txs.read().unwrap().len(), 1);
         assert_eq!(wallet.blocks.read().unwrap().len(), 1);
@@ -1280,18 +1295,64 @@ pub mod tests {
         const AMOUNT2:u64 = 10;
 
         // Add a second block
-        let (cb2, _) = fake_compact_block(
-            1,  // Block number 1
-            BlockHash{0: cb1.hash[..].try_into().unwrap()},
-            wallet.extfvks[0].clone(),
-            Amount::from_u64(AMOUNT2).unwrap(),
-        );
+        let mut cb2 = FakeCompactBlock::new(1, cb1.hash());
+        cb2.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT2);
 
-        wallet.scan_block(&cb2.write_to_bytes().unwrap()).unwrap();
+        wallet.scan_block(&cb2.as_bytes()).unwrap();
         
         assert_eq!(wallet.txs.read().unwrap().len(), 2);
         assert_eq!(wallet.blocks.read().unwrap().len(), 2);
         assert_eq!(wallet.zbalance(None), AMOUNT1 + AMOUNT2);
         assert_eq!(wallet.zbalance(address.clone()), AMOUNT1 + AMOUNT2);
+    }
+
+    #[test]
+    fn z_change_balances() {
+        let wallet = LightWallet::new(None, &LightClientConfig {
+            server: "0.0.0.0:0".to_string(),
+            chain_name: "test".to_string(),
+            sapling_activation_height: 0
+        }).unwrap();
+
+        // First, add an incoming transaction
+        const AMOUNT1:u64 = 5;
+        
+        let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
+        let (nf1, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
+
+        wallet.scan_block(&cb1.as_bytes()).unwrap();
+        
+        assert_eq!(wallet.txs.read().unwrap().len(), 1);
+        assert_eq!(wallet.blocks.read().unwrap().len(), 1);
+        assert_eq!(wallet.zbalance(None), AMOUNT1);
+
+        const AMOUNT2:u64 = 2;
+
+        // Add a second block, spending the first note 
+        let addr2 = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[0u8; 32]))
+                        .default_address().unwrap().1;
+        let mut cb2 = FakeCompactBlock::new(1, cb1.hash());
+        let txid2 = cb2.add_tx_spending((nf1, AMOUNT1), wallet.extfvks[0].clone(), addr2, AMOUNT2);
+        wallet.scan_block(&cb2.as_bytes()).unwrap();
+
+        // Now, the original note should be spent and there should be a change
+        assert_eq!(wallet.zbalance(None), AMOUNT1 - AMOUNT2);
+        
+        let txs = wallet.txs.read().unwrap();
+
+        // Old note was spent
+        assert_eq!(txs[&txid1].txid, txid1);
+        assert_eq!(txs[&txid1].notes.len(), 1);
+        assert_eq!(txs[&txid1].notes[0].spent.unwrap(), txid2);
+        assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+        assert_eq!(txs[&txid1].notes[0].is_change, false);
+        
+        // new note is not spent
+        assert_eq!(txs[&txid2].txid, txid2);
+        assert_eq!(txs[&txid2].notes.len(), 1);
+        assert_eq!(txs[&txid2].notes[0].spent, None);
+        assert_eq!(txs[&txid2].notes[0].note.value, AMOUNT1 - AMOUNT2);
+        assert_eq!(txs[&txid2].notes[0].is_change, true);
+        assert_eq!(txs[&txid2].total_shielded_value_spent, AMOUNT1);
     }
 }
