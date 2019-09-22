@@ -42,14 +42,13 @@ use crate::LightClientConfig;
 
 use sha2::{Sha256, Digest};
 
-
-
 pub mod data;
 pub mod extended_key;
 
 use extended_key::{KeyIndex, ExtendedPrivKey};
 
 const ANCHOR_OFFSET: u32 = 1;
+pub const MAX_REORG: usize = 100;
 
 fn now() -> f64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
@@ -765,6 +764,8 @@ impl LightWallet {
                 .map(|block| block.tree.clone())
                 .unwrap_or(CommitmentTree::new()),
         };
+
+        // Create a write lock that will last for the rest of the function.
         let mut txs = self.txs.write().unwrap();
 
         // Create a Vec containing all unspent nullifiers.
@@ -870,9 +871,19 @@ impl LightWallet {
             }
         }
 
-        // Store scanned data for this block.
-        self.blocks.write().unwrap().push(block_data);
+        {
+            let mut blks = self.blocks.write().unwrap();
+            
+            // Store scanned data for this block.
+            blks.push(block_data);
 
+            // Trim the old blocks, keeping only as many as needed for a worst-case reorg (i.e. 101 blocks)
+            let len = blks.len();
+            if len > MAX_REORG + 1 {
+                blks.drain(..(len-MAX_REORG+1));
+            }
+        }
+        
         // Print info about the block every 10,000 blocks
         if height % 10_000 == 0 {
             match self.get_sapling_tree() {

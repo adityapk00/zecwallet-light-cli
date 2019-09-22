@@ -545,7 +545,7 @@ impl LightClient {
         // Count how many bytes we've downloaded
         let bytes_downloaded = Arc::new(AtomicUsize::new(0));
 
-        let mut total_reorg = 0u64;
+        let mut total_reorg = 0;
 
         // Fetch CompactBlocks in increments
         loop {
@@ -592,9 +592,9 @@ impl LightClient {
             }
 
             // Make sure we're not re-orging too much!
-            if total_reorg > 99 {
-                error!("Reorg has now exceeded 100 blocks!");
-                return "Reorg has exceeded 100 blocks. Aborting.".to_string();
+            if total_reorg > (crate::lightwallet::MAX_REORG - 1) as u64 {
+                error!("Reorg has now exceeded {} blocks!", crate::lightwallet::MAX_REORG);
+                return format!("Reorg has exceeded {} blocks. Aborting.", crate::lightwallet::MAX_REORG);
             } 
             
             if invalid_height > 0 {
