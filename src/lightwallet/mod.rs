@@ -1111,7 +1111,7 @@ pub mod tests {
 
     use super::LightWallet;
     use crate::LightClientConfig;
-    use secp256k1::PublicKey;
+    use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
 
     struct FakeCompactBlock {
         block: CompactBlock,
@@ -1411,7 +1411,7 @@ pub mod tests {
     #[test]
     fn test_t_receive_spend() {
         let mut rng = OsRng;
-        let secp = secp256k1::Secp256k1::new();
+        let secp = Secp256k1::new();
 
         let wallet = LightWallet::new(None, &LightClientConfig {
             server: "0.0.0.0:0".to_string(),
@@ -1467,9 +1467,86 @@ pub mod tests {
             assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
 
             assert_eq!(txs[&txid2].block, 101); // The second TxId is at block 101
-            assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has not UTXOs
+            assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has no UTXOs
             assert_eq!(txs[&txid2].total_transparent_value_spent, AMOUNT1); 
             
+
+            // Make sure there is no t-ZEC left
+            assert_eq!(wallet.tbalance(None), 0);
+        }
+    }
+
+
+    #[test]
+    /// This test spends and receives t addresses among non-wallet t addresses to make sure that
+    /// we're detecting and spending only our t addrs.
+    fn test_t_receive_spend_among_tadds() {
+        let mut rng = OsRng;
+        let secp = Secp256k1::new();
+
+        let wallet = LightWallet::new(None, &LightClientConfig {
+            server: "0.0.0.0:0".to_string(),
+            chain_name: "test".to_string(),
+            sapling_activation_height: 0
+        }).unwrap();
+
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+
+        let non_wallet_sk = &SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let non_wallet_pk = PublicKey::from_secret_key(&secp, &non_wallet_sk);
+
+        const AMOUNT1: u64 = 30;
+
+        let mut tx = FakeTransaction::new(&mut rng);
+        // Add a non-wallet output
+        tx.add_t_output(&non_wallet_pk, 20);
+        tx.add_t_output(&pk, AMOUNT1);  // Our wallet t output
+        tx.add_t_output(&non_wallet_pk, 25);
+        let txid1 = tx.get_tx().txid();
+
+        wallet.scan_full_tx(&tx.get_tx(), 100);  // Pretend it is at height 100
+
+        {
+            let txs = wallet.txs.read().unwrap();
+
+            // Now make sure the t addr was received
+            assert_eq!(txs.len(), 1);
+            assert_eq!(txs[&txid1].utxos.len(), 1);
+            assert_eq!(txs[&txid1].utxos[0].address, taddr);
+            assert_eq!(txs[&txid1].utxos[0].txid, txid1);
+            assert_eq!(txs[&txid1].utxos[0].output_index, 1);
+            assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+            assert_eq!(txs[&txid1].utxos[0].height, 100);
+            assert_eq!(txs[&txid1].utxos[0].spent, None);
+            assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
+
+            assert_eq!(wallet.tbalance(None), AMOUNT1);
+            assert_eq!(wallet.tbalance(Some(taddr)), AMOUNT1);
+        }
+
+        // Create a new Tx, spending this taddr
+        let mut tx = FakeTransaction::new(&mut rng);
+        tx.add_t_input(txid1, 1);   // Ours was at position 1 in the input tx
+        let txid2 = tx.get_tx().txid();
+
+        wallet.scan_full_tx(&tx.get_tx(), 101);  // Pretent it is at height 101
+
+        {
+            // Make sure the txid was spent
+            let txs = wallet.txs.read().unwrap();
+
+            // Old utxo, that should be spent now
+            assert_eq!(txs.len(), 2);
+            assert_eq!(txs[&txid1].utxos.len(), 1);
+            assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+            assert_eq!(txs[&txid1].utxos[0].spent, Some(txid2));
+            assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
+
+            assert_eq!(txs[&txid2].block, 101); // The second TxId is at block 101
+            assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has no UTXOs
+            assert_eq!(txs[&txid2].total_transparent_value_spent, AMOUNT1);
+
 
             // Make sure there is no t-ZEC left
             assert_eq!(wallet.tbalance(None), 0);

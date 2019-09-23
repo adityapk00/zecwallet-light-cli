@@ -2,4 +2,4 @@ target/
 Cargo.lock
 .vscode/
 history.txt
-wallet.dat
+/.idea/
