@@ -3,6 +3,8 @@ use std::io::{self, Read, Write};
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Error, ErrorKind};
 
 use log::{info, warn, error};
 
@@ -129,6 +131,27 @@ pub struct LightWallet {
 impl LightWallet {
     pub fn serialized_version() -> u64 {
         return 1;
+    }
+
+    fn get_sapling_params(config: &LightClientConfig) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        // Read Sapling Params
+        let mut sapling_output = vec![];
+        let mut f = match File::open(config.get_params_path("sapling-output.params")) {
+            Ok(file) => file,
+            Err(_) => return Err(Error::new(ErrorKind::NotFound,
+                                            format!("Couldn't read {}", config.get_params_path("sapling-output.params").display())))
+        };
+        f.read_to_end(&mut sapling_output)?;
+
+        let mut sapling_spend = vec![];
+        let mut f = match File::open(config.get_params_path("sapling-spend.params")) {
+            Ok(file) => file,
+            Err(_) => return Err(Error::new(ErrorKind::NotFound,
+                                            format!("Couldn't read {}", config.get_params_path("sapling-spend.params").display())))
+        };
+        f.read_to_end(&mut sapling_spend)?;
+
+        Ok((sapling_spend, sapling_output))
     }
 
     fn get_pk_from_bip39seed(bip39seed: &[u8]) ->
@@ -663,7 +686,6 @@ impl LightWallet {
                         },
                         None => {}
                 };
-                
             }
         }
     }
@@ -1087,7 +1109,7 @@ pub mod tests {
     use ff::{Field, PrimeField, PrimeFieldRepr};
     use pairing::bls12_381::Bls12;
     use rand_core::{RngCore, OsRng};
-    use protobuf::Message;
+    use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
     use zcash_client_backend::{encoding::encode_payment_address,
         proto::compact_formats::{
             CompactBlock, CompactOutput, CompactSpend, CompactTx,
@@ -1102,6 +1124,7 @@ pub mod tests {
         transaction::{
             TxId, Transaction, TransactionData,
             components::{TxOut, TxIn, OutPoint, Amount,},
+            components::amount::DEFAULT_FEE,
         },
         zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
         JUBJUB,
@@ -1139,6 +1162,47 @@ pub mod tests {
 
         fn hash(&self) -> BlockHash {
             BlockHash(self.block.hash[..].try_into().unwrap())
+        }
+
+        fn tx_to_compact_tx(tx: &Transaction, index: u64) -> CompactTx {
+            let spends = tx.shielded_spends.iter().map(|s| {
+                let mut c_spend = CompactSpend::default();
+                c_spend.set_nf(s.nullifier.to_vec());
+
+                c_spend
+            }).collect::<Vec<CompactSpend>>();
+
+            let outputs = tx.shielded_outputs.iter().map(|o| {
+                let mut c_out = CompactOutput::default();
+
+                let mut cmu_bytes = vec![];
+                o.cmu.into_repr().write_le(&mut cmu_bytes).unwrap();
+
+                let mut epk_bytes = vec![];
+                o.ephemeral_key.write(&mut epk_bytes).unwrap();
+
+                c_out.set_cmu(cmu_bytes);
+                c_out.set_epk(epk_bytes);
+                c_out.set_ciphertext(o.enc_ciphertext[0..52].to_vec());
+
+                c_out
+            }).collect::<Vec<CompactOutput>>();
+
+            CompactTx {
+                index,
+                hash: tx.txid().0.to_vec(),
+                fee: 0, // TODO: Get Fee
+                spends: RepeatedField::from_vec(spends),
+                outputs: RepeatedField::from_vec(outputs),
+                unknown_fields: UnknownFields::default(),
+                cached_size: CachedSize::default(),
+            }
+        }
+
+        // Convert the transaction into a CompactTx and add it to this block
+        fn add_tx(&mut self, tx: &Transaction) {
+            let ctx = FakeCompactBlock::tx_to_compact_tx(&tx, self.block.vtx.len() as u64);
+            self.block.vtx.push(ctx);
         }
 
         // Add a new tx into the block, paying the given address the amount. 
@@ -1661,6 +1725,101 @@ pub mod tests {
             // The UTXO was spent in txid2
             assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has no UTXOs
             assert_eq!(txs[&txid2].total_transparent_value_spent, TAMOUNT1);
+        }
+    }
+
+    #[test]
+    fn test_z_spend() {
+        let config = LightClientConfig {
+            server: "0.0.0.0:0".to_string(),
+            chain_name: "test".to_string(),
+            sapling_activation_height: 0
+        };
+
+        let wallet = LightWallet::new(None, &config).unwrap();
+
+        const AMOUNT1:u64 = 50000;
+        // Address is encoded in bech32
+        let address = Some(encode_payment_address(wallet.config.hrp_sapling_address(),
+                                                  &wallet.extfvks[0].default_address().unwrap().1));
+
+        let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
+        let (_, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
+        wallet.scan_block(&cb1.as_bytes()).unwrap();
+
+        // We have one note
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].spent, None);
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+        }
+
+        assert_eq!(wallet.verified_zbalance(None), AMOUNT1);
+
+        // Create a new block so that the note is now verified to be spent
+        let cb2 = FakeCompactBlock::new(1, cb1.hash());
+        wallet.scan_block(&cb2.as_bytes()).unwrap();
+
+        let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+        let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                            &fvk.default_address().unwrap().1);
+
+        const AMOUNT_SENT: u64 = 20;
+
+        let outgoing_memo = "Outgoing Memo".to_string();
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+
+        // Create a tx and send to address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &ext_address, AMOUNT_SENT, Some(outgoing_memo.clone())).unwrap();
+
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+
+        // Now, the note should be unconfirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].spent, None);
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
+        }
+
+        let mut cb3 = FakeCompactBlock::new(2, cb2.hash());
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+        // Now this new Spent tx should be in, so the note should be marked confirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The sent tx should generate change
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+        }
+
+        // Now, full scan the Tx, which should populate the Outgoing Meta data
+        wallet.scan_full_tx(&sent_tx, 2);
+
+        // Check Outgoing Metadata
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
+
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].address, ext_address);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
         }
     }
 }
