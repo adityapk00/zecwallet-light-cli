@@ -546,7 +546,7 @@ impl LightWallet {
                     match spent_utxo {
                         Some(su) => {
                             info!("Spent utxo from {} was spent in {}", txid, tx.txid());
-                            su.spent = Some(txid.clone());
+                            su.spent = Some(tx.txid().clone());
                             su.unconfirmed_spent = None;
 
                             total_transparent_spend += su.value;
@@ -1098,13 +1098,16 @@ pub mod tests {
         jubjub::fs::Fs,
         note_encryption::{Memo, SaplingNoteEncryption},
         primitives::{Note, PaymentAddress},
+        legacy::{Script, TransparentAddress,},
         transaction::{
-            TxId,
-            components::Amount,
+            TxId, Transaction, TransactionData,
+            components::{TxOut, TxIn, OutPoint, Amount,},
         },
         zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
         JUBJUB,
     };
+
+    use sha2::{Sha256, Digest};
 
     use super::LightWallet;
     use crate::LightClientConfig;
@@ -1255,7 +1258,6 @@ pub mod tests {
                 cout.set_ciphertext(enc_ciphertext[..52].to_vec());
                 cout
             });
-
             
             self.block.vtx.push(ctx);         
 
@@ -1316,7 +1318,7 @@ pub mod tests {
 
         // First, add an incoming transaction
         const AMOUNT1:u64 = 5;
-        
+
         let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
         let (nf1, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
 
@@ -1354,5 +1356,105 @@ pub mod tests {
         assert_eq!(txs[&txid2].notes[0].note.value, AMOUNT1 - AMOUNT2);
         assert_eq!(txs[&txid2].notes[0].is_change, true);
         assert_eq!(txs[&txid2].total_shielded_value_spent, AMOUNT1);
+    }
+
+    #[test]
+    fn test_t_receive_spend() {
+        let mut rng = OsRng;
+        let secp = secp256k1::Secp256k1::new();
+
+        let wallet = LightWallet::new(None, &LightClientConfig {
+            server: "0.0.0.0:0".to_string(),
+            chain_name: "test".to_string(),
+            sapling_activation_height: 0
+        }).unwrap();
+
+        let pk = secp256k1::PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
+        let mut hash160 = ripemd160::Ripemd160::new();
+        hash160.input(Sha256::digest(&pk.serialize()[..].to_vec()));
+
+        let taddr_bytes = hash160.result();
+        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+
+        let mut txid = vec![0; 32];
+        rng.fill_bytes(&mut txid);
+        let txid1 = TxId{0: txid[..].try_into().unwrap()};
+
+        const AMOUNT1: u64 = 20;
+
+        let mut td = TransactionData::new();
+        td.vout.push(TxOut{
+            value: Amount::from_u64(AMOUNT1).unwrap(),
+            script_pubkey: TransparentAddress::PublicKey(taddr_bytes.try_into().unwrap()).script(),
+        });
+
+        let tx = Transaction{
+            txid: txid1,
+            data: td,
+        };
+
+        wallet.scan_full_tx(&tx, 100);  // Pretent it is at height 100
+
+        {
+            let txs = wallet.txs.read().unwrap();
+
+            // Now make sure the t addr was recieved
+            assert_eq!(txs.len(), 1);
+            assert_eq!(txs[&txid1].utxos.len(), 1);
+            assert_eq!(txs[&txid1].utxos[0].address, taddr);
+            assert_eq!(txs[&txid1].utxos[0].txid, txid1);
+            assert_eq!(txs[&txid1].utxos[0].output_index, 0);
+            assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+            assert_eq!(txs[&txid1].utxos[0].height, 100);
+            assert_eq!(txs[&txid1].utxos[0].spent, None);
+            assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
+
+            assert_eq!(wallet.tbalance(None), AMOUNT1);
+            assert_eq!(wallet.tbalance(Some(taddr)), AMOUNT1);
+        }
+
+        // Create a new Tx, spending this taddr
+        let mut td = TransactionData::new();
+        td.vin.push(TxIn{
+            prevout: OutPoint{
+                hash: txid1.0,
+                n: 0
+            },
+            script_sig: Script{0: vec![]},
+            sequence: 0,
+        });
+        
+        // Create a new txid
+        let mut txid = vec![0; 32];
+        rng.fill_bytes(&mut txid);
+        let txid2 = TxId{0: txid[..].try_into().unwrap()};
+
+        let tx = Transaction{
+            txid: txid2,
+            data: td,
+        };
+
+        wallet.scan_full_tx(&tx, 101);  // Pretent it is at height 101
+
+        {
+            // Make sure the txid was spent
+            let txs = wallet.txs.read().unwrap();
+
+            // Old utxo, that should be spent now
+            assert_eq!(txs.len(), 2);
+            assert_eq!(txs[&txid1].utxos.len(), 1);
+            assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+            assert_eq!(txs[&txid1].utxos[0].spent, Some(txid2));
+            assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
+
+            assert_eq!(txs[&txid2].block, 101); // The second TxId is at block 101
+            assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has not UTXOs
+            assert_eq!(txs[&txid2].total_transparent_value_spent, AMOUNT1); 
+            
+
+            // Make sure there is no t-ZEC left
+            assert_eq!(wallet.tbalance(None), 0);
+        }
+
     }
 }
