@@ -1469,7 +1469,6 @@ pub mod tests {
             assert_eq!(txs[&txid2].block, 101); // The second TxId is at block 101
             assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has no UTXOs
             assert_eq!(txs[&txid2].total_transparent_value_spent, AMOUNT1); 
-            
 
             // Make sure there is no t-ZEC left
             assert_eq!(wallet.tbalance(None), 0);
@@ -1547,9 +1546,121 @@ pub mod tests {
             assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has no UTXOs
             assert_eq!(txs[&txid2].total_transparent_value_spent, AMOUNT1);
 
-
             // Make sure there is no t-ZEC left
             assert_eq!(wallet.tbalance(None), 0);
+        }
+    }
+
+    #[test]
+    fn test_serialization() {
+        let secp = Secp256k1::new();
+        let config = LightClientConfig {
+            server: "0.0.0.0:0".to_string(),
+            chain_name: "test".to_string(),
+            sapling_activation_height: 0
+        };
+
+        let wallet = LightWallet::new(None, &config).unwrap();
+
+        // First, add an incoming transaction
+        const AMOUNT1:u64 = 5;
+
+        let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
+        let (nf1, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
+
+        wallet.scan_block(&cb1.as_bytes()).unwrap();
+
+        assert_eq!(wallet.txs.read().unwrap().len(), 1);
+        assert_eq!(wallet.blocks.read().unwrap().len(), 1);
+        assert_eq!(wallet.zbalance(None), AMOUNT1);
+
+        // Add a t input at the Tx
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+
+        const TAMOUNT1: u64 = 20;
+
+        let mut tx = FakeTransaction::new_with_txid(txid1);
+        tx.add_t_output(&pk, TAMOUNT1);
+        wallet.scan_full_tx(&tx.get_tx(), 0);  // Height 0
+
+        const AMOUNT2:u64 = 2;
+
+        // Add a second block, spending the first note
+        let addr2 = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[0u8; 32]))
+            .default_address().unwrap().1;
+        let mut cb2 = FakeCompactBlock::new(1, cb1.hash());
+        let txid2 = cb2.add_tx_spending((nf1, AMOUNT1), wallet.extfvks[0].clone(), addr2, AMOUNT2);
+        wallet.scan_block(&cb2.as_bytes()).unwrap();
+
+        let mut tx = FakeTransaction::new_with_txid(txid2);
+        tx.add_t_input(txid1, 0);
+        wallet.scan_full_tx(&tx.get_tx(), 1);  // Height 1
+
+        // Now, the original note should be spent and there should be a change
+        assert_eq!(wallet.zbalance(None), AMOUNT1 - AMOUNT2 ); // The t addr amount is received + spent, so it cancels out
+
+        // Now, serialize the wallet and read it back again
+        let mut serialized_data = vec![];
+        wallet.write(&mut serialized_data).expect("Serialize wallet");
+        let wallet2 = LightWallet::read(&serialized_data[..], &config).unwrap();
+
+        assert_eq!(wallet2.zbalance(None), AMOUNT1 - AMOUNT2);
+
+        // Test the keys were serialized correctly
+        {
+            assert_eq!(wallet.seed, wallet2.seed);
+
+            assert_eq!(wallet.extsks.len(), wallet2.extsks.len());
+            assert_eq!(wallet.extsks[0], wallet2.extsks[0]);
+            assert_eq!(wallet.extfvks[0], wallet2.extfvks[0]);
+            assert_eq!(wallet.address[0], wallet2.address[0]);
+
+            assert_eq!(wallet.tkeys.len(), wallet2.tkeys.len());
+            assert_eq!(wallet.tkeys[0], wallet2.tkeys[0]);
+        }
+
+        // Test blocks were serialized properly
+        {
+            let blks = wallet2.blocks.read().unwrap();
+
+            assert_eq!(blks.len(), 2);
+            assert_eq!(blks[0].height, 0);
+            assert_eq!(blks[1].height, 1);
+        }
+
+        // Test txns were serialized properly.
+        {
+            let txs = wallet2.txs.read().unwrap();
+
+            // Old note was spent
+            assert_eq!(txs[&txid1].txid, txid1);
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].spent.unwrap(), txid2);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].is_change, false);
+
+            // Old UTXO was spent
+            assert_eq!(txs[&txid1].utxos.len(), 1);
+            assert_eq!(txs[&txid1].utxos[0].address, taddr);
+            assert_eq!(txs[&txid1].utxos[0].txid, txid1);
+            assert_eq!(txs[&txid1].utxos[0].output_index, 0);
+            assert_eq!(txs[&txid1].utxos[0].value, TAMOUNT1);
+            assert_eq!(txs[&txid1].utxos[0].height, 0);
+            assert_eq!(txs[&txid1].utxos[0].spent, Some(txid2));
+            assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
+
+            // new note is not spent
+            assert_eq!(txs[&txid2].txid, txid2);
+            assert_eq!(txs[&txid2].notes.len(), 1);
+            assert_eq!(txs[&txid2].notes[0].spent, None);
+            assert_eq!(txs[&txid2].notes[0].note.value, AMOUNT1 - AMOUNT2);
+            assert_eq!(txs[&txid2].notes[0].is_change, true);
+            assert_eq!(txs[&txid2].total_shielded_value_spent, AMOUNT1);
+
+            // The UTXO was spent in txid2
+            assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has no UTXOs
+            assert_eq!(txs[&txid2].total_transparent_value_spent, TAMOUNT1);
         }
     }
 }
