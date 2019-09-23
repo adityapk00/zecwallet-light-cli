@@ -1111,6 +1111,7 @@ pub mod tests {
 
     use super::LightWallet;
     use crate::LightClientConfig;
+    use secp256k1::PublicKey;
 
     struct FakeCompactBlock {
         block: CompactBlock,
@@ -1265,6 +1266,55 @@ pub mod tests {
         }
     }
 
+    struct FakeTransaction {
+        tx: Transaction,
+    }
+
+    impl FakeTransaction {
+        // New FakeTransaction with random txid
+        fn new<R: RngCore>(rng: &mut R) -> Self {
+            let mut txid = [0u8; 32];
+            rng.fill_bytes(&mut txid);
+            FakeTransaction::new_with_txid(TxId(txid))
+        }
+
+        fn new_with_txid(txid: TxId) -> Self {
+            FakeTransaction {
+                tx: Transaction {
+                    txid,
+                    data: TransactionData::new()
+                }
+            }
+        }
+
+        fn get_tx(&self) -> &Transaction {
+            &self.tx
+        }
+
+        fn add_t_output(&mut self, pk: &PublicKey, value: u64) {
+            let mut hash160 = ripemd160::Ripemd160::new();
+            hash160.input(Sha256::digest(&pk.serialize()[..].to_vec()));
+
+            let taddr_bytes = hash160.result();
+
+            self.tx.data.vout.push(TxOut {
+                value: Amount::from_u64(value).unwrap(),
+                script_pubkey: TransparentAddress::PublicKey(taddr_bytes.try_into().unwrap()).script(),
+            });
+        }
+
+        fn add_t_input(&mut self, txid: TxId, n: u32) {
+            self.tx.data.vin.push(TxIn {
+                prevout: OutPoint{
+                    hash: txid.0,
+                    n
+                },
+                script_sig: Script{0: vec![]},
+                sequence: 0,
+            });
+        }
+    }
+
     #[test]
     fn z_balances() {
         let wallet = LightWallet::new(None, &LightClientConfig {
@@ -1369,31 +1419,16 @@ pub mod tests {
             sapling_activation_height: 0
         }).unwrap();
 
-        let pk = secp256k1::PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
-        let mut hash160 = ripemd160::Ripemd160::new();
-        hash160.input(Sha256::digest(&pk.serialize()[..].to_vec()));
-
-        let taddr_bytes = hash160.result();
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
         let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
-
-        let mut txid = vec![0; 32];
-        rng.fill_bytes(&mut txid);
-        let txid1 = TxId{0: txid[..].try_into().unwrap()};
 
         const AMOUNT1: u64 = 20;
 
-        let mut td = TransactionData::new();
-        td.vout.push(TxOut{
-            value: Amount::from_u64(AMOUNT1).unwrap(),
-            script_pubkey: TransparentAddress::PublicKey(taddr_bytes.try_into().unwrap()).script(),
-        });
+        let mut tx = FakeTransaction::new(&mut rng);
+        tx.add_t_output(&pk, AMOUNT1);
+        let txid1 = tx.get_tx().txid();
 
-        let tx = Transaction{
-            txid: txid1,
-            data: td,
-        };
-
-        wallet.scan_full_tx(&tx, 100);  // Pretent it is at height 100
+        wallet.scan_full_tx(&tx.get_tx(), 100);  // Pretend it is at height 100
 
         {
             let txs = wallet.txs.read().unwrap();
@@ -1414,27 +1449,11 @@ pub mod tests {
         }
 
         // Create a new Tx, spending this taddr
-        let mut td = TransactionData::new();
-        td.vin.push(TxIn{
-            prevout: OutPoint{
-                hash: txid1.0,
-                n: 0
-            },
-            script_sig: Script{0: vec![]},
-            sequence: 0,
-        });
-        
-        // Create a new txid
-        let mut txid = vec![0; 32];
-        rng.fill_bytes(&mut txid);
-        let txid2 = TxId{0: txid[..].try_into().unwrap()};
+        let mut tx = FakeTransaction::new(&mut rng);
+        tx.add_t_input(txid1, 0);
+        let txid2 = tx.get_tx().txid();
 
-        let tx = Transaction{
-            txid: txid2,
-            data: td,
-        };
-
-        wallet.scan_full_tx(&tx, 101);  // Pretent it is at height 101
+        wallet.scan_full_tx(&tx.get_tx(), 101);  // Pretent it is at height 101
 
         {
             // Make sure the txid was spent
@@ -1455,6 +1474,5 @@ pub mod tests {
             // Make sure there is no t-ZEC left
             assert_eq!(wallet.tbalance(None), 0);
         }
-
     }
 }
