@@ -1728,8 +1728,8 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn test_z_spend() {
+    // Get a test wallet already setup with a single note
+    fn get_test_wallet(amount: u64) -> (LightWallet, LightClientConfig, TxId, BlockHash) {
         let config = LightClientConfig {
             server: "0.0.0.0:0".to_string(),
             chain_name: "test".to_string(),
@@ -1738,29 +1738,34 @@ pub mod tests {
 
         let wallet = LightWallet::new(None, &config).unwrap();
 
-        const AMOUNT1:u64 = 50000;
-        // Address is encoded in bech32
-        let address = Some(encode_payment_address(wallet.config.hrp_sapling_address(),
-                                                  &wallet.extfvks[0].default_address().unwrap().1));
-
         let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
-        let (_, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
+        let (_, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), amount);
         wallet.scan_block(&cb1.as_bytes()).unwrap();
 
         // We have one note
         {
             let txs = wallet.txs.read().unwrap();
             assert_eq!(txs[&txid1].notes.len(), 1);
-            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].note.value, amount);
             assert_eq!(txs[&txid1].notes[0].spent, None);
             assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
         }
 
-        assert_eq!(wallet.verified_zbalance(None), AMOUNT1);
+        assert_eq!(wallet.verified_zbalance(None), amount);
+
 
         // Create a new block so that the note is now verified to be spent
         let cb2 = FakeCompactBlock::new(1, cb1.hash());
         wallet.scan_block(&cb2.as_bytes()).unwrap();
+
+
+        (wallet, config, txid1, cb2.hash())
+    }
+
+    #[test]
+    fn test_z_spend() {
+        const AMOUNT1: u64 = 50000;
+        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
         let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
         let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
@@ -1786,11 +1791,12 @@ pub mod tests {
             let txs = wallet.txs.read().unwrap();
 
             assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].is_change, false);
             assert_eq!(txs[&txid1].notes[0].spent, None);
             assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
         }
 
-        let mut cb3 = FakeCompactBlock::new(2, cb2.hash());
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
         cb3.add_tx(&sent_tx);
         wallet.scan_block(&cb3.as_bytes()).unwrap();
 
@@ -1805,6 +1811,7 @@ pub mod tests {
             // The sent tx should generate change
             assert_eq!(txs[&sent_txid].notes.len(), 1);
             assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
             assert_eq!(txs[&sent_txid].notes[0].spent, None);
             assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
         }
@@ -1815,11 +1822,174 @@ pub mod tests {
         // Check Outgoing Metadata
         {
             let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
+
             assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
 
             assert_eq!(txs[&sent_txid].outgoing_metadata[0].address, ext_address);
             assert_eq!(txs[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
             assert_eq!(txs[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+        }
+    }
+
+     #[test]
+    fn test_z_spend_to_taddr() {
+        const AMOUNT1: u64 = 50000;
+        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT1);
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+        
+        let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
+        const AMOUNT_SENT: u64 = 30;
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so, 
+                                            &taddr, AMOUNT_SENT, None).unwrap();
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+
+        // Now, the note should be unconfirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].is_change, false);
+            assert_eq!(txs[&txid1].notes[0].spent, None);
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
+        }
+
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+
+        // Now this new Spent tx should be in, so the note should be marked confirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The sent tx should generate change
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+        }
+
+        // Now, full scan the Tx, which should populate the Outgoing Meta data
+        wallet.scan_full_tx(&sent_tx, 2);
+
+        // Check Outgoing Metadata. There should be none, since it was sent to a taddr
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 0);
+            assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
+        }
+    }
+
+    #[test]
+    fn test_t_spend_to_z() {
+        let mut rng = OsRng;
+        let secp = Secp256k1::new();
+
+        const AMOUNT_Z: u64 = 50000;
+        const AMOUNT_T: u64 = 40000;
+        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT_Z);
+
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+
+        let mut tx = FakeTransaction::new(&mut rng);
+        tx.add_t_output(&pk, AMOUNT_T);
+        let txid_t = tx.get_tx().txid();
+
+        wallet.scan_full_tx(&tx.get_tx(), 1);  // Pretend it is at height 1
+
+        {
+            let txs = wallet.txs.read().unwrap();
+
+            // Now make sure the t addr was recieved
+            assert_eq!(txs[&txid_t].utxos.len(), 1);
+            assert_eq!(txs[&txid_t].utxos[0].address, taddr);
+            assert_eq!(txs[&txid_t].utxos[0].spent, None);
+            assert_eq!(txs[&txid_t].utxos[0].unconfirmed_spent, None);
+
+            assert_eq!(wallet.tbalance(None), AMOUNT_T);
+        }
+
+
+        let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+        let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                            &fvk.default_address().unwrap().1);
+        const AMOUNT_SENT: u64 = 20;
+
+        let outgoing_memo = "Outgoing Memo".to_string();
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+
+        // Create a tx and send to address. This should consume both the UTXO and the note
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &ext_address, AMOUNT_SENT, Some(outgoing_memo.clone())).unwrap();
+
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+
+        // Verify the sent_tx for sanity
+        {
+            // The tx has 1 note spent, 1 utxo spent, and (1 note out, 1 note change)
+            assert_eq!(sent_tx.shielded_spends.len(), 1);
+            assert_eq!(sent_tx.vin.len(), 1);
+            assert_eq!(sent_tx.shielded_outputs.len(), 2);
+        }
+
+        // Now, the note and utxo should be unconfirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+
+            // UTXO
+            assert_eq!(txs[&txid_t].utxos.len(), 1);
+            assert_eq!(txs[&txid_t].utxos[0].address, taddr);
+            assert_eq!(txs[&txid_t].utxos[0].spent, None);
+            assert_eq!(txs[&txid_t].utxos[0].unconfirmed_spent, Some(sent_txid));
+
+            // Note
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT_Z);
+            assert_eq!(txs[&txid1].notes[0].spent, None);
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
+        }
+
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+
+        // Scan the compact block and the full Tx
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 2);
+
+        // Now this new Spent tx should be in, so the note should be marked confirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT_Z);
+            assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The UTXO should also be spent
+            assert_eq!(txs[&txid_t].utxos[0].address, taddr);
+            assert_eq!(txs[&txid_t].utxos[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid_t].utxos[0].unconfirmed_spent, None);
+
+            // The sent tx should generate change
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT_Z + AMOUNT_T - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
         }
     }
 }
