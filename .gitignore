@@ -3,3 +3,4 @@ Cargo.lock
 .vscode/
 history.txt
 /.idea/
+tarpaulin-report.html
