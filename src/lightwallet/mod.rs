@@ -1992,4 +1992,44 @@ pub mod tests {
             assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
         }
     }
+
+     #[test]
+    fn test_z_incoming_memo() {
+        const AMOUNT1: u64 = 50000;
+        let (wallet, config, _txid1, block_hash) = get_test_wallet(AMOUNT1);
+
+        let my_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                            &wallet.extfvks[0].default_address().unwrap().1);
+
+        let memo = "Incoming Memo".to_string();
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+
+        // Create a tx and send to address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &my_address, AMOUNT1 - fee, Some(memo.clone())).unwrap();
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+
+        // Add it to a block
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+        // And scan the Full Tx to get the memo
+        wallet.scan_full_tx(&sent_tx, 2);
+
+        {
+            let txs = wallet.txs.read().unwrap();
+            
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+
+            assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.extfvks[0]);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - fee);
+            assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[0].memo), Some(memo));
+        }
+    }
+
 }
