@@ -38,9 +38,7 @@ use zcash_primitives::{
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 
-use crate::address;
-use crate::prover;
-use crate::LightClientConfig;
+use crate::{address, prover, LightClientConfig, utils};
 
 use sha2::{Sha256, Digest};
 
@@ -130,7 +128,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 1;
+        return 2;
     }
 
     fn get_sapling_params(config: &LightClientConfig) -> Result<(Vec<u8>, Vec<u8>), Error> {
@@ -250,6 +248,16 @@ impl LightWallet {
         })?;
         let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
 
+        // chain_name was added in v2
+        if version >= 2 {
+            let chain_name = utils::read_string(&mut reader)?;
+
+            if chain_name != config.chain_name {
+                return Err(Error::new(ErrorKind::InvalidData,
+                                      format!("Wallet chain name {} doesn't match expected {}", chain_name, config.chain_name)));
+            }
+        }
+
         Ok(LightWallet{
             seed:    seed_bytes,
             extsks:  extsks,
@@ -286,6 +294,8 @@ impl LightWallet {
                             w.write_all(&k.0)?;
                             v.write(w)
                         })?;
+        utils::write_string(&mut writer, &self.config.chain_name)?;
+
         Ok(())
     }
 
@@ -1839,12 +1849,12 @@ pub mod tests {
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
         let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
-        
+
         let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
         const AMOUNT_SENT: u64 = 30;
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-        let raw_tx = wallet.send_to_address(branch_id, &ss, &so, 
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
                                             &taddr, AMOUNT_SENT, None).unwrap();
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();
