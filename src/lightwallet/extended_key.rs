@@ -1,4 +1,3 @@
-use rand::Rng;
 use ring::{
     digest,
     hmac::{SigningContext, SigningKey},
@@ -26,32 +25,7 @@ pub enum KeyIndex {
 }
 
 impl KeyIndex {
-    /// Return raw index value
-    pub fn raw_index(self) -> u32 {
-        match self {
-            KeyIndex::Normal(i) => i,
-            KeyIndex::Hardened(i) => i,
-        }
-    }
-
-    /// Return normalize index, it will return index subtract 2 ** 31 for hardended key.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # extern crate hdwallet;
-    /// use hdwallet::KeyIndex;
-    ///
-    /// assert_eq!(KeyIndex::Normal(0).normalize_index(), 0);
-    /// assert_eq!(KeyIndex::Hardened(2_147_483_648).normalize_index(), 0);
-    /// ```
-    pub fn normalize_index(self) -> u32 {
-        match self {
-            KeyIndex::Normal(i) => i,
-            KeyIndex::Hardened(i) => i - HARDENED_KEY_START_INDEX,
-        }
-    }
-
+    
     /// Check index range.
     ///
     /// # Examples
@@ -144,30 +118,9 @@ pub struct ExtendedPrivKey {
     pub chain_code: ChainCode,
 }
 
-/// Indicate bits of random seed used to generate private key, 256 is recommended.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum KeySeed {
-    S128 = 128,
-    S256 = 256,
-    S512 = 512,
-}
 
 impl ExtendedPrivKey {
-    /// Generate an ExtendedPrivKey, use 256 size random seed.
-    pub fn random() -> Result<ExtendedPrivKey, Error> {
-        ExtendedPrivKey::random_with_seed_size(KeySeed::S256)
-    }
-    /// Generate an ExtendedPrivKey which use 128 or 256 or 512 bits random seed.
-    pub fn random_with_seed_size(seed_size: KeySeed) -> Result<ExtendedPrivKey, Error> {
-        let seed = {
-            let mut seed = vec![0u8; seed_size as usize / 8];
-            let mut rng = rand::thread_rng();
-            rng.fill(seed.as_mut_slice());
-            seed
-        };
-        Self::with_seed(&seed)
-    }
-
+    
     /// Generate an ExtendedPrivKey from seed
     pub fn with_seed(seed: &[u8]) -> Result<ExtendedPrivKey, Error> {
         let signature = {

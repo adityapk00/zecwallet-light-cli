@@ -4,7 +4,7 @@ use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Error, ErrorKind};
+use std::io::{Error, ErrorKind};
 
 use log::{info, warn, error};
 
