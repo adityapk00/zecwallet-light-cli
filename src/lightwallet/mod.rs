@@ -3,7 +3,6 @@ use std::io::{self, Read, Write};
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::fs::File;
 use std::io::{Error, ErrorKind};
 
 use log::{info, warn, error};
@@ -16,7 +15,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
 
 use zcash_client_backend::{
-    encoding::encode_payment_address,
+    encoding::{encode_payment_address, encode_extended_spending_key},
     proto::compact_formats::CompactBlock, welding_rig::scan_block,
 };
 
@@ -129,27 +128,6 @@ pub struct LightWallet {
 impl LightWallet {
     pub fn serialized_version() -> u64 {
         return 2;
-    }
-
-    fn get_sapling_params(config: &LightClientConfig) -> Result<(Vec<u8>, Vec<u8>), Error> {
-        // Read Sapling Params
-        let mut sapling_output = vec![];
-        let mut f = match File::open(config.get_params_path("sapling-output.params")) {
-            Ok(file) => file,
-            Err(_) => return Err(Error::new(ErrorKind::NotFound,
-                                            format!("Couldn't read {}", config.get_params_path("sapling-output.params").display())))
-        };
-        f.read_to_end(&mut sapling_output)?;
-
-        let mut sapling_spend = vec![];
-        let mut f = match File::open(config.get_params_path("sapling-spend.params")) {
-            Ok(file) => file,
-            Err(_) => return Err(Error::new(ErrorKind::NotFound,
-                                            format!("Couldn't read {}", config.get_params_path("sapling-spend.params").display())))
-        };
-        f.read_to_end(&mut sapling_spend)?;
-
-        Ok((sapling_spend, sapling_output))
     }
 
     fn get_pk_from_bip39seed(bip39seed: &[u8]) ->
@@ -304,6 +282,23 @@ impl LightWallet {
             Some(pa) => Some(encode_payment_address(self.config.hrp_sapling_address(), &pa)),
             None     => None
         }
+    }
+
+    // Get all z-address private keys. Returns a Vector of (address, privatekey)
+    pub fn get_z_private_keys(&self) -> Vec<(String, String)> {
+        self.extsks.iter().map(|sk| {
+            (encode_payment_address(self.config.hrp_sapling_address(),
+                                    &ExtendedFullViewingKey::from(sk).default_address().unwrap().1),
+             encode_extended_spending_key(self.config.hrp_sapling_private_key(), &sk)
+            )
+        }).collect::<Vec<(String, String)>>()
+    }
+
+    // Get all t-address private keys. Returns a Vector of (address, secretkey)
+    pub fn get_t_secret_keys(&self) -> Vec<(String, String)> {
+        self.tkeys.iter().map(|sk| {
+            (self.address_from_sk(sk), sk[..].to_base58check(&self.config.base58_secretkey_prefix(), &[0x01]))
+        }).collect::<Vec<(String, String)>>()
     }
 
     // Clears all the downloaded blocks and resets the state back to the inital block.
@@ -1116,6 +1111,8 @@ impl LightWallet {
 #[cfg(test)]
 pub mod tests {
     use std::convert::TryInto;
+    use std::fs::File;
+    use std::io::{Read, Error, ErrorKind};
     use ff::{Field, PrimeField, PrimeFieldRepr};
     use pairing::bls12_381::Bls12;
     use rand_core::{RngCore, OsRng};
@@ -1145,6 +1142,27 @@ pub mod tests {
     use super::LightWallet;
     use crate::LightClientConfig;
     use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
+
+    fn get_sapling_params(config: &LightClientConfig) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        // Read Sapling Params
+        let mut sapling_output = vec![];
+        let mut f = match File::open(config.get_params_path("sapling-output.params")) {
+            Ok(file) => file,
+            Err(_) => return Err(Error::new(ErrorKind::NotFound,
+                                            format!("Couldn't read {}", config.get_params_path("sapling-output.params").display())))
+        };
+        f.read_to_end(&mut sapling_output)?;
+
+        let mut sapling_spend = vec![];
+        let mut f = match File::open(config.get_params_path("sapling-spend.params")) {
+            Ok(file) => file,
+            Err(_) => return Err(Error::new(ErrorKind::NotFound,
+                                            format!("Couldn't read {}", config.get_params_path("sapling-spend.params").display())))
+        };
+        f.read_to_end(&mut sapling_spend)?;
+
+        Ok((sapling_spend, sapling_output))
+    }
 
     struct FakeCompactBlock {
         block: CompactBlock,
@@ -1787,7 +1805,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+        let (ss, so) = get_sapling_params(&config).unwrap();
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
@@ -1848,7 +1866,7 @@ pub mod tests {
         let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+        let (ss, so) = get_sapling_params(&config).unwrap();
 
         let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
         const AMOUNT_SENT: u64 = 30;
@@ -1941,7 +1959,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+        let (ss, so) = get_sapling_params(&config).unwrap();
 
         // Create a tx and send to address. This should consume both the UTXO and the note
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
@@ -2015,7 +2033,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = LightWallet::get_sapling_params(&config).unwrap();
+        let (ss, so) = get_sapling_params(&config).unwrap();
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,

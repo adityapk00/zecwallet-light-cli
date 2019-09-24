@@ -168,6 +168,37 @@ impl Command for AddressCommand {
     }
 }
 
+struct ExportCommand {}
+impl Command for ExportCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Export private key for wallet addresses.");
+        h.push("Usage:");
+        h.push("export [t-address or z-address]");
+        h.push("");
+        h.push("If no address is passed, private key for all addresses in the wallet are exported/");
+        h.push("");
+        h.push("Example:");
+        h.push("export ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Export private key for wallet addresses".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        if args.len() > 1 {
+            return self.help();
+        }
+
+        let address = if args.is_empty() { None } else { Some(args[0].to_string()) };
+
+        format!("{}", lightclient.do_export(address).pretty(2))
+    }
+}
+
 
 struct SendCommand {}
 impl Command for SendCommand {
@@ -352,6 +383,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("help".to_string(),      Box::new(HelpCommand{}));
     map.insert("balance".to_string(),   Box::new(BalanceCommand{}));
     map.insert("address".to_string(),   Box::new(AddressCommand{}));
+    map.insert("export".to_string(),    Box::new(ExportCommand{}));
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
     map.insert("send".to_string(),      Box::new(SendCommand{}));
     map.insert("save".to_string(),      Box::new(SaveCommand{}));

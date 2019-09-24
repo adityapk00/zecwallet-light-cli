@@ -63,7 +63,6 @@ impl LightClientConfig {
     }
 
     pub fn get_zcash_data_path(&self) -> Box<Path> {
-        
         let mut zcash_data_location; 
         if cfg!(target_os="macos") || cfg!(target_os="windows") {
             zcash_data_location = dirs::data_dir().expect("Couldn't determine app data directory!");
@@ -123,6 +122,15 @@ impl LightClientConfig {
         }
     }
 
+    pub fn hrp_sapling_private_key(&self) -> &str {
+        match &self.chain_name[..] {
+            "main"    => mainnet::HRP_SAPLING_EXTENDED_SPENDING_KEY,
+            "test"    => testnet::HRP_SAPLING_EXTENDED_SPENDING_KEY,
+            "regtest" => regtest::HRP_SAPLING_EXTENDED_SPENDING_KEY,
+            c         => panic!("Unknown chain {}", c)
+        }
+    }
+
     pub fn base58_pubkey_address(&self) -> [u8; 2] {
         match &self.chain_name[..] {
             "main"    => mainnet::B58_PUBKEY_ADDRESS_PREFIX,
@@ -138,6 +146,15 @@ impl LightClientConfig {
             "main"    => mainnet::B58_SCRIPT_ADDRESS_PREFIX,
             "test"    => testnet::B58_SCRIPT_ADDRESS_PREFIX,
             "regtest" => regtest::B58_SCRIPT_ADDRESS_PREFIX,
+            c         => panic!("Unknown chain {}", c)
+        }
+    }
+
+    pub fn base58_secretkey_prefix(&self) -> [u8; 1] {
+        match &self.chain_name[..] {
+            "main"    => [0x80],
+            "test"    => [0xEF],
+            "regtest" => [0xEF],
             c         => panic!("Unknown chain {}", c)
         }
     }
@@ -220,6 +237,41 @@ impl LightClient {
 
     pub fn last_scanned_height(&self) -> u64 {
         self.wallet.last_scanned_height() as u64
+    }
+
+    // Export private keys
+    pub fn do_export(&self, addr: Option<String>) -> json::JsonValue {
+        // Clone address so it can be moved into the closure
+        let address = addr.clone();
+
+        // Go over all z addresses
+        let z_keys = self.wallet.get_z_private_keys().iter()
+            .filter( move |(addr, _)| address.is_none() || address.as_ref() == Some(addr))
+            .map( |(addr, pk)|
+                object!{
+                    "address"     => addr.clone(),
+                    "private_key" => pk.clone()
+                }
+            ).collect::<Vec<JsonValue>>();
+
+        // Clone address so it can be moved into the closure
+        let address = addr.clone();
+
+        // Go over all t addresses
+        let t_keys = self.wallet.get_t_secret_keys().iter()
+            .filter( move |(addr, _)| address.is_none() || address.as_ref() == Some(addr))
+            .map( |(addr, sk)|
+                object!{
+                    "address"     => addr.clone(),
+                    "private_key" => sk.clone(),
+                }
+            ).collect::<Vec<JsonValue>>();
+
+        let mut all_keys = vec![];
+        all_keys.extend_from_slice(&z_keys);
+        all_keys.extend_from_slice(&t_keys);
+
+        all_keys.into()
     }
 
     pub fn do_address(&self) -> json::JsonValue {
