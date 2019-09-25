@@ -421,6 +421,9 @@ impl LightWallet {
             Some(TransparentAddress::PublicKey(hash)) => {
                 Some(hash.to_base58check(&self.config.base58_pubkey_address(), &[]))
             },
+            Some(TransparentAddress::Script(hash)) => {
+                Some(hash.to_base58check(&self.config.base58_script_address(), &[]))
+            },
             _ => None
         }
     }
@@ -604,7 +607,7 @@ impl LightWallet {
             match vout.script_pubkey.address() {
                 Some(TransparentAddress::PublicKey(hash)) => {
                     if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
-                        // This is out address. Add this as an output to the txid
+                        // This is our address. Add this as an output to the txid
                         self.add_toutput_to_wtx(height, &tx.txid(), &vout, n as u64);
                     }
                 },
@@ -614,6 +617,45 @@ impl LightWallet {
 
         // TODO: Scan t outputs if we spent t or z funds in this Tx, and add it to the
         // outgoing metadata
+        {
+            let total_shielded_value_spent = self.txs.read().unwrap().get(&tx.txid()).map_or(0, |wtx| wtx.total_shielded_value_spent);
+            if total_transparent_spend + total_shielded_value_spent > 0 {
+                // We spent money in this Tx, so grab all the transparent outputs (except ours) and add them to the
+                // outgoing metadata
+
+                // Collect our t-addresses
+                let wallet_taddrs = self.tkeys.iter()
+                        .map(|sk| self.address_from_sk(sk))
+                        .collect::<HashSet<String>>();
+
+                for vout in tx.vout.iter() {
+                    let taddr = self.address_from_pubkeyhash(vout.script_pubkey.address());
+
+                    if taddr.is_some() && !wallet_taddrs.contains(&taddr.clone().unwrap()) {
+                        let taddr = taddr.unwrap();
+
+                        // Add it to outgoing metadata
+                        let mut txs = self.txs.write().unwrap();
+                        if txs.get(&tx.txid()).unwrap().outgoing_metadata.iter()
+                            .find(|om|
+                                om.address == taddr && Amount::from_u64(om.value).unwrap() == vout.value)
+                            .is_some() {
+                            warn!("Duplicate outgoing metadata");
+                            continue;
+                        }
+
+                        // Write the outgoing metadata
+                        txs.get_mut(&tx.txid()).unwrap()
+                            .outgoing_metadata
+                            .push(OutgoingTxMetadata{
+                                address: taddr,
+                                value: vout.value.into(),
+                                memo: Memo::default(),
+                            });
+                    }
+                }
+            }
+        }
 
         // Scan shielded sapling outputs to see if anyone of them is us, and if it is, extract the memo
         for output in tx.shielded_outputs.iter() {
@@ -1921,10 +1963,12 @@ pub mod tests {
         // Now, full scan the Tx, which should populate the Outgoing Meta data
         wallet.scan_full_tx(&sent_tx, 2);
 
-        // Check Outgoing Metadata. There should be none, since it was sent to a taddr
+        // Check Outgoing Metadata for t address
         {
             let txs = wallet.txs.read().unwrap();
-            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 0);
+            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].address, taddr);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
             assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
         }
     }
