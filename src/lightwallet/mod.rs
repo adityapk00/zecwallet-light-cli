@@ -612,6 +612,9 @@ impl LightWallet {
             }
         }
 
+        // TODO: Scan t outputs if we spent t or z funds in this Tx, and add it to the
+        // outgoing metadata
+
         // Scan shielded sapling outputs to see if anyone of them is us, and if it is, extract the memo
         for output in tx.shielded_outputs.iter() {
             let ivks: Vec<_> = self.extfvks.iter().map(|extfvk| extfvk.fvk.vk.ivk()).collect();
@@ -692,6 +695,13 @@ impl LightWallet {
                         None => {}
                 };
             }
+        }
+
+        // Mark this Tx as scanned
+        {
+            let mut txs = self.txs.write().unwrap();
+            let mut wtx =  txs.get_mut(&tx.txid()).unwrap();
+            wtx.full_tx_scanned = true;
         }
     }
 

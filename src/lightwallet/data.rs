@@ -384,6 +384,8 @@ pub struct WalletTx {
 
     // All outgoing sapling sends to addresses outside this wallet
     pub outgoing_metadata: Vec<OutgoingTxMetadata>,
+
+    pub full_tx_scanned: bool,
 }
 
 impl WalletTx {
@@ -400,6 +402,7 @@ impl WalletTx {
             total_shielded_value_spent: 0,
             total_transparent_value_spent: 0,
             outgoing_metadata: vec![],
+            full_tx_scanned: false,
         }
     }
 
@@ -420,11 +423,15 @@ impl WalletTx {
         let total_shielded_value_spent = reader.read_u64::<LittleEndian>()?;
         let total_transparent_value_spent = reader.read_u64::<LittleEndian>()?;
 
-
         // Outgoing metadata was only added in version 2
         let outgoing_metadata = match version {
             1 => vec![],
             _ => Vector::read(&mut reader, |r| OutgoingTxMetadata::read(r))?
+        };
+
+        let full_tx_scanned = match version {
+            1 => false,
+            _ => reader.read_u8()? > 0,
         };
             
         Ok(WalletTx{
@@ -435,6 +442,7 @@ impl WalletTx {
             total_shielded_value_spent,
             total_transparent_value_spent,
             outgoing_metadata,
+            full_tx_scanned
         })
     }
 
@@ -453,6 +461,8 @@ impl WalletTx {
 
         // Write the outgoing metadata
         Vector::write(&mut writer, &self.outgoing_metadata, |w, om| om.write(w))?;
+
+        writer.write_u8(if self.full_tx_scanned {1} else {0})?;
 
         Ok(())
     }

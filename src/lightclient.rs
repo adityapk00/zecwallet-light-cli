@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
 use json::{object, JsonValue};
 
 use zcash_primitives::transaction::{TxId, Transaction};
-use zcash_primitives::note_encryption::Memo;
 use zcash_client_backend::{
     constants::testnet, constants::mainnet, constants::regtest, encoding::encode_payment_address,
 };
@@ -698,31 +697,11 @@ impl LightClient {
 
         // We need to first copy over the Txids from the wallet struct, because
         // we need to free the read lock from here (Because we'll self.wallet.txs later)
-        let txids_to_fetch: Vec<(TxId, i32)>;
-        {
-            // First, build a list of all the TxIDs and Memos that we need 
-            // to fetch. 
-            // 1. Get all (txid, Option<Memo>)
-            // 2. Filter out all txids where the Memo is None 
-            //     (Which means that particular txid was never fetched. Remember
-            //      that when memos are fetched, if they are empty, they become 
-            //      Some(f60000...)
-            let txids_and_memos = self.wallet.txs.read().unwrap().iter()
-                .flat_map( |(txid, wtx)| {  // flat_map because we're collecting vector of vectors
-                    wtx.notes.iter()
-                        .filter( |nd| nd.memo.is_none())                // only get if memo is None (i.e., it has not been fetched)
-                        .map( |nd| (txid.clone(), nd.memo.clone(), wtx.block) )    // collect (txid, memo, height) Clone everything because we want copies, so we can release the read lock
-                        .collect::<Vec<(TxId, Option<Memo>, i32)>>()         // convert to vector
-                })
-                .collect::<Vec<(TxId, Option<Memo>, i32)>>();
-                
-            //println!("{:?}", txids_and_memos);
-            // TODO: Assert that all the memos here are None
+        let txids_to_fetch: Vec<(TxId, i32)> = self.wallet.txs.read().unwrap().values()
+            .filter(|wtx| wtx.full_tx_scanned == false)
+            .map(|wtx| (wtx.txid, wtx.block))
+            .collect::<Vec<(TxId, i32)>>();
 
-            txids_to_fetch = txids_and_memos.iter()
-                .map( | (txid, _, h) | (txid.clone(), *h) )  // We're only interested in the txids, so drop the Memo, which is None anyway
-                .collect::<Vec<(TxId, i32)>>();            // and convert into Vec
-        }
         info!("Fetching {} new txids", txids_to_fetch.len());
 
         // And go and fetch the txids, getting the full transaction, so we can 
