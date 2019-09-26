@@ -183,7 +183,7 @@ impl LightClient {
         };
     }
 
-    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig) -> io::Result<Self> {
+    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
         let mut lc = if config.get_wallet_path().exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
@@ -202,7 +202,7 @@ impl LightClient {
             }
         } else {
             let l = LightClient {
-                wallet          : Arc::new(LightWallet::new(seed_phrase, config)?), 
+                wallet          : Arc::new(LightWallet::new(seed_phrase, config, latest_block)?),
                 config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
@@ -213,6 +213,7 @@ impl LightClient {
             l
         };
 
+        info!("Read wallet with birthday {}", lc.wallet.get_first_tx_block());
         
         // Read Sapling Params
         let mut f = match File::open(config.get_params_path("sapling-output.params")) {
@@ -368,8 +369,11 @@ impl LightClient {
         format!("{:?}", LightClient::get_info(uri))
     }
 
-    pub fn do_seed_phrase(&self) -> String {
-        self.wallet.get_seed_phrase()
+    pub fn do_seed_phrase(&self) -> JsonValue {
+        object!{
+            "seed"     => self.wallet.get_seed_phrase(),
+            "birthday" => self.wallet.get_birthday()
+        }
     }
 
     // Return a list of all notes, spent and unspent
