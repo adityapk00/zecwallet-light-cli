@@ -1461,11 +1461,7 @@ pub mod tests {
 
     #[test]
     fn z_balances() {
-        let wallet = LightWallet::new(None, &LightClientConfig {
-            server: "0.0.0.0:0".to_string(),
-            chain_name: "test".to_string(),
-            sapling_activation_height: 0
-        }).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
 
         const AMOUNT1:u64 = 5;
         // Address is encoded in bech32
@@ -1504,11 +1500,7 @@ pub mod tests {
 
     #[test]
     fn z_change_balances() {
-        let wallet = LightWallet::new(None, &LightClientConfig {
-            server: "0.0.0.0:0".to_string(),
-            chain_name: "test".to_string(),
-            sapling_activation_height: 0
-        }).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
 
         // First, add an incoming transaction
         const AMOUNT1:u64 = 5;
@@ -1557,11 +1549,7 @@ pub mod tests {
         let mut rng = OsRng;
         let secp = Secp256k1::new();
 
-        let wallet = LightWallet::new(None, &LightClientConfig {
-            server: "0.0.0.0:0".to_string(),
-            chain_name: "test".to_string(),
-            sapling_activation_height: 0
-        }).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
 
         let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
         let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
@@ -1627,11 +1615,7 @@ pub mod tests {
         let mut rng = OsRng;
         let secp = Secp256k1::new();
 
-        let wallet = LightWallet::new(None, &LightClientConfig {
-            server: "0.0.0.0:0".to_string(),
-            chain_name: "test".to_string(),
-            sapling_activation_height: 0
-        }).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
 
         let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
         let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
@@ -1698,11 +1682,7 @@ pub mod tests {
     #[test]
     fn test_serialization() {
         let secp = Secp256k1::new();
-        let config = LightClientConfig {
-            server: "0.0.0.0:0".to_string(),
-            chain_name: "test".to_string(),
-            sapling_activation_height: 0
-        };
+        let config = get_test_config();
 
         let wallet = LightWallet::new(None, &config).unwrap();
 
@@ -1808,13 +1788,18 @@ pub mod tests {
         }
     }
 
-    // Get a test wallet already setup with a single note
-    fn get_test_wallet(amount: u64) -> (LightWallet, LightClientConfig, TxId, BlockHash) {
-        let config = LightClientConfig {
+    fn get_test_config() -> LightClientConfig {
+        LightClientConfig {
             server: "0.0.0.0:0".to_string(),
             chain_name: "test".to_string(),
-            sapling_activation_height: 0
-        };
+            sapling_activation_height: 0,
+            consensus_branch_id: "000000".to_string(),
+        }
+    }
+
+    // Get a test wallet already setup with a single note
+    fn get_test_wallet(amount: u64) -> (LightWallet, LightClientConfig, TxId, BlockHash) {
+        let config = get_test_config();
 
         let wallet = LightWallet::new(None, &config).unwrap();
 

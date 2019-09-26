@@ -50,6 +50,7 @@ message LightdInfo {
     bool   taddrSupport = 3;
     string chainName = 4;
     uint64 saplingActivationHeight = 5;
+    string consensusBranchId = 6;   // This should really be u32 or []byte, but string for readability
 }
 
 message TransparentAddress {
@@ -59,15 +60,6 @@ message TransparentAddress {
 message TransparentAddressBlockFilter {
     string address = 1;
     BlockRange range = 2;
-}
-
-message Utxo {
-    TransparentAddress address = 1;
-    bytes txid = 2;
-    uint64 outputIndex = 3;
-    bytes script = 4;
-    uint64 value = 5;
-    uint64 height = 6;
 }
 
 service CompactTxStreamer {
@@ -81,7 +73,6 @@ service CompactTxStreamer {
     rpc SendTransaction(RawTransaction) returns (SendResponse) {}
 
     // t-Address support
-    rpc GetUtxos(TransparentAddress) returns (stream Utxo) {}
     rpc GetAddressTxids(TransparentAddressBlockFilter) returns (stream RawTransaction) {}
 
     // Misc

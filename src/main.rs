@@ -55,6 +55,7 @@ pub fn main() {
         server,
         chain_name                  : info.chain_name,
         sapling_activation_height   : info.sapling_activation_height,
+        consensus_branch_id         : info.consensus_branch_id,
     };
 
     let lightclient = match LightClient::new(seed, &config) {

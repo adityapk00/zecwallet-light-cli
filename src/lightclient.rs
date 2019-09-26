@@ -41,6 +41,7 @@ pub struct LightClientConfig {
     pub server                      : String,
     pub chain_name                  : String,
     pub sapling_activation_height   : u64,
+    pub consensus_branch_id         : String,
 }
 
 impl LightClientConfig {
@@ -724,7 +725,7 @@ impl LightClient {
     pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) -> String {
         info!("Creating transaction");
         let rawtx = self.wallet.send_to_address(
-            u32::from_str_radix("2bb40e60", 16).unwrap(),   // Blossom ID
+            u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(),   // Blossom ID
             &self.sapling_spend, &self.sapling_output,
             &addr, value, memo
         );
