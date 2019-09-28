@@ -15,7 +15,6 @@ http = "0.1"
 prost = "0.5"
 tokio = "0.1"
 tower-request-modifier = { git = "https://github.com/tower-rs/tower-http" }
-tower-hyper = "0.1"
 hyper = "0.12"
 tower-util = "0.1"
 hex = "0.3"
@@ -32,6 +31,14 @@ sha2 = "0.8.0"
 ripemd160 = "0.8.0"
 ring = "0.14.0"
 lazy_static = "1.2.0"
+tower-service = "0.2"
+tokio-rustls = "0.10.0-alpha.3"
+webpki = "0.19.1"
+webpki-roots = "0.16.0"
+tower-h2 = { git = "https://github.com/tower-rs/tower-h2" }
+openssl = "*"
+openssl-probe = "*"
+
 
 [dependencies.bellman]
 git = "https://github.com/adityapk00/librustzcash.git"
