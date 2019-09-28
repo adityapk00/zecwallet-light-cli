@@ -1495,7 +1495,7 @@ pub mod tests {
 
     #[test]
     fn z_balances() {
-        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
         const AMOUNT1:u64 = 5;
         // Address is encoded in bech32
@@ -1534,7 +1534,7 @@ pub mod tests {
 
     #[test]
     fn z_change_balances() {
-        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
         // First, add an incoming transaction
         const AMOUNT1:u64 = 5;
@@ -1583,7 +1583,7 @@ pub mod tests {
         let mut rng = OsRng;
         let secp = Secp256k1::new();
 
-        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
         let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
         let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
@@ -1649,7 +1649,7 @@ pub mod tests {
         let mut rng = OsRng;
         let secp = Secp256k1::new();
 
-        let wallet = LightWallet::new(None, &get_test_config()).unwrap();
+        let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
         let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
         let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
@@ -1718,7 +1718,7 @@ pub mod tests {
         let secp = Secp256k1::new();
         let config = get_test_config();
 
-        let wallet = LightWallet::new(None, &config).unwrap();
+        let wallet = LightWallet::new(None, &config, 0).unwrap();
 
         // First, add an incoming transaction
         const AMOUNT1:u64 = 5;
@@ -1835,7 +1835,7 @@ pub mod tests {
     fn get_test_wallet(amount: u64) -> (LightWallet, LightClientConfig, TxId, BlockHash) {
         let config = get_test_config();
 
-        let wallet = LightWallet::new(None, &config).unwrap();
+        let wallet = LightWallet::new(None, &config, 0).unwrap();
 
         let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
         let (_, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), amount);
