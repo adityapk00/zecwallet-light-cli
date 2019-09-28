@@ -121,6 +121,10 @@ pub struct LightWallet {
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
 
+    // The block at which this wallet was born. Rescans
+    // will start from here.
+    birthday: u64,
+
     // Non-serialized fields
     config: LightClientConfig,
 }
@@ -146,7 +150,7 @@ impl LightWallet {
         (extsk, extfvk, address)
     }
 
-    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig) -> io::Result<Self> {
+    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
         use rand::{FromEntropy, ChaChaRng, Rng};
 
         // This is the source entropy that corresponds to the 24-word seed phrase
@@ -181,14 +185,15 @@ impl LightWallet {
         let (extsk, extfvk, address) = LightWallet::get_pk_from_bip39seed(&bip39_seed.as_bytes());
 
         Ok(LightWallet {
-            seed:    seed_bytes,
-            extsks:  vec![extsk],
-            extfvks: vec![extfvk],
-            address: vec![address],
-            tkeys:   vec![tpk],
-            blocks:  Arc::new(RwLock::new(vec![])),
-            txs:     Arc::new(RwLock::new(HashMap::new())),
-            config:  config.clone(),
+            seed:     seed_bytes,
+            extsks:   vec![extsk],
+            extfvks:  vec![extfvk],
+            address:  vec![address],
+            tkeys:    vec![tpk],
+            blocks:   Arc::new(RwLock::new(vec![])),
+            txs:      Arc::new(RwLock::new(HashMap::new())),
+            config:   config.clone(),
+            birthday: latest_block,
         })
     }
 
@@ -236,15 +241,22 @@ impl LightWallet {
             }
         }
 
+        let birthday = if version >= 2 {
+            reader.read_u64::<LittleEndian>()?
+        } else {
+            0
+        };
+
         Ok(LightWallet{
             seed:    seed_bytes,
-            extsks:  extsks,
-            extfvks: extfvks,
+            extsks,
+            extfvks,
             address: addresses,
             tkeys:   vec![tpk],
             blocks:  Arc::new(RwLock::new(blocks)),
             txs:     Arc::new(RwLock::new(txs)),
             config:  config.clone(),
+            birthday,
         })
     }
 
@@ -274,6 +286,10 @@ impl LightWallet {
                         })?;
         utils::write_string(&mut writer, &self.config.chain_name)?;
 
+        // While writing the birthday, be sure that we're right, and that we don't
+        // have a tx that is before the current birthday
+        writer.write_u64::<LittleEndian>(self.get_birthday())?;
+
         Ok(())
     }
 
@@ -282,6 +298,24 @@ impl LightWallet {
             Some(pa) => Some(encode_payment_address(self.config.hrp_sapling_address(), &pa)),
             None     => None
         }
+    }
+
+    pub fn get_birthday(&self) -> u64 {
+        cmp::min(self.get_first_tx_block(), self.birthday)
+    }
+
+    // Get the first block that this wallet has a tx in. This is often used as the wallet's "birthday"
+    // If there are no Txns, then the actual birthday (which is recorder at wallet creation) is returned
+    // If no birthday was recorded, return the sapling activation height
+    pub fn get_first_tx_block(&self) -> u64 {
+        // Find the first transaction
+        let mut blocks = self.txs.read().unwrap().values()
+            .map(|wtx| wtx.block as u64)
+            .collect::<Vec<u64>>();
+        blocks.sort();
+
+        *blocks.first() // Returns optional
+            .unwrap_or(&cmp::max(self.birthday, self.config.sapling_activation_height))
     }
 
     // Get all z-address private keys. Returns a Vector of (address, privatekey)

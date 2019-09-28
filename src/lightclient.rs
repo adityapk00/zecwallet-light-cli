@@ -210,6 +210,10 @@ impl LightClientConfig {
                         "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
                         "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39"
                       )),
+            "main" => Some((600000,
+                        "00000000011502273e3726d1a229b69ae5088eeac650d787dcd5eabe1429ea38",
+                        "017d2849ae4eca1bb7a1c78369373c3234b0b2205aeec7186b83da5970fe78100201f9375bb13cb285488c932b2dee1220589f490d4d83239371c260c80d5ffe1624100183daeacfa7985762de7e4442b854a07dab147fc2c8893ee986a2fb3db452c568019238d6a0c7a927deab0faee225cd2199c19a98a0dc29782ba6fd3213fed55031000130794486a8b9d78638a1688c520dbf70da1a912e94417fd8c8dd2d6d8363946b0001b6055deb04e1f5f4b9acc22f5ab2533e44d092f124cad08c7f4200d63dee666401427466a1604032d2080811e6a2a8b509d171fd9108bc24ec14f2b27c6155851c012bab0a6072d49eaa35808b886c0e5a0ab60e4bd554fff56c408dfed91b0d2e1301421e61e5b6edb6680d7868499753dd4b5bc8e6c4f61cb62b868836e8c105b13f00019549565919c2177d57bc5034bc222d75ec3bf56723ea7e1eb7c70dcf662f3d5b000188204c256935d05a22ccf0c273619854917c3af44f78d35c766f44570dfce65b01de9f824df05c82e5eb33ef429b4316605910a8a4aa28750440a379dc1593b2460001754bb593ea42d231a7ddf367640f09bbf59dc00f2c1d2003cc340e0c016b5b13"
+            )),
             _ => None
         }
     }
@@ -291,7 +295,7 @@ impl LightClient {
         };
     }
 
-    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig) -> io::Result<Self> {
+    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
         let mut lc = if config.get_wallet_path().exists() {
             // Make sure that if a wallet exists, there is no seed phrase being attempted
             if !seed_phrase.is_none() {
@@ -310,7 +314,7 @@ impl LightClient {
             }
         } else {
             let l = LightClient {
-                wallet          : Arc::new(LightWallet::new(seed_phrase, config)?), 
+                wallet          : Arc::new(LightWallet::new(seed_phrase, config, latest_block)?),
                 config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
@@ -321,6 +325,7 @@ impl LightClient {
             l
         };
 
+        info!("Read wallet with birthday {}", lc.wallet.get_first_tx_block());
         
         // Read Sapling Params
         let mut f = match File::open(config.get_params_path("sapling-output.params")) {
@@ -479,8 +484,11 @@ impl LightClient {
         format!("{:?}", LightClient::get_info(uri))
     }
 
-    pub fn do_seed_phrase(&self) -> String {
-        self.wallet.get_seed_phrase()
+    pub fn do_seed_phrase(&self) -> JsonValue {
+        object!{
+            "seed"     => self.wallet.get_seed_phrase(),
+            "birthday" => self.wallet.get_birthday()
+        }
     }
 
     // Return a list of all notes, spent and unspent

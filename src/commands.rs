@@ -283,7 +283,7 @@ impl Command for SeedCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_seed_phrase()
+        format!("{}", lightclient.do_seed_phrase().pretty(2))
     }
 }
 

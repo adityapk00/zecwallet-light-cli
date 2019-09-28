@@ -58,12 +58,7 @@ pub fn main() {
         consensus_branch_id         : info.consensus_branch_id,
     };
 
-    let lightclient = match LightClient::new(seed, &config) {
-        Ok(lc) => Arc::new(lc),
-        Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
-    };
-
-    // Configure logging first.    
+    // Configure logging first.
     let logfile = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{l} -{d(%Y-%m-%d %H:%M:%S)}- {m}\n")))
         .build(config.get_log_path()).unwrap();
@@ -79,6 +74,12 @@ pub fn main() {
     info!(""); // Blank line
     info!("Starting ZecLite CLI");
     info!("Light Client config {:?}", config);
+
+    let lightclient = match LightClient::new(seed, &config, info.block_height) {
+        Ok(lc) => Arc::new(lc),
+        Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
+    };
+
 
     // At startup, run a sync
     let sync_update = lightclient.do_sync(true);
