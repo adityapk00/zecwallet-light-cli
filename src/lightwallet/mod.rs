@@ -1824,7 +1824,7 @@ pub mod tests {
 
     fn get_test_config() -> LightClientConfig {
         LightClientConfig {
-            server: "0.0.0.0:0".to_string(),
+            server: "0.0.0.0:0".parse().unwrap(),
             chain_name: "test".to_string(),
             sapling_activation_height: 0,
             consensus_branch_id: "000000".to_string(),
