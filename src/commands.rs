@@ -172,11 +172,12 @@ struct ExportCommand {}
 impl Command for ExportCommand {
     fn help(&self) -> String {
         let mut h = vec![];
-        h.push("Export private key for wallet addresses.");
+        h.push("Export private key for an individual wallet addresses.");
+        h.push("Note: To backup the whole wallet, use the 'seed' command insted");
         h.push("Usage:");
         h.push("export [t-address or z-address]");
         h.push("");
-        h.push("If no address is passed, private key for all addresses in the wallet are exported/");
+        h.push("If no address is passed, private key for all addresses in the wallet are exported.");
         h.push("");
         h.push("Example:");
         h.push("export ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d");
