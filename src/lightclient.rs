@@ -40,13 +40,15 @@ use crate::grpc_client::client::CompactTxStreamer;
 
 // Used below to return the grpc "Client" type to calling methods
 
-pub const DEFAULT_SERVER: &str = "http://3.15.168.203:9067";
+pub const DEFAULT_SERVER: &str = "https://lightd-test.zecwallet.co:443";
 pub const WALLET_NAME: &str    = "zeclite.wallet.dat";
 pub const LOGFILE_NAME: &str   = "zeclite.debug.log";
 
-
-
-struct Dst(SocketAddr);
+/// A Secure (https) grpc destination. If insecure=true, then it will not use TLS (eg. for local testing)
+struct Dst {
+    addr:       SocketAddr, 
+    host:       String,
+}
 
 impl tower_service::Service<()> for Dst {
     type Response = TlsStream<TcpStream>;
@@ -62,15 +64,16 @@ impl tower_service::Service<()> for Dst {
 
         config.alpn_protocols.push(b"h2".to_vec());
         config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        
         let config = Arc::new(config);
         let tls_connector = TlsConnector::from(config);
 
-        let addr_string_local = "lightd-test.zecwallet.co";
+        let addr_string_local = self.host.clone();
 
-        let domain = webpki::DNSNameRef::try_from_ascii_str(addr_string_local).unwrap();
+        let domain = webpki::DNSNameRef::try_from_ascii_str(&addr_string_local).unwrap();
         let domain_local = domain.to_owned();
-
-        let stream = TcpStream::connect(&self.0).and_then(move |sock| {
+ 
+        let stream = TcpStream::connect(&self.addr).and_then(move |sock| {
             sock.set_nodelay(true).unwrap();
             tls_connector.connect(domain_local.as_ref(), sock)
         })
@@ -111,18 +114,17 @@ impl tower_service::Service<()> for Dst {
 
 
 macro_rules! make_grpc_client {
-    () => {{
-        let uri: http::Uri = "https://lightd-test.zecwallet.co".parse().unwrap();
+    ($protocol:expr, $host:expr, $port:expr) => {{
+        let uri: http::Uri = format!("{}://{}", $protocol, $host).parse().unwrap();
 
-        //let addr = "3.15.168.203:9067"
-        let addr = "lightd-test.zecwallet.co:443"
+        let addr = format!("{}:{}", $host, $port)
             .to_socket_addrs()
             .unwrap()
             .next()
             .unwrap();
 
         let h2_settings = Default::default();
-        let mut make_client = tower_h2::client::Connect::new(Dst {0: addr}, h2_settings, DefaultExecutor::current());
+        let mut make_client = tower_h2::client::Connect::new(Dst {addr, host: $host.to_string()}, h2_settings, DefaultExecutor::current());
 
         make_client
             .make_service(())
@@ -146,7 +148,7 @@ macro_rules! make_grpc_client {
 
 #[derive(Clone, Debug)]
 pub struct LightClientConfig {
-    pub server                      : String,
+    pub server                      : http::Uri,
     pub chain_name                  : String,
     pub sapling_activation_height   : u64,
     pub consensus_branch_id         : String,
@@ -218,11 +220,11 @@ impl LightClientConfig {
         }
     }
 
-    pub fn get_server_or_default(server: Option<String>) -> String {
+    pub fn get_server_or_default(server: Option<String>) -> http::Uri {
         match server {
-            Some(s) => if s.starts_with("http://") {s} else { "http://".to_string() + &s}
+            Some(s) => if s.starts_with("http") {s} else { "http://".to_string() + &s}
             None    => DEFAULT_SERVER.to_string()
-        }
+        }.parse().unwrap()
     }
 
     pub fn hrp_sapling_address(&self) -> &str {
@@ -449,16 +451,15 @@ impl LightClient {
     }
 
     pub fn get_server_uri(&self) -> http::Uri {
-        self.config.server.parse().unwrap()
+        self.config.server.clone()
     }
 
     pub fn get_info(uri: http::Uri) -> LightdInfo {
         use std::cell::RefCell;
 
         let info = Arc::new(RefCell::<LightdInfo>::default());
-
         let info_inner = info.clone();
-        let runner = make_grpc_client!()
+        let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(move |mut client| {
                 client.get_lightd_info(Request::new(Empty{}))
                     .map_err(|e| {
@@ -862,7 +863,8 @@ impl LightClient {
 
     pub fn fetch_blocks<F : 'static + std::marker::Send>(&self, start_height: u64, end_height: u64, c: F)
         where F : Fn(&[u8]) {
-        let runner = make_grpc_client!()
+        let uri = self.get_server_uri();
+        let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(move |mut client| {
                 let bs = BlockId{ height: start_height, hash: vec!()};
                 let be = BlockId{ height: end_height,   hash: vec!()};
@@ -894,7 +896,8 @@ impl LightClient {
     pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(&self, address: String, 
         start_height: u64, end_height: u64,c: F)
             where F : Fn(&[u8], u64) {
-        let runner = make_grpc_client!()
+        let uri = self.get_server_uri();
+        let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(move |mut client| {
                 let start = Some(BlockId{ height: start_height, hash: vec!()});
                 let end   = Some(BlockId{ height: end_height,   hash: vec!()});
@@ -923,7 +926,8 @@ impl LightClient {
 
     pub fn fetch_full_tx<F : 'static + std::marker::Send>(&self, txid: TxId, c: F)
             where F : Fn(&[u8]) {
-        let runner = make_grpc_client!()
+        let uri = self.get_server_uri();
+        let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(move |mut client| {
                 let txfilter = TxFilter { block: None, index: 0, hash: txid.0.to_vec() };
                 client.get_transaction(Request::new(txfilter))
@@ -950,7 +954,8 @@ impl LightClient {
         let infostr = Arc::new(RefCell::<String>::default());
         let infostrinner = infostr.clone();
 
-        let runner = make_grpc_client!()
+        let uri = self.get_server_uri();
+        let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(move |mut client| {
                 client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0}))
                     .map_err(|e| {
@@ -976,9 +981,10 @@ impl LightClient {
         ans
     }
 
-    pub fn fetch_latest_block<F : 'static + std::marker::Send>(&self, mut c : F) 
+    pub fn fetch_latest_block<F : 'static + std::marker::Send>(&self,  mut c : F) 
         where F : FnMut(BlockId) {
-        let runner = make_grpc_client!()
+        let uri = self.get_server_uri();
+        let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(|mut client| {
                 client.get_latest_block(Request::new(ChainSpec {}))
                 .map_err(|e| {

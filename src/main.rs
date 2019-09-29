@@ -48,11 +48,11 @@ pub fn main() {
     let server = LightClientConfig::get_server_or_default(maybe_server);
 
     // Do a getinfo first, before opening the wallet
-    let info = LightClient::get_info(server.parse().unwrap());
+    let info = LightClient::get_info(server.clone());
 
     // Create a Light Client Config
     let config = lightclient::LightClientConfig {
-        server,
+        server                      : server.clone(),
         chain_name                  : info.chain_name,
         sapling_activation_height   : info.sapling_activation_height,
         consensus_branch_id         : info.consensus_branch_id,
