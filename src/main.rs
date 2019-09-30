@@ -131,7 +131,6 @@ pub fn main() {
 
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
-    let _ = rl.load_history("history.txt");
 
     println!("Ready!");
 
@@ -186,5 +185,5 @@ pub fn main() {
             }
         }
     }
-    rl.save_history("history.txt").unwrap();
+
 }
