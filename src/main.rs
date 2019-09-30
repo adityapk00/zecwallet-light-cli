@@ -135,7 +135,9 @@ pub fn main() {
     println!("Ready!");
 
     loop {
-        let readline = rl.readline(&format!("Block:{} (type 'help') >> ", lightclient.last_scanned_height()));
+        let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
+                                            config.chain_name,
+                                            lightclient.last_scanned_height()));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
