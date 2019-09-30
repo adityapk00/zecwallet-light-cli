@@ -1197,8 +1197,7 @@ impl LightWallet {
 #[cfg(test)]
 pub mod tests {
     use std::convert::TryInto;
-    use std::fs::File;
-    use std::io::{Read, Error, ErrorKind};
+    use std::io::{Error};
     use ff::{Field, PrimeField, PrimeFieldRepr};
     use pairing::bls12_381::Bls12;
     use rand_core::{RngCore, OsRng};
@@ -1230,7 +1229,7 @@ pub mod tests {
     use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
     use crate::SaplingParams;
 
-    fn get_sapling_params(config: &LightClientConfig) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    fn get_sapling_params() -> Result<(Vec<u8>, Vec<u8>), Error> {
         // Read Sapling Params
         let mut sapling_output = vec![];
         sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
@@ -1825,7 +1824,7 @@ pub mod tests {
     }
 
     // Get a test wallet already setup with a single note
-    fn get_test_wallet(amount: u64) -> (LightWallet, LightClientConfig, TxId, BlockHash) {
+    fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
         let config = get_test_config();
 
         let wallet = LightWallet::new(None, &config, 0).unwrap();
@@ -1845,19 +1844,17 @@ pub mod tests {
 
         assert_eq!(wallet.verified_zbalance(None), amount);
 
-
         // Create a new block so that the note is now verified to be spent
         let cb2 = FakeCompactBlock::new(1, cb1.hash());
         wallet.scan_block(&cb2.as_bytes()).unwrap();
 
-
-        (wallet, config, txid1, cb2.hash())
+        (wallet, txid1, cb2.hash())
     }
 
     #[test]
     fn test_z_spend() {
         const AMOUNT1: u64 = 50000;
-        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT1);
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
         let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
         let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
@@ -1869,7 +1866,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = get_sapling_params(&config).unwrap();
+        let (ss, so) =get_sapling_params().unwrap();
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
@@ -1927,10 +1924,10 @@ pub mod tests {
      #[test]
     fn test_z_spend_to_taddr() {
         const AMOUNT1: u64 = 50000;
-        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT1);
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = get_sapling_params(&config).unwrap();
+        let (ss, so) =get_sapling_params().unwrap();
 
         let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
         const AMOUNT_SENT: u64 = 30;
@@ -1992,7 +1989,7 @@ pub mod tests {
 
         const AMOUNT_Z: u64 = 50000;
         const AMOUNT_T: u64 = 40000;
-        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT_Z);
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT_Z);
 
         let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
         let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
@@ -2025,7 +2022,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = get_sapling_params(&config).unwrap();
+        let (ss, so) =get_sapling_params().unwrap();
 
         // Create a tx and send to address. This should consume both the UTXO and the note
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
@@ -2090,7 +2087,7 @@ pub mod tests {
      #[test]
     fn test_z_incoming_memo() {
         const AMOUNT1: u64 = 50000;
-        let (wallet, config, _txid1, block_hash) = get_test_wallet(AMOUNT1);
+        let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT1);
 
         let my_address = encode_payment_address(wallet.config.hrp_sapling_address(),
                             &wallet.extfvks[0].default_address().unwrap().1);
@@ -2099,7 +2096,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = get_sapling_params(&config).unwrap();
+        let (ss, so) =get_sapling_params().unwrap();
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
