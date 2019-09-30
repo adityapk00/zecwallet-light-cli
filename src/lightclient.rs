@@ -40,7 +40,7 @@ use crate::grpc_client::client::CompactTxStreamer;
 
 // Used below to return the grpc "Client" type to calling methods
 
-pub const DEFAULT_SERVER: &str = "https://lightd-test.zecwallet.co:443";
+pub const DEFAULT_SERVER: &str = "https://lightd-main.zecwallet.co:443";
 pub const WALLET_NAME: &str    = "zeclite.wallet.dat";
 pub const LOGFILE_NAME: &str   = "zeclite.debug.log";
 
