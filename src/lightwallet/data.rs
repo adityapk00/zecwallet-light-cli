@@ -363,14 +363,14 @@ impl OutgoingTxMetadata {
 pub struct WalletTx {
     pub block: i32,
 
-    // Txid of this transcation. It's duplicated here (It is also the Key in the HashMap that points to this
+    // Txid of this transaction. It's duplicated here (It is also the Key in the HashMap that points to this
     // WalletTx in LightWallet::txs)
     pub txid: TxId,
 
-    // List of all notes recieved in this tx. Some of these might be change notes.
+    // List of all notes received in this tx. Some of these might be change notes.
     pub notes: Vec<SaplingNoteData>,
 
-    // List of all Utxos recieved in this Tx. Some of these might be change notes
+    // List of all Utxos received in this Tx. Some of these might be change notes
     pub utxos: Vec<Utxo>,
 
     // Total shielded value spent in this Tx. Note that this is the value of the wallet's notes spent.
