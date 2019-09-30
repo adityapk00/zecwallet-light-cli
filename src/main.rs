@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate rust_embed;
+
 mod lightclient;
 mod lightwallet;
 mod address;
@@ -23,6 +26,10 @@ use clap::{Arg, App};
 pub mod grpc_client {
     include!(concat!(env!("OUT_DIR"), "/cash.z.wallet.sdk.rpc.rs"));
 }
+
+#[derive(RustEmbed)]
+#[folder = "zcash-params/"]
+pub struct SaplingParams;
 
 pub fn main() {
     // Get command line arguments

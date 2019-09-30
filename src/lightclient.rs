@@ -37,6 +37,7 @@ use zcash_client_backend::{
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
                          TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
 use crate::grpc_client::client::CompactTxStreamer;
+use crate::SaplingParams;
 
 // Used below to return the grpc "Client" type to calling methods
 
@@ -142,8 +143,6 @@ macro_rules! make_grpc_client {
     }};
 }
 
-
-
 #[derive(Clone, Debug)]
 pub struct LightClientConfig {
     pub server                      : http::Uri,
@@ -153,22 +152,6 @@ pub struct LightClientConfig {
 }
 
 impl LightClientConfig {
-    pub fn get_params_path(&self, name: &str) -> Box<Path> {
-        let mut params_location;
-
-        if cfg!(target_os="macos") || cfg!(target_os="windows") {
-            params_location  = dirs::data_dir()
-                .expect("Couldn't determine app data directory!");
-            params_location.push("ZcashParams");
-        } else {
-            params_location  = dirs::home_dir()
-                .expect("Couldn't determine home directory!");
-            params_location.push(".zcash-params");
-        };
-
-        params_location.push(name);
-        params_location.into_boxed_path()
-    }
 
     pub fn get_zcash_data_path(&self) -> Box<Path> {
         let mut zcash_data_location; 
@@ -335,19 +318,8 @@ impl LightClient {
         info!("Read wallet with birthday {}", lc.wallet.get_first_tx_block());
         
         // Read Sapling Params
-        let mut f = match File::open(config.get_params_path("sapling-output.params")) {
-            Ok(file) => file,
-            Err(_) => return Err(Error::new(ErrorKind::NotFound, 
-                            format!("Couldn't read {}", config.get_params_path("sapling-output.params").display())))
-        };
-        f.read_to_end(&mut lc.sapling_output)?;
-        
-        let mut f = match File::open(config.get_params_path("sapling-spend.params")) {
-            Ok(file) => file,
-            Err(_) => return Err(Error::new(ErrorKind::NotFound, 
-                            format!("Couldn't read {}", config.get_params_path("sapling-spend.params").display())))
-        };
-        f.read_to_end(&mut lc.sapling_spend)?;
+        lc.sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
+        lc.sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
 
         info!("Created LightClient to {}", &config.server);
         println!("Lightclient connecting to {}", config.server);

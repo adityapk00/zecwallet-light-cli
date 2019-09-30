@@ -1228,24 +1228,17 @@ pub mod tests {
     use super::LightWallet;
     use crate::LightClientConfig;
     use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
+    use crate::SaplingParams;
 
     fn get_sapling_params(config: &LightClientConfig) -> Result<(Vec<u8>, Vec<u8>), Error> {
         // Read Sapling Params
         let mut sapling_output = vec![];
-        let mut f = match File::open(config.get_params_path("sapling-output.params")) {
-            Ok(file) => file,
-            Err(_) => return Err(Error::new(ErrorKind::NotFound,
-                                            format!("Couldn't read {}", config.get_params_path("sapling-output.params").display())))
-        };
-        f.read_to_end(&mut sapling_output)?;
+        sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
+        println!("Read output {}", sapling_output.len());
 
         let mut sapling_spend = vec![];
-        let mut f = match File::open(config.get_params_path("sapling-spend.params")) {
-            Ok(file) => file,
-            Err(_) => return Err(Error::new(ErrorKind::NotFound,
-                                            format!("Couldn't read {}", config.get_params_path("sapling-spend.params").display())))
-        };
-        f.read_to_end(&mut sapling_spend)?;
+        sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
+        println!("Read output {}", sapling_spend.len());
 
         Ok((sapling_spend, sapling_output))
     }
