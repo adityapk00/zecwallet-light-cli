@@ -383,7 +383,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("rescan".to_string(),    Box::new(RescanCommand{}));
     map.insert("help".to_string(),      Box::new(HelpCommand{}));
     map.insert("balance".to_string(),   Box::new(BalanceCommand{}));
-    map.insert("address".to_string(),   Box::new(AddressCommand{}));
+    map.insert("addresses".to_string(), Box::new(AddressCommand{}));
     map.insert("export".to_string(),    Box::new(ExportCommand{}));
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
     map.insert("send".to_string(),      Box::new(SendCommand{}));
