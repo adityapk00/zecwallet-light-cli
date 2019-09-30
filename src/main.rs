@@ -47,8 +47,20 @@ pub fn main() {
 
     let server = LightClientConfig::get_server_or_default(maybe_server);
 
+    // Test to make sure the server has all of scheme, host and port
+    if server.scheme_str().is_none() || server.host().is_none() || server.port_part().is_none() {
+        eprintln!("Please provide the --server parameter as [scheme]://[host]:[port].\nYou provided: {}", server);
+        return;
+    }
+
     // Do a getinfo first, before opening the wallet
-    let info = LightClient::get_info(server.clone());
+    let info = match LightClient::get_info(server.clone()) {
+        Ok(ld) => ld,
+        Err(e) => {
+            eprintln!("Error:\n{}\nCouldn't get server info, quitting!", e);
+            return;
+        }
+    };
 
     // Create a Light Client Config
     let config = lightclient::LightClientConfig {

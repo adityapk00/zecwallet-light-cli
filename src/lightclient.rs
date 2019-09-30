@@ -44,7 +44,7 @@ pub const DEFAULT_SERVER: &str = "https://lightd-test.zecwallet.co:443";
 pub const WALLET_NAME: &str    = "zeclite.wallet.dat";
 pub const LOGFILE_NAME: &str   = "zeclite.debug.log";
 
-/// A Secure (https) grpc destination. If insecure=true, then it will not use TLS (eg. for local testing)
+/// A Secure (https) grpc destination.
 struct Dst {
     addr:       SocketAddr, 
     host:       String,
@@ -112,7 +112,6 @@ impl tower_service::Service<()> for Dst {
 //     }
 // }
 
-
 macro_rules! make_grpc_client {
     ($protocol:expr, $host:expr, $port:expr) => {{
         let uri: http::Uri = format!("{}://{}", $protocol, $host).parse().unwrap();
@@ -128,9 +127,7 @@ macro_rules! make_grpc_client {
 
         make_client
             .make_service(())
-            .map_err(|e| {
-                eprintln!("HTTP/2 connection failed; err={:?}", e);
-            })
+            .map_err(|e| { format!("HTTP/2 connection failed; err={:?}", e) })
             .and_then(move |conn| {
                 let conn = tower_request_modifier::Builder::new()
                     .set_origin(uri)
@@ -140,10 +137,11 @@ macro_rules! make_grpc_client {
                 CompactTxStreamer::new(conn)
                     // Wait until the client is ready...
                     .ready()
-                    .map_err(|e| eprintln!("client closed: {:?}", e))
+                    .map_err(|e| { format!("client closed: {:?}", e) })
             })
     }};
 }
+
 
 
 #[derive(Clone, Debug)]
@@ -222,7 +220,14 @@ impl LightClientConfig {
 
     pub fn get_server_or_default(server: Option<String>) -> http::Uri {
         match server {
-            Some(s) => if s.starts_with("http") {s} else { "http://".to_string() + &s}
+            Some(s) => {
+                let mut s = if s.starts_with("http") {s} else { "http://".to_string() + &s};
+                let uri: http::Uri = s.parse().unwrap();
+                if uri.port_part().is_none() {
+                    s = s + ":443";
+                }
+                s
+            }
             None    => DEFAULT_SERVER.to_string()
         }.parse().unwrap()
     }
@@ -454,31 +459,22 @@ impl LightClient {
         self.config.server.clone()
     }
 
-    pub fn get_info(uri: http::Uri) -> LightdInfo {
-        use std::cell::RefCell;
-
-        let info = Arc::new(RefCell::<LightdInfo>::default());
-        let info_inner = info.clone();
+    pub fn get_info(uri: http::Uri) -> Result<LightdInfo, String> {
         let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(move |mut client| {
                 client.get_lightd_info(Request::new(Empty{}))
                     .map_err(|e| {
-                        println!("ERR = {:?}", e);
+                        format!("ERR = {:?}", e)
                     })
                     .and_then(move |response| {
-                        info_inner.replace(response.into_inner());
-
-                        Ok(())
+                        Ok(response.into_inner())
                     })
                     .map_err(|e| {
-                        println!("ERR = {:?}", e);
+                        format!("ERR = {:?}", e)
                     })
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner).unwrap();
-        let ans = info.borrow().clone();
-
-        ans
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner)
     }
 
     pub fn do_info(uri: http::Uri) -> String {
@@ -851,7 +847,10 @@ impl LightClient {
         );
         
         match rawtx {
-            Some(txbytes)   => self.broadcast_raw_tx(txbytes),
+            Some(txbytes)   => match self.broadcast_raw_tx(txbytes) {
+                Ok(k)  => k,
+                Err(e) => e,
+            },
             None            => format!("No Tx to broadcast")
         }
     }
@@ -859,7 +858,6 @@ impl LightClient {
     // ==============
     // GRPC code
     // ==============
-
 
     pub fn fetch_blocks<F : 'static + std::marker::Send>(&self, start_height: u64, end_height: u64, c: F)
         where F : Fn(&[u8]) {
@@ -873,7 +871,7 @@ impl LightClient {
                 client
                     .get_block_range(br)
                     .map_err(|e| {
-                        eprintln!("RouteChat request failed; err={:?}", e);
+                        format!("RouteChat request failed; err={:?}", e)
                     })
                     .and_then(move |response| {
                         let inbound = response.into_inner();
@@ -886,11 +884,17 @@ impl LightClient {
 
                             Ok(())
                         })
-                        .map_err(|e| eprintln!("gRPC inbound stream error: {:?}", e))                    
+                        .map_err(|e| format!("gRPC inbound stream error: {:?}", e))
                     })
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner).unwrap();
+        match tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner) {
+            Ok(_)  => {}, // The result is processed in callbacks, so nothing to do here
+            Err(e) => {
+                error!("Error while executing fetch_blocks: {}", e);
+                eprintln!("{}", e);
+            }
+        };
     }
 
     pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(&self, address: String, 
@@ -907,7 +911,7 @@ impl LightClient {
                 client
                     .get_address_txids(br)
                     .map_err(|e| {
-                        eprintln!("RouteChat request failed; err={:?}", e);
+                        format!("RouteChat request failed; err={:?}", e)
                     })
                     .and_then(move |response| {
                         let inbound = response.into_inner();
@@ -917,11 +921,17 @@ impl LightClient {
 
                             Ok(())
                         })
-                        .map_err(|e| eprintln!("gRPC inbound stream error: {:?}", e))                    
+                        .map_err(|e| format!("gRPC inbound stream error: {:?}", e))
                     })
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner).unwrap();
+        match tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner) {
+            Ok(_)  => {}, // The result is processed in callbacks, so nothing to do here
+            Err(e) => {
+                error!("Error while executing fetch_transparent_txids: {}", e);
+                eprintln!("{}", e);
+            }
+        };
     }
 
     pub fn fetch_full_tx<F : 'static + std::marker::Send>(&self, txid: TxId, c: F)
@@ -932,53 +942,45 @@ impl LightClient {
                 let txfilter = TxFilter { block: None, index: 0, hash: txid.0.to_vec() };
                 client.get_transaction(Request::new(txfilter))
                      .map_err(|e| {
-                        eprintln!("RouteChat request failed; err={:?}", e);
+                        format!("RouteChat request failed; err={:?}", e)
                     })
                     .and_then(move |response| {
-                        //let tx = Transaction::read(&response.into_inner().data[..]).unwrap();
                         c(&response.into_inner().data);
 
                         Ok(())
                     })
-                    .map_err(|e| {
-                        println!("ERR = {:?}", e);
-                    })
+                    .map_err(|e| { format!("ERR = {:?}", e) })
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner).unwrap();
+        match tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner) {
+            Ok(_)  => {}, // The result is processed in callbacks, so nothing to do here
+            Err(e) => {
+                error!("Error while executing fetch_full_tx: {}", e);
+                eprintln!("{}", e);
+            }
+        };
     }
 
-    pub fn broadcast_raw_tx(&self, tx_bytes: Box<[u8]>) -> String {
-        use std::cell::RefCell;
-
-        let infostr = Arc::new(RefCell::<String>::default());
-        let infostrinner = infostr.clone();
-
+    pub fn broadcast_raw_tx(&self, tx_bytes: Box<[u8]>) -> Result<String, String> {
         let uri = self.get_server_uri();
         let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(move |mut client| {
                 client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0}))
                     .map_err(|e| {
-                        println!("ERR = {:?}", e);
+                        format!("ERR = {:?}", e)
                     })
                     .and_then(move |response| {
                         let sendresponse = response.into_inner();
                         if sendresponse.error_code == 0 {
-                            infostrinner.replace(format!("Successfully broadcast Tx: {}", sendresponse.error_message));
+                            Ok(format!("Successfully broadcast Tx: {}", sendresponse.error_message))
                         } else {
-                            infostrinner.replace(format!("Error: {:?}", sendresponse));
+                            Err(format!("Error: {:?}", sendresponse))
                         }
-                        Ok(())
                     })
-                    .map_err(|e| {
-                        println!("ERR = {:?}", e);
-                    })
+                    .map_err(|e| { format!("ERR = {:?}", e) })
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner).unwrap();
-
-        let ans = infostr.borrow().clone();
-        ans
+        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner)
     }
 
     pub fn fetch_latest_block<F : 'static + std::marker::Send>(&self,  mut c : F) 
@@ -987,19 +989,21 @@ impl LightClient {
         let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
             .and_then(|mut client| {
                 client.get_latest_block(Request::new(ChainSpec {}))
-                .map_err(|e| {
-                    println!("ERR = {:?}", e);
-                })
+                .map_err(|e| { format!("ERR = {:?}", e) })
                 .and_then(move |response| {
                     c(response.into_inner());
                     Ok(())
                 })
-                .map_err(|e| {
-                    println!("ERR = {:?}", e);
-                })
+                .map_err(|e| { format!("ERR = {:?}", e) })
             });
 
-        tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner).unwrap();
+        match tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner) {
+            Ok(_)  => {}, // The result is processed in callbacks, so nothing to do here
+            Err(e) => {
+                error!("Error while executing fetch_latest_block: {}", e);
+                eprintln!("{}", e);
+            }
+        };
     }
     
 }
