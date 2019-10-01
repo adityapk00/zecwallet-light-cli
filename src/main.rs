@@ -126,6 +126,7 @@ pub fn main() {
                 },
                 Err(_) => {
                     // Timeout. Do a sync to keep the wallet up-to-date. False to whether to print updates on the console
+                    info!("Timeout, doing a sync");
                     lc.do_sync(false);
                 }
             }

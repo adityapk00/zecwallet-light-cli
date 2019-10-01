@@ -660,7 +660,7 @@ impl LightClient {
         // 2. Get all the blocks that we don't have
         // 3. Find all new Txns that don't have the full Tx, and get them as full transactions 
         //    and scan them, mainly to get the memos
-        let mut last_scanned_height = self.wallet.last_scanned_height() as u64;        
+        let mut last_scanned_height = self.wallet.last_scanned_height() as u64;
 
         // This will hold the latest block fetched from the RPC
         let latest_block_height = Arc::new(AtomicU64::new(0));
@@ -677,6 +677,7 @@ impl LightClient {
 
         // If there's nothing to scan, just return
         if last_scanned_height == latest_block {
+            info!("Nothing to sync, returning");
             return "".to_string();
         }
 
@@ -691,6 +692,7 @@ impl LightClient {
             let local_bytes_downloaded = bytes_downloaded.clone();
 
             let start_height = last_scanned_height + 1;
+            info!("Start height is {}", start_height);
 
             // Show updates only if we're syncing a lot of blocks
             if print_updates && end_height - start_height > 100 {
