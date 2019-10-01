@@ -65,7 +65,7 @@ impl tower_service::Service<()> for Dst {
 
         config.alpn_protocols.push(b"h2".to_vec());
         config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
-        
+
         let config = Arc::new(config);
         let tls_connector = TlsConnector::from(config);
 
@@ -73,7 +73,7 @@ impl tower_service::Service<()> for Dst {
 
         let domain = webpki::DNSNameRef::try_from_ascii_str(&addr_string_local).unwrap();
         let domain_local = domain.to_owned();
- 
+
         let stream = TcpStream::connect(&self.addr).and_then(move |sock| {
             sock.set_nodelay(true).unwrap();
             tls_connector.connect(domain_local.as_ref(), sock)
@@ -101,10 +101,7 @@ impl tower_service::Service<()> for Dst {
 //         config.alpn_protocols.push(b"h2".to_vec());
 //         config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
 //
-//         let addr_string_local = "mydomain.com".to_string();
-//         let addr = addr_string_local.as_str();
-//
-//         let stream = TcpStream::connect(&self.0)
+//         let stream = TcpStream::connect(&self.addr)
 //             .and_then(move |sock| {
 //                 sock.set_nodelay(true).unwrap();
 //                 Ok(sock)
@@ -149,6 +146,7 @@ pub struct LightClientConfig {
     pub chain_name                  : String,
     pub sapling_activation_height   : u64,
     pub consensus_branch_id         : String,
+    pub anchor_offset               : u32,
 }
 
 impl LightClientConfig {
@@ -193,9 +191,9 @@ impl LightClientConfig {
                         "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
                         "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39"
                       )),
-            "main" => Some((600000,
-                        "00000000011502273e3726d1a229b69ae5088eeac650d787dcd5eabe1429ea38",
-                        "017d2849ae4eca1bb7a1c78369373c3234b0b2205aeec7186b83da5970fe78100201f9375bb13cb285488c932b2dee1220589f490d4d83239371c260c80d5ffe1624100183daeacfa7985762de7e4442b854a07dab147fc2c8893ee986a2fb3db452c568019238d6a0c7a927deab0faee225cd2199c19a98a0dc29782ba6fd3213fed55031000130794486a8b9d78638a1688c520dbf70da1a912e94417fd8c8dd2d6d8363946b0001b6055deb04e1f5f4b9acc22f5ab2533e44d092f124cad08c7f4200d63dee666401427466a1604032d2080811e6a2a8b509d171fd9108bc24ec14f2b27c6155851c012bab0a6072d49eaa35808b886c0e5a0ab60e4bd554fff56c408dfed91b0d2e1301421e61e5b6edb6680d7868499753dd4b5bc8e6c4f61cb62b868836e8c105b13f00019549565919c2177d57bc5034bc222d75ec3bf56723ea7e1eb7c70dcf662f3d5b000188204c256935d05a22ccf0c273619854917c3af44f78d35c766f44570dfce65b01de9f824df05c82e5eb33ef429b4316605910a8a4aa28750440a379dc1593b2460001754bb593ea42d231a7ddf367640f09bbf59dc00f2c1d2003cc340e0c016b5b13"
+            "main" => Some((610000,
+                        "000000000218882f481e3b49ca3df819734b8d74aac91f69e848d7499b34b472",
+                        "0192943f1eca6525cea7ea8e26b37c792593ed50cfe2be7a1ff551a08dc64b812f001000000001deef7ae5162a9942b4b9aa797137c5bdf60750e9548664127df99d1981dda66901747ad24d5daf294ce2a27aba923e16e52e7348eea3048c5b5654b99ab0a371200149d8aff830305beb3887529f6deb150ab012916c3ce88a6b47b78228f8bfeb3f01ff84a89890cfae65e0852bc44d9aa82be2c5d204f5aebf681c9e966aa46f540e000001d58f1dfaa9db0996996129f8c474acb813bfed452d347fb17ebac2e775e209120000000001319312241b0031e3a255b0d708750b4cb3f3fe79e3503fe488cc8db1dd00753801754bb593ea42d231a7ddf367640f09bbf59dc00f2c1d2003cc340e0c016b5b13"
             )),
             _ => None
         }

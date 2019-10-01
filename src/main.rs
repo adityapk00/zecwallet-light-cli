@@ -31,6 +31,8 @@ pub mod grpc_client {
 #[folder = "zcash-params/"]
 pub struct SaplingParams;
 
+const ANCHOR_OFFSET: u32 = 4;
+
 pub fn main() {
     // Get command line arguments
     let matches = App::new("ZecLite CLI")
@@ -75,6 +77,7 @@ pub fn main() {
         chain_name                  : info.chain_name,
         sapling_activation_height   : info.sapling_activation_height,
         consensus_branch_id         : info.consensus_branch_id,
+        anchor_offset               : ANCHOR_OFFSET,
     };
 
     // Configure logging first.

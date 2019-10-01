@@ -46,7 +46,6 @@ pub mod extended_key;
 
 use extended_key::{KeyIndex, ExtendedPrivKey};
 
-const ANCHOR_OFFSET: u32 = 4;
 pub const MAX_REORG: usize = 100;
 
 fn now() -> f64 {
@@ -419,7 +418,7 @@ impl LightWallet {
                 // Select an anchor ANCHOR_OFFSET back from the target block,
                 // unless that would be before the earliest block we have.
                 let anchor_height =
-                    cmp::max(target_height.saturating_sub(ANCHOR_OFFSET), min_height);
+                    cmp::max(target_height.saturating_sub(self.config.anchor_offset), min_height);
 
                 Some((target_height, (target_height - anchor_height) as usize))
             }
@@ -1115,7 +1114,7 @@ impl LightWallet {
         if selected_value < u64::from(target_value) {
             eprintln!(
                 "Insufficient verified funds (have {}, need {:?}).\n Note, funds need {} confirmations before they can be spent",
-                selected_value, target_value, ANCHOR_OFFSET
+                selected_value, target_value, self.config.anchor_offset
             );
             return None;
         }
@@ -1134,7 +1133,16 @@ impl LightWallet {
                 return None;
             }
         }
- 
+
+        // If no Sapling notes were added, add the change address manually. That is,
+        // send the change to our sapling address manually. Note that if a sapling note was spent,
+        // the builder will automatically send change to that address
+        if notes.len() == 0 {
+            builder.send_change_to(
+                ExtendedFullViewingKey::from(&self.extsks[0]).fvk.ovk,
+                self.extsks[0].default_address().unwrap().1);
+        }
+
         // Compute memo if it exists
         let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap() );
 
@@ -1820,6 +1828,7 @@ pub mod tests {
             chain_name: "test".to_string(),
             sapling_activation_height: 0,
             consensus_branch_id: "000000".to_string(),
+            anchor_offset: 1
         }
     }
 
