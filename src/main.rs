@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate rust_embed;
+
 mod lightclient;
 mod lightwallet;
 mod address;
@@ -24,6 +27,10 @@ pub mod grpc_client {
     include!(concat!(env!("OUT_DIR"), "/cash.z.wallet.sdk.rpc.rs"));
 }
 
+#[derive(RustEmbed)]
+#[folder = "zcash-params/"]
+pub struct SaplingParams;
+
 pub fn main() {
     // Get command line arguments
     let matches = App::new("ZecLite CLI")
@@ -47,8 +54,20 @@ pub fn main() {
 
     let server = LightClientConfig::get_server_or_default(maybe_server);
 
+    // Test to make sure the server has all of scheme, host and port
+    if server.scheme_str().is_none() || server.host().is_none() || server.port_part().is_none() {
+        eprintln!("Please provide the --server parameter as [scheme]://[host]:[port].\nYou provided: {}", server);
+        return;
+    }
+
     // Do a getinfo first, before opening the wallet
-    let info = LightClient::get_info(server.clone());
+    let info = match LightClient::get_info(server.clone()) {
+        Ok(ld) => ld,
+        Err(e) => {
+            eprintln!("Error:\n{}\nCouldn't get server info, quitting!", e);
+            return;
+        }
+    };
 
     // Create a Light Client Config
     let config = lightclient::LightClientConfig {
@@ -112,12 +131,13 @@ pub fn main() {
 
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
-    let _ = rl.load_history("history.txt");
 
     println!("Ready!");
 
     loop {
-        let readline = rl.readline(&format!("Block:{} (type 'help') >> ", lightclient.last_scanned_height()));
+        let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
+                                            config.chain_name,
+                                            lightclient.last_scanned_height()));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
@@ -167,5 +187,5 @@ pub fn main() {
             }
         }
     }
-    rl.save_history("history.txt").unwrap();
+
 }
