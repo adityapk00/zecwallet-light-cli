@@ -1857,7 +1857,6 @@ pub mod tests {
         let cb2 = FakeCompactBlock::new(1, cb1.hash());
         wallet.scan_block(&cb2.as_bytes()).unwrap();
 
-
         (wallet, config, txid1, cb2.hash())
     }
 
@@ -2133,4 +2132,164 @@ pub mod tests {
         }
     }
 
+     #[test]
+    fn test_z_to_t_withinwallet() {
+        const AMOUNT: u64 = 500000;
+        const AMOUNT_SENT: u64 = 20000;
+        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT);
+
+        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = get_sapling_params(&config).unwrap();
+
+        // Create a tx and send to address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &taddr, AMOUNT_SENT, None).unwrap();
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+
+        // Add it to a block
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+        // And scan the Full Tx to get the memo
+        wallet.scan_full_tx(&sent_tx, 2);
+
+        {
+            let txs = wallet.txs.read().unwrap();
+            
+            // We have the original note
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+            
+            // We have the spent tx
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+
+            // Since we sent the Tx to ourself, there should be no outgoing 
+            // metadata
+            assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT);
+            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 0);
+
+
+            // We have the taddr utxo in the same Tx
+            assert_eq!(txs[&sent_txid].utxos.len(), 1);
+            assert_eq!(txs[&sent_txid].utxos[0].address, taddr);
+            assert_eq!(txs[&sent_txid].utxos[0].value, AMOUNT_SENT);
+            assert_eq!(txs[&sent_txid].utxos[0].spent, None);
+            assert_eq!(txs[&sent_txid].utxos[0].unconfirmed_spent, None);
+
+        }
+    }
+
+    #[test]
+    fn test_rollback() {
+        const AMOUNT: u64 = 500000;
+
+        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT);
+
+        let add_blocks = |start: i32, num: i32, mut prev_hash: BlockHash| {
+            // Add it to a block
+            let mut new_blk;
+            for i in 0..num {
+                new_blk = FakeCompactBlock::new(start+i, prev_hash);
+                prev_hash = new_blk.hash();
+                match wallet.scan_block(&new_blk.as_bytes()) {
+                    Ok(_)  => {}, // continue
+                    Err(e) => return Err(e)
+                };
+            }
+            Ok(())
+        };
+
+        add_blocks(2, 5, block_hash).unwrap();
+        
+        // Invalidate 2 blocks
+        assert_eq!(wallet.last_scanned_height(), 6);
+        assert_eq!(wallet.invalidate_block(5), 2);
+
+        let blk3_hash;
+        let blk4_hash;
+        {
+            let blks = wallet.blocks.read().unwrap();
+            blk3_hash = blks[3].hash.clone();
+            blk4_hash = blks[4].hash.clone();
+        }
+
+        // This should result in an exception, because the "prevhash" is wrong
+        assert!(add_blocks(5, 2, blk3_hash).is_err(), 
+            "Shouldn't be able to add because of invalid prev hash");
+
+        // Add with the proper prev hash
+        add_blocks(5, 2, blk4_hash).unwrap();
+
+        let blk6_hash;
+        {
+            let blks = wallet.blocks.read().unwrap();
+            blk6_hash = blks[6].hash.clone();
+        }
+
+        // Now do a Tx
+        let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = get_sapling_params(&config).unwrap();
+
+        // Create a tx and send to address
+        const AMOUNT_SENT: u64 = 30000;
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &taddr, AMOUNT_SENT, None).unwrap();
+
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+        let mut cb3 = FakeCompactBlock::new(7, blk6_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 7);
+
+        // Make sure the Tx is in.
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+            assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The sent tx should generate change
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+        }
+
+        // Invalidate 3 blocks
+        assert_eq!(wallet.last_scanned_height(), 7);
+        assert_eq!(wallet.invalidate_block(5), 3);
+        assert_eq!(wallet.last_scanned_height(), 4);
+        
+        // Make sure the orig Tx is there, but new Tx has disappeared
+        {
+            let txs = wallet.txs.read().unwrap();
+
+            // Orig Tx is still there, since this is in block 0
+            // But now the spent tx is gone
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+            assert_eq!(txs[&txid1].notes[0].spent, None);
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The sent tx is missing
+            assert!(txs.get(&sent_txid).is_none());
+        }
+
+    }
 }
