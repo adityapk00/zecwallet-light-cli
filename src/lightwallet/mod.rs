@@ -1114,8 +1114,8 @@ impl LightWallet {
 
         if selected_value < u64::from(target_value) {
             eprintln!(
-                "Insufficient funds (have {}, need {:?})",
-                selected_value, target_value
+                "Insufficient verified funds (have {}, need {:?}).\n Note, funds need {} confirmations before they can be spent",
+                selected_value, target_value, ANCHOR_OFFSET
             );
             return None;
         }
