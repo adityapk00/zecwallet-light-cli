@@ -2127,14 +2127,14 @@ pub mod tests {
     fn test_z_to_t_withinwallet() {
         const AMOUNT: u64 = 500000;
         const AMOUNT_SENT: u64 = 20000;
-        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT);
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);
 
         let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
 
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = get_sapling_params(&config).unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
@@ -2184,7 +2184,7 @@ pub mod tests {
     fn test_rollback() {
         const AMOUNT: u64 = 500000;
 
-        let (wallet, config, txid1, block_hash) = get_test_wallet(AMOUNT);
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);
 
         let add_blocks = |start: i32, num: i32, mut prev_hash: BlockHash| {
             // Add it to a block
@@ -2231,7 +2231,7 @@ pub mod tests {
         let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) = get_sapling_params(&config).unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
 
         // Create a tx and send to address
         const AMOUNT_SENT: u64 = 30000;
