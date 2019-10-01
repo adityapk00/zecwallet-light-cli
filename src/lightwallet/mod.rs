@@ -46,7 +46,7 @@ pub mod extended_key;
 
 use extended_key::{KeyIndex, ExtendedPrivKey};
 
-const ANCHOR_OFFSET: u32 = 1;
+const ANCHOR_OFFSET: u32 = 4;
 pub const MAX_REORG: usize = 100;
 
 fn now() -> f64 {
