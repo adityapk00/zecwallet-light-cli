@@ -15,6 +15,7 @@ This will launch the interactive prompt. Type `help` to get a list of commands
 ### Note Management
 Zeclite does automatic note and utxo management, which means it doesn't allow you to manually select which address to send outgoing transactions from. It follows these principles:
 * Defaults to sending shielded transactions, even if you're sending to a transparent address
+* Sapling funds need at least 4 confirmations before they can be spent
 * Can select funds from multiple shielded addresses in the same transaction
 * Will automatically shield your transparent funds at the first opportunity
     * When sending an outgoing transaction to a shielded address, Zeclite can decide to use the transaction to additionally shield your transparent funds (i.e., send your transparent funds to your own shielded address in the same transaction)
