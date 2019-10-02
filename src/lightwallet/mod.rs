@@ -130,7 +130,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 2;
+        return 3;
     }
 
     fn get_pk_from_bip39seed(config: LightClientConfig, bip39seed: &[u8]) ->
@@ -232,21 +232,14 @@ impl LightWallet {
         })?;
         let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
 
-        // chain_name was added in v2
-        if version >= 2 {
-            let chain_name = utils::read_string(&mut reader)?;
+        let chain_name = utils::read_string(&mut reader)?;
 
-            if chain_name != config.chain_name {
-                return Err(Error::new(ErrorKind::InvalidData,
-                                      format!("Wallet chain name {} doesn't match expected {}", chain_name, config.chain_name)));
-            }
+        if chain_name != config.chain_name {
+            return Err(Error::new(ErrorKind::InvalidData,
+                                    format!("Wallet chain name {} doesn't match expected {}", chain_name, config.chain_name)));
         }
 
-        let birthday = if version >= 2 {
-            reader.read_u64::<LittleEndian>()?
-        } else {
-            0
-        };
+        let birthday = reader.read_u64::<LittleEndian>()?;
 
         Ok(LightWallet{
             seed:    seed_bytes,

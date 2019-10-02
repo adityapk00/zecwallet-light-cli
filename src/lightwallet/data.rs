@@ -390,7 +390,7 @@ pub struct WalletTx {
 
 impl WalletTx {
     pub fn serialized_version() -> u64 {
-        return 2;
+        return 3;
     }
 
     pub fn new(height: i32, txid: &TxId) -> Self {
@@ -424,15 +424,9 @@ impl WalletTx {
         let total_transparent_value_spent = reader.read_u64::<LittleEndian>()?;
 
         // Outgoing metadata was only added in version 2
-        let outgoing_metadata = match version {
-            1 => vec![],
-            _ => Vector::read(&mut reader, |r| OutgoingTxMetadata::read(r))?
-        };
+        let outgoing_metadata = Vector::read(&mut reader, |r| OutgoingTxMetadata::read(r))?;
 
-        let full_tx_scanned = match version {
-            1 => false,
-            _ => reader.read_u8()? > 0,
-        };
+        let full_tx_scanned = reader.read_u8()? > 0;
             
         Ok(WalletTx{
             block,
