@@ -35,8 +35,8 @@ const ANCHOR_OFFSET: u32 = 4;
 
 pub fn main() {
     // Get command line arguments
-    let matches = App::new("ZecLite CLI")
-                    .version("0.1.0") 
+    let matches = App::new("Zecwallet CLI")
+                    .version("0.2.1") 
                     .arg(Arg::with_name("seed")
                         .short("s")
                         .long("seed")
@@ -94,7 +94,7 @@ pub fn main() {
 
     // Startup
     info!(""); // Blank line
-    info!("Starting ZecLite CLI");
+    info!("Starting Zecwallet-CLI");
     info!("Light Client config {:?}", config);
 
     let lightclient = match LightClient::new(seed, &config, info.block_height) {
