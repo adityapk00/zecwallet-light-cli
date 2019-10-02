@@ -13,6 +13,7 @@ use bip39::{Mnemonic, Language};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
+use sha2::{Sha256, Digest};
 
 use zcash_client_backend::{
     encoding::{encode_payment_address, encode_extended_spending_key},
@@ -35,15 +36,14 @@ use zcash_primitives::{
     primitives::{PaymentAddress},
 };
 
-use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 
 use crate::{address, prover, LightClientConfig, utils};
 
-use sha2::{Sha256, Digest};
 
 pub mod data;
 pub mod extended_key;
 
+use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 use extended_key::{KeyIndex, ExtendedPrivKey};
 
 pub const MAX_REORG: usize = 100;

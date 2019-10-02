@@ -3,45 +3,45 @@ use crate::lightwallet::LightWallet;
 use log::{info, warn, error};
 
 use std::sync::{Arc};
+use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
 use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter, Error, ErrorKind};
-
-use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
+use std::net::SocketAddr;
 
 use json::{object, JsonValue};
 
 use futures::{Future};
 use futures::stream::Stream;
 
+use tower_h2;
 use tower_util::MakeService;
 use tower_grpc::Request;
 
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::{rustls::ClientConfig, TlsConnector};
-use std::net::SocketAddr;
 
 use tokio::executor::DefaultExecutor;
 use tokio::net::tcp::TcpStream;
-use tower_h2;
 
 use zcash_primitives::transaction::{TxId, Transaction};
 use zcash_client_backend::{
     constants::testnet, constants::mainnet, constants::regtest, encoding::encode_payment_address,
 };
 
-
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
                          TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
 use crate::grpc_client::client::CompactTxStreamer;
 use crate::SaplingParams;
 
+
 pub const DEFAULT_SERVER: &str = "https://lightd-main.zecwallet.co:443";
 pub const WALLET_NAME: &str    = "zecwallet-light-wallet.dat";
 pub const LOGFILE_NAME: &str   = "zecwallet-light-wallet.debug.log";
+
 
 /// A Secure (https) grpc destination.
 struct Dst {
