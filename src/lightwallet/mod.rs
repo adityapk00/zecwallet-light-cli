@@ -216,9 +216,11 @@ impl LightWallet {
         let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
             .collect::<Vec<PaymentAddress<Bls12>>>();
 
-        let mut tpk_bytes = [0u8; 32];
-        reader.read_exact(&mut tpk_bytes)?;
-        let tpk = secp256k1::SecretKey::from_slice(&tpk_bytes).unwrap();
+        let tkeys = Vector::read(&mut reader, |r| {
+            let mut tpk_bytes = [0u8; 32];
+            r.read_exact(&mut tpk_bytes)?;
+            secp256k1::SecretKey::from_slice(&tpk_bytes).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+        })?;      
 
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
 
@@ -251,7 +253,7 @@ impl LightWallet {
             extsks,
             extfvks,
             address: addresses,
-            tkeys:   vec![tpk],
+            tkeys:   tkeys,
             blocks:  Arc::new(RwLock::new(blocks)),
             txs:     Arc::new(RwLock::new(txs)),
             config:  config.clone(),
@@ -272,8 +274,9 @@ impl LightWallet {
         )?;
 
         // Write the transparent private key
-        // TODO: This only writes the first key for now
-        writer.write_all(&self.tkeys[0][..])?;
+        Vector::write(&mut writer, &self.tkeys, 
+            |w, pk| w.write_all(&pk[..])
+        )?;
 
         Vector::write(&mut writer, &self.blocks.read().unwrap(), |w, b| b.write(w))?;
                 

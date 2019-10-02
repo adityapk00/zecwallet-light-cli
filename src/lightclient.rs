@@ -39,11 +39,9 @@ use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction,
 use crate::grpc_client::client::CompactTxStreamer;
 use crate::SaplingParams;
 
-// Used below to return the grpc "Client" type to calling methods
-
 pub const DEFAULT_SERVER: &str = "https://lightd-main.zecwallet.co:443";
-pub const WALLET_NAME: &str    = "zeclite.wallet.dat";
-pub const LOGFILE_NAME: &str   = "zeclite.debug.log";
+pub const WALLET_NAME: &str    = "zecwallet-light-wallet.dat";
+pub const LOGFILE_NAME: &str   = "zecwallet-light-wallet.debug.log";
 
 /// A Secure (https) grpc destination.
 struct Dst {
