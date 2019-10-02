@@ -172,7 +172,7 @@ impl LightWallet {
         let ext_t_key = ExtendedPrivKey::with_seed(&bip39_seed.as_bytes()).unwrap();
         let tpk = ext_t_key
             .derive_private_key(KeyIndex::hardened_from_normalize_index(44).unwrap()).unwrap()
-            .derive_private_key(KeyIndex::hardened_from_normalize_index(1).unwrap()).unwrap() // TODO: Cointype
+            .derive_private_key(KeyIndex::hardened_from_normalize_index(config.get_coin_type()).unwrap()).unwrap()
             .derive_private_key(KeyIndex::hardened_from_normalize_index(0).unwrap()).unwrap()
             .derive_private_key(KeyIndex::Normal(0)).unwrap()
             .derive_private_key(KeyIndex::Normal(0)).unwrap()
@@ -648,8 +648,6 @@ impl LightWallet {
             }
         }
 
-        // TODO: Scan t outputs if we spent t or z funds in this Tx, and add it to the
-        // outgoing metadata
         {
             let total_shielded_value_spent = self.txs.read().unwrap().get(&tx.txid()).map_or(0, |wtx| wtx.total_shielded_value_spent);
             if total_transparent_spend + total_shielded_value_spent > 0 {

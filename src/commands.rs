@@ -373,9 +373,6 @@ impl Command for QuitCommand {
     }
 }
 
-// TODO: Add rescan command
-// TODO: Add consolidate command to consolidate t inputs
-
 pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     let mut map: HashMap<String, Box<dyn Command>> = HashMap::new();
 

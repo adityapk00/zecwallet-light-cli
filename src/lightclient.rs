@@ -511,7 +511,7 @@ impl LightClient {
                     "created_in_txid"    => format!("{}", utxo.txid),
                     "value"              => utxo.value,
                     "scriptkey"          => hex::encode(utxo.script.clone()),
-                    "is_change"          => false,  // TODO: Identify notes as change
+                    "is_change"          => false,  // TODO: Identify notes as change if we send change to taddrs
                     "address"            => utxo.address.clone(),
                     "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
                     "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
@@ -528,7 +528,7 @@ impl LightClient {
                     "created_in_txid"    => format!("{}", utxo.txid),
                     "value"              => utxo.value,
                     "scriptkey"          => hex::encode(utxo.script.clone()),
-                    "is_change"          => false,  // TODO: Identify notes as change
+                    "is_change"          => false,  // TODO: Identify notes as change if we send change to taddrs
                     "address"            => utxo.address.clone(),
                     "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
                     "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
@@ -559,7 +559,7 @@ impl LightClient {
                                 "created_in_txid"    => format!("{}", utxo.txid),
                                 "value"              => utxo.value,
                                 "scriptkey"          => hex::encode(utxo.script.clone()),
-                                "is_change"          => false,  // TODO: Identify notes as change
+                                "is_change"          => false,  // TODO: Identify notes as change if we send change to taddrs
                                 "address"            => utxo.address.clone(),
                                 "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
                                 "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
@@ -769,7 +769,7 @@ impl LightClient {
                     let tx = Transaction::read(tx_bytes).unwrap();
 
                     // Scan this Tx for transparent inputs and outputs
-                    wallet.scan_full_tx(&tx, height as i32);   // TODO: Add the height here!
+                    wallet.scan_full_tx(&tx, height as i32); 
                 }
             );
             
