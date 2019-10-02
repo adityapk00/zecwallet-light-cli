@@ -181,7 +181,7 @@ impl LightWallet {
         // Derive only the first address
         // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
         // users can import a seed phrase and automatically get all used addresses
-        let (extsk, extfvk, address) = LightWallet::get_pk_from_bip39seed(&bip39_seed.as_bytes());
+        let (extsk, extfvk, address) = LightWallet::get_pk_from_bip39seed(config.clone(), &bip39_seed.as_bytes());
 
         Ok(LightWallet {
             seed:     seed_bytes,
