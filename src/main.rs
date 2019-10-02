@@ -8,15 +8,22 @@ mod prover;
 mod commands;
 mod utils;
 
+use std::io::{Result, Error, ErrorKind};
 use std::sync::Arc;
 use std::time::Duration;
 
 use lightclient::{LightClient, LightClientConfig};
 
 use log::{info, LevelFilter};
-use log4rs::append::file::FileAppender;
+use log4rs::append::rolling_file::RollingFileAppender;
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Config, Root};
+use log4rs::filter::threshold::ThresholdFilter;
+use log4rs::append::rolling_file::policy::compound::{
+    CompoundPolicy,
+    trigger::size::SizeTrigger,
+    roll::fixed_window::FixedWindowRoller,
+};
 
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -32,6 +39,37 @@ pub mod grpc_client {
 pub struct SaplingParams;
 
 const ANCHOR_OFFSET: u32 = 4;
+
+/// Build the Logging config
+fn get_log_config(config: &LightClientConfig) -> Result<Config> {
+    let window_size = 3; // log0, log1, log2
+    let fixed_window_roller =
+        FixedWindowRoller::builder().build("log{}",window_size).unwrap();
+    let size_limit = 5 * 1024; // 5KB as max log file size to roll
+    let size_trigger = SizeTrigger::new(size_limit);
+    let compound_policy = CompoundPolicy::new(Box::new(size_trigger),Box::new(fixed_window_roller));
+
+    Config::builder()
+        .appender(
+            Appender::builder()
+                .filter(Box::new(ThresholdFilter::new(LevelFilter::Info)))
+                .build(
+                    "logfile",
+                    Box::new(
+                        RollingFileAppender::builder()
+                            .encoder(Box::new(PatternEncoder::new("{d} {l}::{m}{n}")))
+                            .build(config.get_log_path(), Box::new(compound_policy))?,
+                    ),
+                ),
+        )
+        .build(
+            Root::builder()
+                .appender("logfile")
+                .build(LevelFilter::Debug),
+        )
+        .map_err(|e|Error::new(ErrorKind::Other, format!("{}", e)))
+}
+
 
 pub fn main() {
     // Get command line arguments
@@ -81,15 +119,13 @@ pub fn main() {
     };
 
     // Configure logging first.
-    let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{l} -{d(%Y-%m-%d %H:%M:%S)}- {m}\n")))
-        .build(config.get_log_path()).unwrap();
-    let log_config = Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .build(Root::builder()
-                   .appender("logfile")
-                   .build(LevelFilter::Info)).unwrap();
-
+    let log_config = match get_log_config(&config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error:\n{}\nCouldn't configure logging, quitting!", e);
+            return;
+        }
+    };
     log4rs::init_config(log_config).unwrap();
 
     // Startup
