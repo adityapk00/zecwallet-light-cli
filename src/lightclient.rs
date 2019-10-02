@@ -213,6 +213,15 @@ impl LightClientConfig {
         }.parse().unwrap()
     }
 
+    pub fn get_coin_type(&self) -> u32 {
+        match &self.chain_name[..] {
+            "main"    => mainnet::COIN_TYPE,
+            "test"    => testnet::COIN_TYPE,
+            "regtest" => regtest::COIN_TYPE,
+            c         => panic!("Unknown chain {}", c)
+        }
+    }
+
     pub fn hrp_sapling_address(&self) -> &str {
         match &self.chain_name[..] {
             "main"    => mainnet::HRP_SAPLING_PAYMENT_ADDRESS,

@@ -133,13 +133,13 @@ impl LightWallet {
         return 2;
     }
 
-    fn get_pk_from_bip39seed(bip39seed: &[u8]) ->
+    fn get_pk_from_bip39seed(config: LightClientConfig, bip39seed: &[u8]) ->
             (ExtendedSpendingKey, ExtendedFullViewingKey, PaymentAddress<Bls12>) {
         let extsk: ExtendedSpendingKey = ExtendedSpendingKey::from_path(
             &ExtendedSpendingKey::master(bip39seed),
             &[
                 ChildIndex::Hardened(32),
-                ChildIndex::Hardened(1),    // TODO: Cointype should be 133 for mainnet
+                ChildIndex::Hardened(config.get_coin_type()),
                 ChildIndex::Hardened(0)
             ],
         );
