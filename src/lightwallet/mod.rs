@@ -2055,6 +2055,7 @@ pub mod tests {
 
             // Note
             assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT_Z);
+            assert_eq!(wallet.note_address(&txs[&txid1].notes[0]), Some(ext_address));
             assert_eq!(txs[&txid1].notes[0].spent, None);
             assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
         }
@@ -2222,6 +2223,16 @@ pub mod tests {
         // Add lots
         let _ = add_blocks(&wallet, 102, 10, prev_hash).unwrap();
         assert_eq!(wallet.blocks.read().unwrap().len(), 101);
+
+        // Now clear the blocks
+        wallet.clear_blocks();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 0);
+
+        let prev_hash = add_blocks(&wallet, 0, 1, BlockHash([0;32])).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 1);
+
+        let _ = add_blocks(&wallet, 1, 10, prev_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 11);
     }
 
     #[test]
@@ -2323,10 +2334,9 @@ pub mod tests {
             anchor_offset: 1
         };
 
-        let wallet = LightWallet::new(
-            Some("chimney better bulb horror rebuild whisper improve intact letter giraffe brave rib appear bulk aim burst snap salt hill sad merge tennis phrase raise".to_string()),
-            &lc,
-            0).unwrap();
+        let seed_phrase = Some("chimney better bulb horror rebuild whisper improve intact letter giraffe brave rib appear bulk aim burst snap salt hill sad merge tennis phrase raise".to_string());
+
+        let wallet = LightWallet::new(seed_phrase.clone(), &lc, 0).unwrap();
 
         // Test the addresses against https://iancoleman.io/bip39/
         let (taddr, pk) = &wallet.get_t_secret_keys()[0];
@@ -2337,5 +2347,6 @@ pub mod tests {
         assert_eq!(zaddr, "zs1q6xk3q783t5k92kjqt2rkuuww8pdw2euzy5rk6jytw97enx8fhpazdv3th4xe7vsk6e9sfpawfg");
         assert_eq!(sk, "secret-extended-key-main1qvpa0qr8qqqqpqxn4l054nzxpxzp3a8r2djc7sekdek5upce8mc2j2z0arzps4zv940qeg706hd0wq6g5snzvhp332y6vhwyukdn8dhekmmsk7fzvzkqm6ypc99uy63tpesqwxhpre78v06cx8k5xpp9mrhtgqs5dvp68cqx2yrvthflmm2ynl8c0506dekul0f6jkcdmh0292lpphrksyc5z3pxwws97zd5els3l2mjt2s7hntap27mlmt6w0drtfmz36vz8pgu7ec0twfrq");
 
+        assert_eq!(seed_phrase, Some(wallet.get_seed_phrase()));
     }
 }
