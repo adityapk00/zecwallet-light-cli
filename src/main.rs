@@ -2,6 +2,7 @@
 extern crate rust_embed;
 
 mod lightclient;
+mod grpcconnector;
 mod lightwallet;
 mod address;
 mod prover;
@@ -101,7 +102,7 @@ pub fn main() {
     }
 
     // Do a getinfo first, before opening the wallet
-    let info = match LightClient::get_info(server.clone()) {
+    let info = match grpcconnector::get_info(server.clone()) {
         Ok(ld) => ld,
         Err(e) => {
             eprintln!("Error:\n{}\nCouldn't get server info, quitting!", e);
