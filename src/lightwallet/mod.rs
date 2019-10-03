@@ -2055,7 +2055,6 @@ pub mod tests {
 
             // Note
             assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT_Z);
-            assert_eq!(wallet.note_address(&txs[&txid1].notes[0]), Some(ext_address));
             assert_eq!(txs[&txid1].notes[0].spent, None);
             assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
         }
@@ -2124,6 +2123,7 @@ pub mod tests {
 
             assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.extfvks[0]);
             assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - fee);
+            assert_eq!(wallet.note_address(&txs[&sent_txid].notes[0]), Some(my_address));
             assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[0].memo), Some(memo));
         }
     }
