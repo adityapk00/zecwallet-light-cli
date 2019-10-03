@@ -597,20 +597,21 @@ impl LightWallet {
             None => {
                 let address = self.address_from_pubkeyhash(vout.script_pubkey.address());
                 if address.is_none() {
-                    println!("Couldn't determine address for output!");
+                    error!("Couldn't determine address for output!");
+                } else {
+                    info!("Added to wallet {}:{}", txid, n);
+                    // Add the utxo
+                    tx_entry.utxos.push(Utxo {
+                        address: address.unwrap(),
+                        txid: txid.clone(),
+                        output_index: n,
+                        script: vout.script_pubkey.0.clone(),
+                        value: vout.value.into(),
+                        height,
+                        spent: None,
+                        unconfirmed_spent: None,
+                    });
                 }
-                info!("Added to wallet {}:{}", txid, n);
-                // Add the utxo     
-                tx_entry.utxos.push(Utxo{
-                    address: address.unwrap(),
-                    txid: txid.clone(),
-                    output_index: n,
-                    script: vout.script_pubkey.0.clone(),
-                    value: vout.value.into(),
-                    height,
-                    spent: None,
-                    unconfirmed_spent: None,
-                });
             }
         }
     }
@@ -621,10 +622,6 @@ impl LightWallet {
         
         // TODO: Save this object
         let secp = secp256k1::Secp256k1::new();
-
-        // TODO: Iterate over all transparent addresses. This is currently looking only at 
-        // the first one.
-        let pubkey = secp256k1::PublicKey::from_secret_key(&secp, &self.tkeys.read().unwrap()[0]).serialize();
 
         let mut total_transparent_spend: u64 = 0;
 
@@ -667,6 +664,9 @@ impl LightWallet {
                 .total_transparent_value_spent = total_transparent_spend;
         }
 
+        // TODO: Iterate over all transparent addresses. This is currently looking only at
+        // the first one.
+        let pubkey = secp256k1::PublicKey::from_secret_key(&secp, &self.tkeys.read().unwrap()[0]).serialize();
         // Scan for t outputs
         for (n, vout) in tx.vout.iter().enumerate() {
             match vout.script_pubkey.address() {
@@ -782,10 +782,10 @@ impl LightWallet {
                             }
 
                             // Update the WalletTx 
-                            info!("A sapling output was sent in {}", tx.txid());
+                            // Do it in a short scope because of the write lock.
                             {
-                                // Do it in a short scope because of the write lock.
-                                
+                                info!("A sapling output was sent in {}", tx.txid());
+
                                 let mut txs = self.txs.write().unwrap();
                                 if txs.get(&tx.txid()).unwrap().outgoing_metadata.iter()
                                         .find(|om| om.address == address && om.value == note.value)
@@ -1059,11 +1059,6 @@ impl LightWallet {
             to
         );
 
-        // TODO: This only spends from the first address right now.
-        let extsk = &self.extsks.read().unwrap()[0];
-        let extfvk = &self.extfvks.read().unwrap()[0];
-        let ovk = extfvk.fvk.ovk;
-
         let to = match address::RecipientAddress::from_str(to, 
                         self.config.hrp_sapling_address(), 
                         self.config.base58_pubkey_address(), 
@@ -1091,7 +1086,9 @@ impl LightWallet {
         let notes: Vec<_> = self.txs.read().unwrap().iter()
             .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
             .flatten()
-            .filter_map(|(txid, note)| SpendableNote::from(txid, note, anchor_offset))
+            .filter_map(|(txid, note)|
+                SpendableNote::from(txid, note, anchor_offset, &self.extsks.read().unwrap()[note.account])
+            )
             .scan(0, |running_total, spendable| {
                 let value = spendable.note.value;
                 let ret = if *running_total < u64::from(target_value) {
@@ -1160,7 +1157,7 @@ impl LightWallet {
 
         for selected in notes.iter() {
             if let Err(e) = builder.add_sapling_spend(
-                extsk.clone(),
+                selected.extsk.clone(),
                 selected.diversifier,
                 selected.note.clone(),
                 selected.witness.clone(),
@@ -1183,6 +1180,10 @@ impl LightWallet {
         let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap() );
 
         println!("{}: Adding output", now() - start_time);
+
+        // TODO: We're using the first ovk to encrypt outgoing Txns. Is that Ok?
+        let ovk = self.extfvks.read().unwrap()[0].fvk.ovk;
+
         if let Err(e) = match to {
             address::RecipientAddress::Shielded(to) => {
                 builder.add_sapling_output(ovk, to.clone(), value, encoded_memo)

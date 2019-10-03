@@ -22,6 +22,7 @@ use zcash_primitives::{
         fs::{Fs, FsRepr},
     }
 };
+use zcash_primitives::zip32::ExtendedSpendingKey;
 
 
 pub struct BlockData {
@@ -468,10 +469,11 @@ pub struct SpendableNote {
     pub diversifier: Diversifier,
     pub note: Note<Bls12>,
     pub witness: IncrementalWitness<Node>,
+    pub extsk: ExtendedSpendingKey,
 }
 
 impl SpendableNote {
-    pub fn from(txid: TxId, nd: &SaplingNoteData, anchor_offset: usize) -> Option<Self> {
+    pub fn from(txid: TxId, nd: &SaplingNoteData, anchor_offset: usize, extsk: &ExtendedSpendingKey) -> Option<Self> {
         // Include only notes that haven't been spent, or haven't been included in an unconfirmed spend yet.
         if nd.spent.is_none() && nd.unconfirmed_spent.is_none() {
             let witness = nd.witnesses.get(nd.witnesses.len() - anchor_offset - 1);
@@ -482,6 +484,7 @@ impl SpendableNote {
                 diversifier: nd.diversifier,
                 note: nd.note.clone(),
                 witness: w.clone(),
+                extsk: extsk.clone(),
             })
         } else {
             None
