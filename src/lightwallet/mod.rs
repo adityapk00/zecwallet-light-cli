@@ -986,7 +986,8 @@ impl LightWallet {
             // Trim the old blocks, keeping only as many as needed for a worst-case reorg (i.e. 101 blocks)
             let len = blks.len();
             if len > MAX_REORG + 1 {
-                blks.drain(..(len-MAX_REORG+1));
+                let drain_first = len - (MAX_REORG+1);
+                blks.drain(..drain_first);
             }
         }
         
@@ -2183,27 +2184,53 @@ pub mod tests {
         }
     }
 
+    /// Test helper to add blocks
+    fn add_blocks(wallet: &LightWallet, start: i32, num: i32, mut prev_hash: BlockHash) -> Result<BlockHash, i32>{
+        // Add it to a block
+        let mut new_blk = FakeCompactBlock::new(start, prev_hash);
+        for i in 0..num {
+            new_blk = FakeCompactBlock::new(start+i, prev_hash);
+            prev_hash = new_blk.hash();
+            match wallet.scan_block(&new_blk.as_bytes()) {
+                Ok(_)  => {}, // continue
+                Err(e) => return Err(e)
+            };
+        }
+
+
+        Ok(new_blk.hash())
+    }
+
+    #[test]
+    fn test_block_limit() {
+        const AMOUNT: u64 = 500000;
+        let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT);       
+
+        let prev_hash = add_blocks(&wallet, 2, 1, block_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 3);
+        
+        let prev_hash = add_blocks(&wallet, 3, 47, prev_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 50);
+        
+        let prev_hash = add_blocks(&wallet, 50, 51, prev_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 101);
+        
+        // Subsequent blocks should start to trim
+        let prev_hash = add_blocks(&wallet, 101, 1, prev_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 101);
+
+        // Add lots
+        let _ = add_blocks(&wallet, 102, 10, prev_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 101);
+    }
+
     #[test]
     fn test_rollback() {
         const AMOUNT: u64 = 500000;
 
-        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);       
 
-        let add_blocks = |start: i32, num: i32, mut prev_hash: BlockHash| {
-            // Add it to a block
-            let mut new_blk;
-            for i in 0..num {
-                new_blk = FakeCompactBlock::new(start+i, prev_hash);
-                prev_hash = new_blk.hash();
-                match wallet.scan_block(&new_blk.as_bytes()) {
-                    Ok(_)  => {}, // continue
-                    Err(e) => return Err(e)
-                };
-            }
-            Ok(())
-        };
-
-        add_blocks(2, 5, block_hash).unwrap();
+        add_blocks(&wallet, 2, 5, block_hash).unwrap();
         
         // Invalidate 2 blocks
         assert_eq!(wallet.last_scanned_height(), 6);
@@ -2218,11 +2245,11 @@ pub mod tests {
         }
 
         // This should result in an exception, because the "prevhash" is wrong
-        assert!(add_blocks(5, 2, blk3_hash).is_err(), 
+        assert!(add_blocks(&wallet, 5, 2, blk3_hash).is_err(), 
             "Shouldn't be able to add because of invalid prev hash");
 
         // Add with the proper prev hash
-        add_blocks(5, 2, blk4_hash).unwrap();
+        add_blocks(&wallet, 5, 2, blk4_hash).unwrap();
 
         let blk6_hash;
         {
@@ -2284,6 +2311,31 @@ pub mod tests {
             // The sent tx is missing
             assert!(txs.get(&sent_txid).is_none());
         }
+    }
+
+    #[test]
+    fn test_t_derivation() {
+        let lc = LightClientConfig {
+            server: "0.0.0.0:0".parse().unwrap(),
+            chain_name: "main".to_string(),
+            sapling_activation_height: 0,
+            consensus_branch_id: "000000".to_string(),
+            anchor_offset: 1
+        };
+
+        let wallet = LightWallet::new(
+            Some("chimney better bulb horror rebuild whisper improve intact letter giraffe brave rib appear bulk aim burst snap salt hill sad merge tennis phrase raise".to_string()),
+            &lc,
+            0).unwrap();
+
+        // Test the addresses against https://iancoleman.io/bip39/
+        let (taddr, pk) = &wallet.get_t_secret_keys()[0];
+        assert_eq!(taddr, "t1eQ63fwkQ4n4Eo5uCrPGaAV8FWB2tmx7ui");
+        assert_eq!(pk, "Kz9ybX4giKag4NtnP1pi8WQF2B2hZDkFU85S7Dciz3UUhM59AnhE");
+
+        let (zaddr, sk) = &wallet.get_z_private_keys()[0];
+        assert_eq!(zaddr, "zs1q6xk3q783t5k92kjqt2rkuuww8pdw2euzy5rk6jytw97enx8fhpazdv3th4xe7vsk6e9sfpawfg");
+        assert_eq!(sk, "secret-extended-key-main1qvpa0qr8qqqqpqxn4l054nzxpxzp3a8r2djc7sekdek5upce8mc2j2z0arzps4zv940qeg706hd0wq6g5snzvhp332y6vhwyukdn8dhekmmsk7fzvzkqm6ypc99uy63tpesqwxhpre78v06cx8k5xpp9mrhtgqs5dvp68cqx2yrvthflmm2ynl8c0506dekul0f6jkcdmh0292lpphrksyc5z3pxwws97zd5els3l2mjt2s7hntap27mlmt6w0drtfmz36vz8pgu7ec0twfrq");
 
     }
 }
