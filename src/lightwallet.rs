@@ -9,6 +9,7 @@ use log::{info, warn, error};
 
 use protobuf::parse_from_bytes;
 
+use secp256k1::SecretKey;
 use bip39::{Mnemonic, Language};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -62,7 +63,7 @@ pub fn double_sha256(payload: &[u8]) -> Vec<u8> {
     h2.to_vec()
 }
 
-use base58::{ToBase58, FromBase58};
+use base58::{ToBase58};
 
 /// A trait for converting a [u8] to base58 encoded string.
 pub trait ToBase58Check {
@@ -85,25 +86,25 @@ impl ToBase58Check for [u8] {
         payload.to_base58()
     }
 }
-
-pub trait FromBase58Check {
-    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8>;
-}
-
-
-impl FromBase58Check for str {
-    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8> {
-        let mut payload: Vec<u8> = Vec::new();
-        let bytes = self.from_base58().unwrap();
-
-        let start = version.len();
-        let end = bytes.len() - (4 + suffix.len());
-
-        payload.extend(&bytes[start..end]);
-
-        payload
-    }
-}
+//
+//pub trait FromBase58Check {
+//    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8>;
+//}
+//
+//
+//impl FromBase58Check for str {
+//    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8> {
+//        let mut payload: Vec<u8> = Vec::new();
+//        let bytes = self.from_base58().unwrap();
+//
+//        let start = version.len();
+//        let end = bytes.len() - (4 + suffix.len());
+//
+//        payload.extend(&bytes[start..end]);
+//
+//        payload
+//    }
+//}
 
 
 pub struct LightWallet {
@@ -112,12 +113,12 @@ pub struct LightWallet {
     // List of keys, actually in this wallet. This may include more
     // than keys derived from the seed, for example, if user imports 
     // a private key
-    extsks:  Vec<ExtendedSpendingKey>,
-    extfvks: Vec<ExtendedFullViewingKey>,
-    pub address: Vec<PaymentAddress<Bls12>>,
+    extsks:  Arc<RwLock<Vec<ExtendedSpendingKey>>>,
+    extfvks: Arc<RwLock<Vec<ExtendedFullViewingKey>>>,
+    pub address: Arc<RwLock<Vec<PaymentAddress<Bls12>>>>,
     
     // Transparent keys. TODO: Make it not pubic
-    pub tkeys: Vec<secp256k1::SecretKey>,
+    pub tkeys: Arc<RwLock<Vec<secp256k1::SecretKey>>>,
 
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
@@ -135,14 +136,26 @@ impl LightWallet {
         return 3;
     }
 
-    fn get_pk_from_bip39seed(config: LightClientConfig, bip39seed: &[u8]) ->
+    fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
+        let ext_t_key = ExtendedPrivKey::with_seed(bip39_seed).unwrap();
+        ext_t_key
+            .derive_private_key(KeyIndex::hardened_from_normalize_index(44).unwrap()).unwrap()
+            .derive_private_key(KeyIndex::hardened_from_normalize_index(config.get_coin_type()).unwrap()).unwrap()
+            .derive_private_key(KeyIndex::hardened_from_normalize_index(0).unwrap()).unwrap()
+            .derive_private_key(KeyIndex::Normal(0)).unwrap()
+            .derive_private_key(KeyIndex::Normal(pos)).unwrap()
+            .private_key
+    }
+
+
+    fn get_zaddr_from_bip39seed(config: &LightClientConfig, bip39seed: &[u8], pos: u32) ->
             (ExtendedSpendingKey, ExtendedFullViewingKey, PaymentAddress<Bls12>) {
         let extsk: ExtendedSpendingKey = ExtendedSpendingKey::from_path(
             &ExtendedSpendingKey::master(bip39seed),
             &[
                 ChildIndex::Hardened(32),
                 ChildIndex::Hardened(config.get_coin_type()),
-                ChildIndex::Hardened(0)
+                ChildIndex::Hardened(pos)
             ],
         );
         let extfvk  = ExtendedFullViewingKey::from(&extsk);
@@ -170,27 +183,20 @@ impl LightWallet {
         // we need to get the 64 byte bip39 entropy
         let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&seed_bytes, Language::English).unwrap(), "");
 
-        // TODO: This only reads one key for now
-        let ext_t_key = ExtendedPrivKey::with_seed(&bip39_seed.as_bytes()).unwrap();
-        let tpk = ext_t_key
-            .derive_private_key(KeyIndex::hardened_from_normalize_index(44).unwrap()).unwrap()
-            .derive_private_key(KeyIndex::hardened_from_normalize_index(config.get_coin_type()).unwrap()).unwrap()
-            .derive_private_key(KeyIndex::hardened_from_normalize_index(0).unwrap()).unwrap()
-            .derive_private_key(KeyIndex::Normal(0)).unwrap()
-            .derive_private_key(KeyIndex::Normal(0)).unwrap()
-            .private_key;
-
         // Derive only the first address
+        let tpk = LightWallet::get_taddr_from_bip39seed(&config, &bip39_seed.as_bytes(), 0);
+
         // TODO: We need to monitor addresses, and always keep 1 "free" address, so 
         // users can import a seed phrase and automatically get all used addresses
-        let (extsk, extfvk, address) = LightWallet::get_pk_from_bip39seed(config.clone(), &bip39_seed.as_bytes());
+        let (extsk, extfvk, address)
+            = LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed.as_bytes(), 0);
 
         Ok(LightWallet {
             seed:     seed_bytes,
-            extsks:   vec![extsk],
-            extfvks:  vec![extfvk],
-            address:  vec![address],
-            tkeys:    vec![tpk],
+            extsks:   Arc::new(RwLock::new(vec![extsk])),
+            extfvks:  Arc::new(RwLock::new(vec![extfvk])),
+            address:  Arc::new(RwLock::new(vec![address])),
+            tkeys:    Arc::new(RwLock::new(vec![tpk])),
             blocks:   Arc::new(RwLock::new(vec![])),
             txs:      Arc::new(RwLock::new(HashMap::new())),
             config:   config.clone(),
@@ -245,10 +251,10 @@ impl LightWallet {
 
         Ok(LightWallet{
             seed:    seed_bytes,
-            extsks,
-            extfvks,
-            address: addresses,
-            tkeys:   tkeys,
+            extsks:  Arc::new(RwLock::new(extsks)),
+            extfvks: Arc::new(RwLock::new(extfvks)),
+            address: Arc::new(RwLock::new(addresses)),
+            tkeys:   Arc::new(RwLock::new(tkeys)),
             blocks:  Arc::new(RwLock::new(blocks)),
             txs:     Arc::new(RwLock::new(txs)),
             config:  config.clone(),
@@ -264,12 +270,12 @@ impl LightWallet {
         writer.write_all(&self.seed)?;
 
         // Write all the spending keys
-        Vector::write(&mut writer, &self.extsks, 
+        Vector::write(&mut writer, &self.extsks.read().unwrap(),
              |w, sk| sk.write(w)
         )?;
 
         // Write the transparent private key
-        Vector::write(&mut writer, &self.tkeys, 
+        Vector::write(&mut writer, &self.tkeys.read().unwrap(),
             |w, pk| w.write_all(&pk[..])
         )?;
 
@@ -317,7 +323,7 @@ impl LightWallet {
 
     // Get all z-address private keys. Returns a Vector of (address, privatekey)
     pub fn get_z_private_keys(&self) -> Vec<(String, String)> {
-        self.extsks.iter().map(|sk| {
+        self.extsks.read().unwrap().iter().map(|sk| {
             (encode_payment_address(self.config.hrp_sapling_address(),
                                     &ExtendedFullViewingKey::from(sk).default_address().unwrap().1),
              encode_extended_spending_key(self.config.hrp_sapling_private_key(), &sk)
@@ -325,16 +331,44 @@ impl LightWallet {
         }).collect::<Vec<(String, String)>>()
     }
 
-    // Get all t-address private keys. Returns a Vector of (address, secretkey)
+    /// Get all t-address private keys. Returns a Vector of (address, secretkey)
     pub fn get_t_secret_keys(&self) -> Vec<(String, String)> {
-        self.tkeys.iter().map(|sk| {
+        self.tkeys.read().unwrap().iter().map(|sk| {
             (self.address_from_sk(sk), sk[..].to_base58check(&self.config.base58_secretkey_prefix(), &[0x01]))
         }).collect::<Vec<(String, String)>>()
     }
 
-    // Clears all the downloaded blocks and resets the state back to the initial block.
-    // After this, the wallet's initial state will need to be set
-    // and the wallet will need to be rescanned
+    /// Adds a new z address to the wallet. This will derive a new address from the seed
+    /// at the next position and add it to the wallet.
+    /// NOTE: This does NOT rescan
+    pub fn add_zaddr(&self) -> String {
+        let pos = self.extsks.read().unwrap().len() as u32;
+        let (extsk, extfvk, address) =
+            LightWallet::get_zaddr_from_bip39seed(&self.config, &self.seed, pos);
+
+        let zaddr = encode_payment_address(self.config.hrp_sapling_address(), &address);
+        self.extsks.write().unwrap().push(extsk);
+        self.extfvks.write().unwrap().push(extfvk);
+        self.address.write().unwrap().push(address);
+
+        zaddr
+    }
+
+    /// Add a new t address to the wallet. This will derive a new address from the seed
+    /// at the next position.
+    /// NOTE: This is not rescan the wallet
+    pub fn add_taddr(&self) -> String {
+        let pos = self.tkeys.read().unwrap().len() as u32;
+        let sk = LightWallet::get_taddr_from_bip39seed(&self.config, &self.seed, pos);
+
+        self.tkeys.write().unwrap().push(sk);
+
+        self.address_from_sk(&sk)
+    }
+
+    /// Clears all the downloaded blocks and resets the state back to the initial block.
+    /// After this, the wallet's initial state will need to be set
+    /// and the wallet will need to be rescanned
     pub fn clear_blocks(&self) {
         self.blocks.write().unwrap().clear();
         self.txs.write().unwrap().clear();
@@ -590,7 +624,7 @@ impl LightWallet {
 
         // TODO: Iterate over all transparent addresses. This is currently looking only at 
         // the first one.
-        let pubkey = secp256k1::PublicKey::from_secret_key(&secp, &self.tkeys[0]).serialize();
+        let pubkey = secp256k1::PublicKey::from_secret_key(&secp, &self.tkeys.read().unwrap()[0]).serialize();
 
         let mut total_transparent_spend: u64 = 0;
 
@@ -653,7 +687,7 @@ impl LightWallet {
                 // outgoing metadata
 
                 // Collect our t-addresses
-                let wallet_taddrs = self.tkeys.iter()
+                let wallet_taddrs = self.tkeys.read().unwrap().iter()
                         .map(|sk| self.address_from_sk(sk))
                         .collect::<HashSet<String>>();
 
@@ -688,7 +722,9 @@ impl LightWallet {
 
         // Scan shielded sapling outputs to see if anyone of them is us, and if it is, extract the memo
         for output in tx.shielded_outputs.iter() {
-            let ivks: Vec<_> = self.extfvks.iter().map(|extfvk| extfvk.fvk.vk.ivk()).collect();
+            let ivks: Vec<_> = self.extfvks.read().unwrap().iter().map(
+                |extfvk| extfvk.fvk.vk.ivk().clone()
+            ).collect();
 
             let cmu = output.cmu;
             let ct  = output.enc_ciphertext;
@@ -720,12 +756,15 @@ impl LightWallet {
 
             // First, collect all our z addresses, to check for change
             // Collect z addresses
-            let z_addresses = self.address.iter().map( |ad| {
+            let z_addresses = self.address.read().unwrap().iter().map( |ad| {
                 encode_payment_address(self.config.hrp_sapling_address(), &ad)
             }).collect::<HashSet<String>>();
 
             // Search all ovks that we have
-            let ovks: Vec<_> = self.extfvks.iter().map(|extfvk| extfvk.fvk.ovk).collect();
+            let ovks: Vec<_> = self.extfvks.read().unwrap().iter().map(
+                |extfvk| extfvk.fvk.ovk.clone()
+            ).collect();
+
             for (_account, ovk) in ovks.iter().enumerate() {
                 match try_sapling_output_recovery(ovk,
                     &output.cv, 
@@ -921,7 +960,7 @@ impl LightWallet {
 
             scan_block(
                 block,
-                &self.extfvks,
+                &self.extfvks.read().unwrap(),
                 &nf_refs[..],
                 &mut block_data.tree,
                 &mut witness_refs[..],
@@ -971,7 +1010,7 @@ impl LightWallet {
             {
                 info!("Received sapling output");
 
-                let new_note = SaplingNoteData::new(&self.extfvks[output.account], output);
+                let new_note = SaplingNoteData::new(&self.extfvks.read().unwrap()[output.account], output);
                 match tx_entry.notes.iter().find(|nd| nd.nullifier == new_note.nullifier) {
                     None => tx_entry.notes.push(new_note),
                     Some(_) => warn!("Tried to insert duplicate note for Tx {}", tx.txid)
@@ -1021,8 +1060,8 @@ impl LightWallet {
         );
 
         // TODO: This only spends from the first address right now.
-        let extsk = &self.extsks[0];
-        let extfvk = &self.extfvks[0];
+        let extsk = &self.extsks.read().unwrap()[0];
+        let extfvk = &self.extfvks.read().unwrap()[0];
         let ovk = extfvk.fvk.ovk;
 
         let to = match address::RecipientAddress::from_str(to, 
@@ -1082,7 +1121,7 @@ impl LightWallet {
             address::RecipientAddress::Shielded(_) => {
                 // The destination is a sapling address, so add all transparent inputs
                 // TODO: This only spends from the first address right now.
-                let sk = self.tkeys[0];
+                let sk = self.tkeys.read().unwrap()[0];
 
                 // Add all tinputs
                 tinputs.iter()
@@ -1136,8 +1175,8 @@ impl LightWallet {
         // the builder will automatically send change to that address
         if notes.len() == 0 {
             builder.send_change_to(
-                ExtendedFullViewingKey::from(&self.extsks[0]).fvk.ovk,
-                self.extsks[0].default_address().unwrap().1);
+                ExtendedFullViewingKey::from(&self.extsks.read().unwrap()[0]).fvk.ovk,
+                self.extsks.read().unwrap()[0].default_address().unwrap().1);
         }
 
         // Compute memo if it exists
@@ -1497,10 +1536,10 @@ pub mod tests {
         const AMOUNT1:u64 = 5;
         // Address is encoded in bech32
         let address = Some(encode_payment_address(wallet.config.hrp_sapling_address(), 
-                                            &wallet.extfvks[0].default_address().unwrap().1));
+                                            &wallet.extfvks.read().unwrap()[0].default_address().unwrap().1));
 
         let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
-        cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
+        cb1.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), AMOUNT1);
         
         // Make sure that the intial state is empty
         assert_eq!(wallet.txs.read().unwrap().len(), 0);
@@ -1519,7 +1558,7 @@ pub mod tests {
 
         // Add a second block
         let mut cb2 = FakeCompactBlock::new(1, cb1.hash());
-        cb2.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT2);
+        cb2.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), AMOUNT2);
 
         wallet.scan_block(&cb2.as_bytes()).unwrap();
         
@@ -1537,7 +1576,7 @@ pub mod tests {
         const AMOUNT1:u64 = 5;
 
         let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
-        let (nf1, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
+        let (nf1, txid1) = cb1.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), AMOUNT1);
 
         wallet.scan_block(&cb1.as_bytes()).unwrap();
         
@@ -1551,7 +1590,7 @@ pub mod tests {
         let addr2 = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[0u8; 32]))
                         .default_address().unwrap().1;
         let mut cb2 = FakeCompactBlock::new(1, cb1.hash());
-        let txid2 = cb2.add_tx_spending((nf1, AMOUNT1), wallet.extfvks[0].clone(), addr2, AMOUNT2);
+        let txid2 = cb2.add_tx_spending((nf1, AMOUNT1), wallet.extfvks.read().unwrap()[0].clone(), addr2, AMOUNT2);
         wallet.scan_block(&cb2.as_bytes()).unwrap();
 
         // Now, the original note should be spent and there should be a change
@@ -1582,8 +1621,8 @@ pub mod tests {
 
         let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
-        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
-        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
 
         const AMOUNT1: u64 = 20;
 
@@ -1648,8 +1687,8 @@ pub mod tests {
 
         let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
-        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
-        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
 
         let non_wallet_sk = &SecretKey::from_slice(&[1u8; 32]).unwrap();
         let non_wallet_pk = PublicKey::from_secret_key(&secp, &non_wallet_sk);
@@ -1721,7 +1760,7 @@ pub mod tests {
         const AMOUNT1:u64 = 5;
 
         let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
-        let (nf1, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), AMOUNT1);
+        let (nf1, txid1) = cb1.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), AMOUNT1);
 
         wallet.scan_block(&cb1.as_bytes()).unwrap();
 
@@ -1730,8 +1769,8 @@ pub mod tests {
         assert_eq!(wallet.zbalance(None), AMOUNT1);
 
         // Add a t input at the Tx
-        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
-        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
 
         const TAMOUNT1: u64 = 20;
 
@@ -1745,7 +1784,7 @@ pub mod tests {
         let addr2 = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[0u8; 32]))
             .default_address().unwrap().1;
         let mut cb2 = FakeCompactBlock::new(1, cb1.hash());
-        let txid2 = cb2.add_tx_spending((nf1, AMOUNT1), wallet.extfvks[0].clone(), addr2, AMOUNT2);
+        let txid2 = cb2.add_tx_spending((nf1, AMOUNT1), wallet.extfvks.read().unwrap()[0].clone(), addr2, AMOUNT2);
         wallet.scan_block(&cb2.as_bytes()).unwrap();
 
         let mut tx = FakeTransaction::new_with_txid(txid2);
@@ -1766,13 +1805,13 @@ pub mod tests {
         {
             assert_eq!(wallet.seed, wallet2.seed);
 
-            assert_eq!(wallet.extsks.len(), wallet2.extsks.len());
-            assert_eq!(wallet.extsks[0], wallet2.extsks[0]);
-            assert_eq!(wallet.extfvks[0], wallet2.extfvks[0]);
-            assert_eq!(wallet.address[0], wallet2.address[0]);
+            assert_eq!(wallet.extsks.read().unwrap().len(), wallet2.extsks.read().unwrap().len());
+            assert_eq!(wallet.extsks.read().unwrap()[0], wallet2.extsks.read().unwrap()[0]);
+            assert_eq!(wallet.extfvks.read().unwrap()[0], wallet2.extfvks.read().unwrap()[0]);
+            assert_eq!(wallet.address.read().unwrap()[0], wallet2.address.read().unwrap()[0]);
 
-            assert_eq!(wallet.tkeys.len(), wallet2.tkeys.len());
-            assert_eq!(wallet.tkeys[0], wallet2.tkeys[0]);
+            assert_eq!(wallet.tkeys.read().unwrap().len(), wallet2.tkeys.read().unwrap().len());
+            assert_eq!(wallet.tkeys.read().unwrap()[0], wallet2.tkeys.read().unwrap()[0]);
         }
 
         // Test blocks were serialized properly
@@ -1836,7 +1875,7 @@ pub mod tests {
         let wallet = LightWallet::new(None, &config, 0).unwrap();
 
         let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
-        let (_, txid1) = cb1.add_tx_paying(wallet.extfvks[0].clone(), amount);
+        let (_, txid1) = cb1.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), amount);
         wallet.scan_block(&cb1.as_bytes()).unwrap();
 
         // We have one note
@@ -1997,8 +2036,8 @@ pub mod tests {
         const AMOUNT_T: u64 = 40000;
         let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT_Z);
 
-        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys[0]);
-        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+        let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
 
         let mut tx = FakeTransaction::new(&mut rng);
         tx.add_t_output(&pk, AMOUNT_T);
@@ -2096,7 +2135,7 @@ pub mod tests {
         let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT1);
 
         let my_address = encode_payment_address(wallet.config.hrp_sapling_address(),
-                            &wallet.extfvks[0].default_address().unwrap().1);
+                            &wallet.extfvks.read().unwrap()[0].default_address().unwrap().1);
 
         let memo = "Incoming Memo".to_string();
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
@@ -2123,7 +2162,7 @@ pub mod tests {
             
             assert_eq!(txs[&sent_txid].notes.len(), 1);
 
-            assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.extfvks[0]);
+            assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.extfvks.read().unwrap()[0]);
             assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - fee);
             assert_eq!(wallet.note_address(&txs[&sent_txid].notes[0]), Some(my_address));
             assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[0].memo), Some(memo));
@@ -2136,7 +2175,7 @@ pub mod tests {
         const AMOUNT_SENT: u64 = 20000;
         let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);
 
-        let taddr = wallet.address_from_sk(&wallet.tkeys[0]);
+        let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
 
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
