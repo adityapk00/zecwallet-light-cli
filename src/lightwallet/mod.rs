@@ -825,7 +825,7 @@ impl LightWallet {
         let block: CompactBlock = match parse_from_bytes(block) {
             Ok(block) => block,
             Err(e) => {
-                eprintln!("Could not parse CompactBlock from bytes: {}", e);
+                error!("Could not parse CompactBlock from bytes: {}", e);
                 return Err(-1);
             }
         };
@@ -2348,5 +2348,33 @@ pub mod tests {
         assert_eq!(sk, "secret-extended-key-main1qvpa0qr8qqqqpqxn4l054nzxpxzp3a8r2djc7sekdek5upce8mc2j2z0arzps4zv940qeg706hd0wq6g5snzvhp332y6vhwyukdn8dhekmmsk7fzvzkqm6ypc99uy63tpesqwxhpre78v06cx8k5xpp9mrhtgqs5dvp68cqx2yrvthflmm2ynl8c0506dekul0f6jkcdmh0292lpphrksyc5z3pxwws97zd5els3l2mjt2s7hntap27mlmt6w0drtfmz36vz8pgu7ec0twfrq");
 
         assert_eq!(seed_phrase, Some(wallet.get_seed_phrase()));
+    }
+
+    #[test]
+    fn test_invalid_scan_blocks() {
+        const AMOUNT: u64 = 500000;
+        let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT);       
+
+        let prev_hash = add_blocks(&wallet, 2, 1, block_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 3);
+        
+        // Block fails to scan for bad encoding
+        assert_eq!(wallet.scan_block(&[0; 32]), Err(-1));
+
+        // Block is invalid height
+        let new_blk = FakeCompactBlock::new(4, prev_hash);
+        assert_eq!(wallet.scan_block(&new_blk.as_bytes()), Err(2));
+
+        // Block is right height, but invalid prev height (for reorgs)
+        let new_blk = FakeCompactBlock::new(2, BlockHash([0; 32]));
+        assert_eq!(wallet.scan_block(&new_blk.as_bytes()), Err(2));
+
+        // Block is right height, but invalid prev height (for reorgs)
+        let new_blk = FakeCompactBlock::new(3, BlockHash([0; 32]));
+        assert_eq!(wallet.scan_block(&new_blk.as_bytes()), Err(2));
+
+        // Then the rest add properly
+        let _ = add_blocks(&wallet, 3, 2, prev_hash).unwrap();
+        assert_eq!(wallet.blocks.read().unwrap().len(), 5);
     }
 }
