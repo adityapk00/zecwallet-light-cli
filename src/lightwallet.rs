@@ -37,11 +37,13 @@ use zcash_primitives::{
 };
 
 
-use crate::{address, prover, LightClientConfig, utils};
+use crate::{LightClientConfig};
 
-
-pub mod data;
-pub mod extended_key;
+mod data;
+mod extended_key;
+mod utils;
+mod address;
+mod prover;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 use extended_key::{KeyIndex, ExtendedPrivKey};

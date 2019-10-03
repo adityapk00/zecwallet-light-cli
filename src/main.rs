@@ -4,10 +4,7 @@ extern crate rust_embed;
 mod lightclient;
 mod grpcconnector;
 mod lightwallet;
-mod address;
-mod prover;
 mod commands;
-mod utils;
 
 use std::io::{Result, Error, ErrorKind};
 use std::sync::Arc;
