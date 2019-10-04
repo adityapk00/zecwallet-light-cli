@@ -1054,28 +1054,43 @@ impl LightWallet {
         consensus_branch_id: u32,
         spend_params: &[u8],
         output_params: &[u8],
-        to: &str,
-        value: u64,
-        memo: Option<String>,
+        tos: Vec<(&str, u64, Option<String>)>
     ) -> Option<Box<[u8]>> {
         let start_time = now();
+
+        let total_value = tos.iter().map(|to| to.1).sum::<u64>();
+
         println!(
-            "0: Creating transaction sending {} tazoshis to {}",
-            value,
-            to
+            "0: Creating transaction sending {} tazoshis to {} addresses",
+            total_value, tos.len()
         );
 
-        let to = match address::RecipientAddress::from_str(to, 
-                        self.config.hrp_sapling_address(), 
-                        self.config.base58_pubkey_address(), 
-                        self.config.base58_script_address()) {
-            Some(to) => to,
-            None => {
-                eprintln!("Invalid recipient address");
+        // Convert address (str) to RecepientAddress and value to Amount
+        let maybe_tos: Result<Vec<(address::RecipientAddress, Amount, Option<String>)>, _> = tos.iter().map(|to| {
+            let ra = match address::RecipientAddress::from_str(to.0, 
+                            self.config.hrp_sapling_address(), 
+                            self.config.base58_pubkey_address(), 
+                            self.config.base58_script_address()) {
+                Some(to) => to,
+                None => {
+                    let e = format!("Invalid recipient address: {}", to.0);
+                    error!("{}", e);
+                    return Err(e);
+                }
+            };
+
+            let value = Amount::from_u64(to.1).unwrap();
+
+            Ok((ra, value, to.2.clone()))
+        }).collect();
+
+        let tos = match maybe_tos {
+            Ok(t) => t,
+            Err(e) => {
+                error!("{}", e);
                 return None;
             }
         };
-        let value = Amount::from_u64(value).unwrap();
 
         // Target the next block, assuming we are up-to-date.
         let (height, anchor_offset) = match self.get_target_height_and_anchor_offset() {
@@ -1088,7 +1103,7 @@ impl LightWallet {
 
         // Select notes to cover the target value
         println!("{}: Selecting notes", now() - start_time);
-        let target_value = value + DEFAULT_FEE ;
+        let target_value = Amount::from_u64(total_value).unwrap() + DEFAULT_FEE ;
         let notes: Vec<_> = self.txs.read().unwrap().iter()
             .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
             .flatten()
@@ -1117,48 +1132,55 @@ impl LightWallet {
         // address as change.
         let mut tinputs = vec![];
         
-        if let Err(e) = match to {
-            address::RecipientAddress::Shielded(_) => {
-                // The destination is a sapling address, so add all transparent inputs
-                tinputs.extend(self.get_utxos().iter()
-                                .filter(|utxo| utxo.unconfirmed_spent.is_none()) // Remove any unconfirmed spends
-                                .map(|utxo| utxo.clone()));
-                
-                // Create a map from address -> sk for all taddrs, so we can spend from the 
-                // right address
-                let address_to_sk: HashMap<_, _> = self.tkeys.read().unwrap().iter().map(|sk|
-                                                        (self.address_from_sk(&sk), sk.clone())
-                                                    ).collect();
+        // Check if all to addresses are shielded
+        let all_shielded = !tos.iter().any(|to| match to.0 {
+            address::RecipientAddress::Transparent(_) => true,
+            _ => false
+        });
 
-                // Add all tinputs
-                tinputs.iter()
-                    .map(|utxo| {
-                        let outpoint: OutPoint = utxo.to_outpoint();
-                
-                        let coin = TxOut {
-                            value: Amount::from_u64(utxo.value).unwrap(),
-                            script_pubkey: Script { 0: utxo.script.clone() },
-                        };
+        if all_shielded {
+            // The destination is a sapling address, so add all transparent inputs
+            tinputs.extend(self.get_utxos().iter()
+                            .filter(|utxo| utxo.unconfirmed_spent.is_none()) // Remove any unconfirmed spends
+                            .map(|utxo| utxo.clone()));
+            
+            // Create a map from address -> sk for all taddrs, so we can spend from the 
+            // right address
+            let address_to_sk: HashMap<_, _> = self.tkeys.read().unwrap().iter().map(|sk|
+                                                    (self.address_from_sk(&sk), sk.clone())
+                                                ).collect();
 
-                        match address_to_sk.get(&utxo.address) {
-                            Some(sk) => builder.add_transparent_input(*sk, outpoint.clone(), coin.clone()),
-                            None     => {
-                                // Something is very wrong
-                                let e = format!("Couldn't find the secreykey for taddr {}", utxo.address);
-                                error!("{}", e);
-                                eprintln!("{}", e);
+            // Add all tinputs
+            let r = tinputs.iter()
+                .map(|utxo| {
+                    let outpoint: OutPoint = utxo.to_outpoint();
+            
+                    let coin = TxOut {
+                        value: Amount::from_u64(utxo.value).unwrap(),
+                        script_pubkey: Script { 0: utxo.script.clone() },
+                    };
 
-                                Err(zcash_primitives::transaction::builder::Error::InvalidAddress)
-                            }
+                    match address_to_sk.get(&utxo.address) {
+                        Some(sk) => builder.add_transparent_input(*sk, outpoint.clone(), coin.clone()),
+                        None     => {
+                            // Something is very wrong
+                            let e = format!("Couldn't find the secreykey for taddr {}", utxo.address);
+                            error!("{}", e);
+
+                            Err(zcash_primitives::transaction::builder::Error::InvalidAddress)
                         }
-                        
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            },            
-            _ => Ok(vec![])
-        } { 
-            eprintln!("Error adding transparent inputs: {:?}", e);
-            return None;
+                    }
+                    
+                })
+                .collect::<Result<Vec<_>, _>>();
+            
+            match r {
+                Err(e) => {
+                    error!("Error adding transparent inputs: {:?}", e);
+                    return None;
+                },
+                Ok(_) => {}
+            };
         }
 
         // Confirm we were able to select sufficient value
@@ -1197,25 +1219,29 @@ impl LightWallet {
                 self.extsks.read().unwrap()[0].default_address().unwrap().1);
         }
 
-        // Compute memo if it exists
-        let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap() );
-
-        println!("{}: Adding output", now() - start_time);
-
         // TODO: We're using the first ovk to encrypt outgoing Txns. Is that Ok?
         let ovk = self.extfvks.read().unwrap()[0].fvk.ovk;
 
-        if let Err(e) = match to {
-            address::RecipientAddress::Shielded(to) => {
-                builder.add_sapling_output(ovk, to.clone(), value, encoded_memo)
+        for (to, value, memo) in tos {
+            // Compute memo if it exists
+            let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap());
+            
+            println!("{}: Adding output", now() - start_time);
+
+            if let Err(e) = match to {
+                address::RecipientAddress::Shielded(to) => {
+                    builder.add_sapling_output(ovk, to.clone(), value, encoded_memo)
+                }
+                address::RecipientAddress::Transparent(to) => {
+                    builder.add_transparent_output(&to, value)
+                }
+            } {
+                eprintln!("Error adding output: {:?}", e);
+                return None;
             }
-            address::RecipientAddress::Transparent(to) => {
-                builder.add_transparent_output(&to, value)
-            }
-        } {
-            eprintln!("Error adding output: {:?}", e);
-            return None;
         }
+        
+
         println!("{}: Building transaction", now() - start_time);
         let (tx, _) = match builder.build(
             consensus_branch_id,
@@ -1969,7 +1995,7 @@ pub mod tests {
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &ext_address, AMOUNT_SENT, Some(outgoing_memo.clone())).unwrap();
+                                vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();
@@ -2037,7 +2063,7 @@ pub mod tests {
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone())).unwrap();
+                                vec![(&zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();
@@ -2091,7 +2117,7 @@ pub mod tests {
         let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
 
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                            &taddr, amount_all, None).unwrap();
+                                            vec![(&taddr, amount_all, None)]).unwrap();
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_ext_txid = sent_tx.txid();
 
@@ -2133,7 +2159,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                            &taddr, AMOUNT_SENT, None).unwrap();
+                                            vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();
 
@@ -2225,7 +2251,7 @@ pub mod tests {
 
         // Create a tx and send to address. This should consume both the UTXO and the note
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &ext_address, AMOUNT_SENT, Some(outgoing_memo.clone())).unwrap();
+                                vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();
@@ -2299,7 +2325,7 @@ pub mod tests {
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &my_address, AMOUNT1 - fee, Some(memo.clone())).unwrap();
+                                vec![(&my_address, AMOUNT1 - fee, Some(memo.clone()))]).unwrap();
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();
 
@@ -2338,7 +2364,7 @@ pub mod tests {
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &taddr, AMOUNT_SENT, None).unwrap();
+                                vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();
 
@@ -2398,7 +2424,7 @@ pub mod tests {
 
         // Create a Tx and send to the second t address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &taddr2, AMOUNT_SENT1, None).unwrap();
+                                vec![(&taddr2, AMOUNT_SENT1, None)]).unwrap();
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid1 = sent_tx.txid();
 
@@ -2442,7 +2468,7 @@ pub mod tests {
 
         // Create a Tx and send to the second t address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &taddr3, AMOUNT_SENT2, None).unwrap();
+                                vec![(&taddr3, AMOUNT_SENT2, None)]).unwrap();
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid2 = sent_tx.txid();
 
@@ -2479,7 +2505,7 @@ pub mod tests {
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &ext_address, AMOUNT_SENT_EXT, Some(outgoing_memo.clone())).unwrap();
+                                vec![(&ext_address, AMOUNT_SENT_EXT, Some(outgoing_memo.clone()))]).unwrap();
 
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid3 = sent_tx.txid();
@@ -2606,7 +2632,7 @@ pub mod tests {
         const AMOUNT_SENT: u64 = 30000;
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                &taddr, AMOUNT_SENT, None).unwrap();
+                                vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
 
         let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
         let sent_txid = sent_tx.txid();

@@ -709,7 +709,7 @@ impl LightClient {
         let rawtx = self.wallet.send_to_address(
             u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(),   // Blossom ID
             &self.sapling_spend, &self.sapling_output,
-            &addr, value, memo
+            vec![(&addr, value, memo)]
         );
         
         match rawtx {
