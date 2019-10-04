@@ -1552,7 +1552,7 @@ pub mod tests {
     }
 
     #[test]
-    fn z_balances() {
+    fn test_z_balances() {
         let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
         const AMOUNT1:u64 = 5;
@@ -1591,7 +1591,7 @@ pub mod tests {
     }
 
     #[test]
-    fn z_change_balances() {
+    fn test_z_change_balances() {
         let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
         // First, add an incoming transaction
@@ -1878,6 +1878,38 @@ pub mod tests {
             assert_eq!(txs[&txid2].utxos.len(), 0); // The second TxId has no UTXOs
             assert_eq!(txs[&txid2].total_transparent_value_spent, TAMOUNT1);
         }
+    }
+
+    #[test]
+    fn test_multi_serialization() {
+        let config = get_test_config();
+
+        let wallet = LightWallet::new(None, &config, 0).unwrap();
+
+        let taddr1 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+        let taddr2 = wallet.add_taddr();
+
+        let (zaddr1, zpk1) = &wallet.get_z_private_keys()[0];
+        let zaddr2 = wallet.add_zaddr();
+
+        let mut serialized_data = vec![];
+        wallet.write(&mut serialized_data).expect("Serialize wallet");
+        let wallet2 = LightWallet::read(&serialized_data[..], &config).unwrap();
+
+        assert_eq!(wallet2.tkeys.read().unwrap().len(), 2);
+        assert_eq!(wallet2.extsks.read().unwrap().len(), 2);
+        assert_eq!(wallet2.extfvks.read().unwrap().len(), 2);
+        assert_eq!(wallet2.address.read().unwrap().len(), 2);
+
+        assert_eq!(taddr1, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]));
+        assert_eq!(taddr2, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[1]));
+
+        let (w2_zaddr1, w2_zpk1) = &wallet.get_z_private_keys()[0];
+        let (w2_zaddr2, _) = &wallet.get_z_private_keys()[1];
+        assert_eq!(zaddr1, w2_zaddr1);
+        assert_eq!(zpk1, w2_zpk1);
+        assert_eq!(zaddr2, *w2_zaddr2);
+
     }
 
     fn get_test_config() -> LightClientConfig {
