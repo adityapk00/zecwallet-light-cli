@@ -666,17 +666,23 @@ impl LightWallet {
 
         // TODO: Iterate over all transparent addresses. This is currently looking only at
         // the first one.
-        let pubkey = secp256k1::PublicKey::from_secret_key(&secp, &self.tkeys.read().unwrap()[0]).serialize();
         // Scan for t outputs
-        for (n, vout) in tx.vout.iter().enumerate() {
-            match vout.script_pubkey.address() {
-                Some(TransparentAddress::PublicKey(hash)) => {
-                    if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
-                        // This is our address. Add this as an output to the txid
-                        self.add_toutput_to_wtx(height, &tx.txid(), &vout, n as u64);
-                    }
-                },
-                _ => {}
+        let all_pubkeys = self.tkeys.read().unwrap().iter()
+                                .map(|sk| 
+                                    secp256k1::PublicKey::from_secret_key(&secp, sk).serialize()
+                                )
+                                .collect::<Vec<[u8; secp256k1::constants::PUBLIC_KEY_SIZE]>>();
+        for pubkey in all_pubkeys {
+            for (n, vout) in tx.vout.iter().enumerate() {
+                match vout.script_pubkey.address() {
+                    Some(TransparentAddress::PublicKey(hash)) => {
+                        if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
+                            // This is our address. Add this as an output to the txid
+                            self.add_toutput_to_wtx(height, &tx.txid(), &vout, n as u64);
+                        }
+                    },
+                    _ => {}
+                }
             }
         }
 
@@ -1109,16 +1115,20 @@ impl LightWallet {
         // Specifically, if you send an outgoing transaction that is sent to a shielded address,
         // ZecWallet will add all your t-address funds into that transaction, and send them to your shielded
         // address as change.
-        let tinputs = self.get_utxos().iter()
-            .filter(|utxo| utxo.unconfirmed_spent.is_none()) // Remove any unconfirmed spends
-            .map(|utxo| utxo.clone())
-            .collect::<Vec<Utxo>>();
-
+        let mut tinputs = vec![];
+        
         if let Err(e) = match to {
             address::RecipientAddress::Shielded(_) => {
                 // The destination is a sapling address, so add all transparent inputs
-                // TODO: This only spends from the first address right now.
-                let sk = self.tkeys.read().unwrap()[0];
+                tinputs.extend(self.get_utxos().iter()
+                                .filter(|utxo| utxo.unconfirmed_spent.is_none()) // Remove any unconfirmed spends
+                                .map(|utxo| utxo.clone()));
+                
+                // Create a map from address -> sk for all taddrs, so we can spend from the 
+                // right address
+                let address_to_sk: HashMap<_, _> = self.tkeys.read().unwrap().iter().map(|sk|
+                                                        (self.address_from_sk(&sk), sk.clone())
+                                                    ).collect();
 
                 // Add all tinputs
                 tinputs.iter()
@@ -1130,7 +1140,18 @@ impl LightWallet {
                             script_pubkey: Script { 0: utxo.script.clone() },
                         };
 
-                        builder.add_transparent_input(sk, outpoint.clone(), coin.clone())
+                        match address_to_sk.get(&utxo.address) {
+                            Some(sk) => builder.add_transparent_input(*sk, outpoint.clone(), coin.clone()),
+                            None     => {
+                                // Something is very wrong
+                                let e = format!("Couldn't find the secreykey for taddr {}", utxo.address);
+                                error!("{}", e);
+                                eprintln!("{}", e);
+
+                                Err(zcash_primitives::transaction::builder::Error::InvalidAddress)
+                            }
+                        }
+                        
                     })
                     .collect::<Result<Vec<_>, _>>()
             },            
@@ -1865,7 +1886,7 @@ pub mod tests {
             chain_name: "test".to_string(),
             sapling_activation_height: 0,
             consensus_branch_id: "000000".to_string(),
-            anchor_offset: 1
+            anchor_offset: 0
         }
     }
 
@@ -1967,7 +1988,107 @@ pub mod tests {
         }
     }
 
-     #[test]
+    #[test]
+    fn test_multi_z() {
+        const AMOUNT1: u64 = 50000;
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
+
+        let zaddr2 = wallet.add_zaddr();
+
+        const AMOUNT_SENT: u64 = 20;
+
+        let outgoing_memo = "Outgoing Memo".to_string();
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) =get_sapling_params().unwrap();
+
+        // Create a tx and send to address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone())).unwrap();
+
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 2);
+
+        // Because the builder will randomize notes outputted, we need to find
+        // which note number is the change and which is the output note (Because this tx
+        // had both outputs in the same Tx)
+        let (change_note_number, ext_note_number) = {
+            let txs = wallet.txs.read().unwrap();
+            if txs[&sent_txid].notes[0].is_change { (0,1) } else { (1,0) }
+        };
+
+        // Now this new Spent tx should be in, so the note should be marked confirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The sent tx should generate change + the new incoming note
+            assert_eq!(txs[&sent_txid].notes.len(), 2);
+
+            assert_eq!(txs[&sent_txid].notes[change_note_number].note.value, AMOUNT1 - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[change_note_number].account, 0);
+            assert_eq!(txs[&sent_txid].notes[change_note_number].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[change_note_number].spent, None);
+            assert_eq!(txs[&sent_txid].notes[change_note_number].unconfirmed_spent, None);
+            assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[change_note_number].memo), None);
+
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].note.value, AMOUNT_SENT);
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].account, 1);
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].is_change, false);
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].spent, None);
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].unconfirmed_spent, None);
+            assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[ext_note_number].memo), Some(outgoing_memo));
+
+            assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
+
+            // No Outgoing meta data, since this is a wallet -> wallet tx
+            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 0);
+        }
+
+        // Now spend the money, which should pick notes from both addresses
+        let amount_all:u64 = (AMOUNT1 - AMOUNT_SENT - fee) + (AMOUNT_SENT) - fee;
+        let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
+
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                            &taddr, amount_all, None).unwrap();
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_ext_txid = sent_tx.txid();
+
+        let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
+        cb4.add_tx(&sent_tx);
+        wallet.scan_block(&cb4.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 3);
+
+        {
+            // Both notes should be spent now.
+            let txs = wallet.txs.read().unwrap();
+
+            assert_eq!(txs[&sent_txid].notes[change_note_number].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[change_note_number].spent, Some(sent_ext_txid));
+            assert_eq!(txs[&sent_txid].notes[change_note_number].unconfirmed_spent, None);
+
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].is_change, false);
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].spent, Some(sent_ext_txid));
+            assert_eq!(txs[&sent_txid].notes[ext_note_number].unconfirmed_spent, None);
+
+            // Check outgoing metadata for the external sent tx
+            assert_eq!(txs[&sent_ext_txid].notes.len(), 0); // No change was generated
+            assert_eq!(txs[&sent_ext_txid].outgoing_metadata.len(), 1);
+            assert_eq!(txs[&sent_ext_txid].outgoing_metadata[0].address, taddr);
+            assert_eq!(txs[&sent_ext_txid].outgoing_metadata[0].value, amount_all);
+        }
+    }
+
+    #[test]
     fn test_z_spend_to_taddr() {
         const AMOUNT1: u64 = 50000;
         let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
@@ -2225,6 +2346,139 @@ pub mod tests {
             assert_eq!(txs[&sent_txid].utxos[0].unconfirmed_spent, None);
 
         }
+    }
+
+     #[test]
+    fn test_multi_t() {
+        const AMOUNT: u64 = 5000000;
+        const AMOUNT_SENT1: u64 = 20000;
+        const AMOUNT_SENT2: u64 = 10000;
+
+        let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);
+
+        // Add a new taddr
+        let taddr2 = wallet.add_taddr();
+
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
+
+        // Create a Tx and send to the second t address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &taddr2, AMOUNT_SENT1, None).unwrap();
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid1 = sent_tx.txid();
+
+        // Add it to a block
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 2);
+
+        // Check that the send to the second taddr worked
+        {
+            let txs = wallet.txs.read().unwrap();
+            
+            // We have the original note
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+            
+            // We have the spent tx
+            assert_eq!(txs[&sent_txid1].notes.len(), 1);
+            assert_eq!(txs[&sent_txid1].notes[0].note.value, AMOUNT - AMOUNT_SENT1 - fee);
+            assert_eq!(txs[&sent_txid1].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid1].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid1].notes[0].unconfirmed_spent, None);
+
+            // Since we sent the Tx to ourself, there should be no outgoing 
+            // metadata
+            assert_eq!(txs[&sent_txid1].total_shielded_value_spent, AMOUNT);
+            assert_eq!(txs[&sent_txid1].outgoing_metadata.len(), 0);
+
+
+            // We have the taddr utxo in the same Tx
+            assert_eq!(txs[&sent_txid1].utxos.len(), 1);
+            assert_eq!(txs[&sent_txid1].utxos[0].address, taddr2);
+            assert_eq!(txs[&sent_txid1].utxos[0].value, AMOUNT_SENT1);
+            assert_eq!(txs[&sent_txid1].utxos[0].spent, None);
+            assert_eq!(txs[&sent_txid1].utxos[0].unconfirmed_spent, None);
+        }
+
+        // Send some money to the 3rd t addr
+        let taddr3 = wallet.add_taddr();
+
+        // Create a Tx and send to the second t address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &taddr3, AMOUNT_SENT2, None).unwrap();
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid2 = sent_tx.txid();
+
+        // Add it to a block
+        let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
+        cb4.add_tx(&sent_tx);
+        wallet.scan_block(&cb4.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 3);
+
+        // Quickly check we have it
+        {
+            let txs = wallet.txs.read().unwrap();
+            
+            // We have the taddr utxo in the same Tx
+            assert_eq!(txs[&sent_txid2].utxos.len(), 1);
+            assert_eq!(txs[&sent_txid2].utxos[0].address, taddr3);
+            assert_eq!(txs[&sent_txid2].utxos[0].value, AMOUNT_SENT2);
+
+            // Old UTXO was NOT spent here, because we sent it to a taddr
+            assert_eq!(txs[&sent_txid1].utxos.len(), 1);
+            assert_eq!(txs[&sent_txid1].utxos[0].value, AMOUNT_SENT1);
+            assert_eq!(txs[&sent_txid1].utxos[0].address, taddr2);
+            assert_eq!(txs[&sent_txid1].utxos[0].spent, None);
+            assert_eq!(txs[&sent_txid1].utxos[0].unconfirmed_spent, None);
+        }
+
+        // Now, spend to an external z address, which will select all the utxos
+        let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+        let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                            &fvk.default_address().unwrap().1);
+
+        const AMOUNT_SENT_EXT: u64 = 45;
+        let outgoing_memo = "Outgoing Memo".to_string();
+
+        // Create a tx and send to address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                &ext_address, AMOUNT_SENT_EXT, Some(outgoing_memo.clone())).unwrap();
+
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid3 = sent_tx.txid();
+
+        let mut cb5 = FakeCompactBlock::new(4, cb4.hash());
+        cb5.add_tx(&sent_tx);
+        wallet.scan_block(&cb5.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 4);
+
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&sent_txid3].outgoing_metadata.len(), 1);
+
+            assert_eq!(txs[&sent_txid3].outgoing_metadata[0].address, ext_address);
+            assert_eq!(txs[&sent_txid3].outgoing_metadata[0].value, AMOUNT_SENT_EXT);
+            assert_eq!(txs[&sent_txid3].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+
+            // Test to see both UTXOs were spent.
+            // UTXO1
+            assert_eq!(txs[&sent_txid1].utxos[0].value, AMOUNT_SENT1);
+            assert_eq!(txs[&sent_txid1].utxos[0].address, taddr2);
+            assert_eq!(txs[&sent_txid1].utxos[0].spent, Some(sent_txid3));
+            assert_eq!(txs[&sent_txid1].utxos[0].unconfirmed_spent, None);
+
+            // UTXO2
+            assert_eq!(txs[&sent_txid2].utxos[0].value, AMOUNT_SENT2);
+            assert_eq!(txs[&sent_txid2].utxos[0].address, taddr3);
+            assert_eq!(txs[&sent_txid2].utxos[0].spent, Some(sent_txid3));
+            assert_eq!(txs[&sent_txid2].utxos[0].unconfirmed_spent, None);
+        }
+
     }
 
     /// Test helper to add blocks
