@@ -1130,58 +1130,49 @@ impl LightWallet {
         // Specifically, if you send an outgoing transaction that is sent to a shielded address,
         // ZecWallet will add all your t-address funds into that transaction, and send them to your shielded
         // address as change.
-        let mut tinputs = vec![];
+        let tinputs: Vec<_> = self.get_utxos().iter()
+                                .filter(|utxo| utxo.unconfirmed_spent.is_none()) // Remove any unconfirmed spends
+                                .map(|utxo| utxo.clone())
+                                .collect();
         
-        // Check if all to addresses are shielded
-        let all_shielded = !tos.iter().any(|to| match to.0 {
-            address::RecipientAddress::Transparent(_) => true,
-            _ => false
-        });
+        // Create a map from address -> sk for all taddrs, so we can spend from the 
+        // right address
+        let address_to_sk: HashMap<_, _> = self.tkeys.read().unwrap().iter().map(|sk|
+                                                (self.address_from_sk(&sk), sk.clone())
+                                            ).collect();
 
-        if all_shielded {
-            // The destination is a sapling address, so add all transparent inputs
-            tinputs.extend(self.get_utxos().iter()
-                            .filter(|utxo| utxo.unconfirmed_spent.is_none()) // Remove any unconfirmed spends
-                            .map(|utxo| utxo.clone()));
-            
-            // Create a map from address -> sk for all taddrs, so we can spend from the 
-            // right address
-            let address_to_sk: HashMap<_, _> = self.tkeys.read().unwrap().iter().map(|sk|
-                                                    (self.address_from_sk(&sk), sk.clone())
-                                                ).collect();
+        // Add all tinputs
+        let r = tinputs.iter()
+            .map(|utxo| {
+                let outpoint: OutPoint = utxo.to_outpoint();
+        
+                let coin = TxOut {
+                    value: Amount::from_u64(utxo.value).unwrap(),
+                    script_pubkey: Script { 0: utxo.script.clone() },
+                };
 
-            // Add all tinputs
-            let r = tinputs.iter()
-                .map(|utxo| {
-                    let outpoint: OutPoint = utxo.to_outpoint();
-            
-                    let coin = TxOut {
-                        value: Amount::from_u64(utxo.value).unwrap(),
-                        script_pubkey: Script { 0: utxo.script.clone() },
-                    };
+                match address_to_sk.get(&utxo.address) {
+                    Some(sk) => builder.add_transparent_input(*sk, outpoint.clone(), coin.clone()),
+                    None     => {
+                        // Something is very wrong
+                        let e = format!("Couldn't find the secreykey for taddr {}", utxo.address);
+                        error!("{}", e);
 
-                    match address_to_sk.get(&utxo.address) {
-                        Some(sk) => builder.add_transparent_input(*sk, outpoint.clone(), coin.clone()),
-                        None     => {
-                            // Something is very wrong
-                            let e = format!("Couldn't find the secreykey for taddr {}", utxo.address);
-                            error!("{}", e);
-
-                            Err(zcash_primitives::transaction::builder::Error::InvalidAddress)
-                        }
+                        Err(zcash_primitives::transaction::builder::Error::InvalidAddress)
                     }
-                    
-                })
-                .collect::<Result<Vec<_>, _>>();
-            
-            match r {
-                Err(e) => {
-                    error!("Error adding transparent inputs: {:?}", e);
-                    return None;
-                },
-                Ok(_) => {}
-            };
-        }
+                }
+                
+            })
+            .collect::<Result<Vec<_>, _>>();
+        
+        match r {
+            Err(e) => {
+                error!("Error adding transparent inputs: {:?}", e);
+                return None;
+            },
+            Ok(_) => {}
+        };
+        
 
         // Confirm we were able to select sufficient value
         let selected_value = notes.iter().map(|selected| selected.note.value).sum::<u64>() 
@@ -2487,11 +2478,11 @@ pub mod tests {
             assert_eq!(txs[&sent_txid2].utxos[0].address, taddr3);
             assert_eq!(txs[&sent_txid2].utxos[0].value, AMOUNT_SENT2);
 
-            // Old UTXO was NOT spent here, because we sent it to a taddr
+            // Old UTXO was spent here
             assert_eq!(txs[&sent_txid1].utxos.len(), 1);
             assert_eq!(txs[&sent_txid1].utxos[0].value, AMOUNT_SENT1);
             assert_eq!(txs[&sent_txid1].utxos[0].address, taddr2);
-            assert_eq!(txs[&sent_txid1].utxos[0].spent, None);
+            assert_eq!(txs[&sent_txid1].utxos[0].spent, Some(sent_txid2));
             assert_eq!(txs[&sent_txid1].utxos[0].unconfirmed_spent, None);
         }
 
@@ -2523,12 +2514,7 @@ pub mod tests {
             assert_eq!(txs[&sent_txid3].outgoing_metadata[0].value, AMOUNT_SENT_EXT);
             assert_eq!(txs[&sent_txid3].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
 
-            // Test to see both UTXOs were spent.
-            // UTXO1
-            assert_eq!(txs[&sent_txid1].utxos[0].value, AMOUNT_SENT1);
-            assert_eq!(txs[&sent_txid1].utxos[0].address, taddr2);
-            assert_eq!(txs[&sent_txid1].utxos[0].spent, Some(sent_txid3));
-            assert_eq!(txs[&sent_txid1].utxos[0].unconfirmed_spent, None);
+            // Test to see that the UTXOs were spent.
 
             // UTXO2
             assert_eq!(txs[&sent_txid2].utxos[0].value, AMOUNT_SENT2);
@@ -2634,7 +2620,7 @@ pub mod tests {
         let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
 
         const EXT_ZADDR_AMOUNT: u64 = 3000;
-        let ext_taddr_amount = AMOUNT1 - TAMOUNT2 - TAMOUNT3 - fee - EXT_ZADDR_AMOUNT - fee; // Spend everything
+        let ext_taddr_amount = AMOUNT1 - fee - EXT_ZADDR_AMOUNT - fee; // Spend everything
         println!("taddr amount {}", ext_taddr_amount);
 
         let tos = vec![ (ext_address.as_str(), EXT_ZADDR_AMOUNT, Some(ext_memo.clone())),
@@ -2657,7 +2643,9 @@ pub mod tests {
             assert_eq!(txs[&sent_txid].notes[1].spent, Some(sent_txid2));
             assert_eq!(txs[&sent_txid].notes[2].spent, Some(sent_txid2));
 
-            // All utxos were NOT spent, since this outgoing Tx to a t addr
+            // All utxos were spent
+            assert_eq!(txs[&sent_txid].utxos[0].spent, Some(sent_txid2));
+            assert_eq!(txs[&sent_txid].utxos[1].spent, Some(sent_txid2));
 
             // The new tx has no change
             assert_eq!(txs[&sent_txid2].notes.len(), 0);
