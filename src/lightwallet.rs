@@ -1055,7 +1055,7 @@ impl LightWallet {
         spend_params: &[u8],
         output_params: &[u8],
         tos: Vec<(&str, u64, Option<String>)>
-    ) -> Option<Box<[u8]>> {
+    ) -> Result<Box<[u8]>, String> {
         let start_time = now();
 
         let total_value = tos.iter().map(|to| to.1).sum::<u64>();
@@ -1066,7 +1066,7 @@ impl LightWallet {
         );
 
         // Convert address (str) to RecepientAddress and value to Amount
-        let maybe_tos: Result<Vec<(address::RecipientAddress, Amount, Option<String>)>, _> = tos.iter().map(|to| {
+        let tos = tos.iter().map(|to| {
             let ra = match address::RecipientAddress::from_str(to.0, 
                             self.config.hrp_sapling_address(), 
                             self.config.base58_pubkey_address(), 
@@ -1082,22 +1082,15 @@ impl LightWallet {
             let value = Amount::from_u64(to.1).unwrap();
 
             Ok((ra, value, to.2.clone()))
-        }).collect();
-
-        let tos = match maybe_tos {
-            Ok(t) => t,
-            Err(e) => {
-                error!("{}", e);
-                return None;
-            }
-        };
+        }).collect::<Result<Vec<(address::RecipientAddress, Amount, Option<String>)>, String>>()?;
 
         // Target the next block, assuming we are up-to-date.
         let (height, anchor_offset) = match self.get_target_height_and_anchor_offset() {
             Some(res) => res,
             None => {
-                eprintln!("Cannot send funds before scanning any blocks");
-                return None;
+                let e = format!("Cannot send funds before scanning any blocks");
+                error!("{}", e);
+                return Err(e);
             }
         };
 
@@ -1142,7 +1135,7 @@ impl LightWallet {
                                             ).collect();
 
         // Add all tinputs
-        let r = tinputs.iter()
+        tinputs.iter()
             .map(|utxo| {
                 let outpoint: OutPoint = utxo.to_outpoint();
         
@@ -1163,15 +1156,8 @@ impl LightWallet {
                 }
                 
             })
-            .collect::<Result<Vec<_>, _>>();
-        
-        match r {
-            Err(e) => {
-                error!("Error adding transparent inputs: {:?}", e);
-                return None;
-            },
-            Ok(_) => {}
-        };
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("{}", e))?;
         
 
         // Confirm we were able to select sufficient value
@@ -1179,11 +1165,12 @@ impl LightWallet {
                              + tinputs.iter().map::<u64, _>(|utxo| utxo.value.into()).sum::<u64>();
 
         if selected_value < u64::from(target_value) {
-            eprintln!(
+            let e = format!(
                 "Insufficient verified funds (have {}, need {:?}).\n Note, funds need {} confirmations before they can be spent",
                 selected_value, target_value, self.config.anchor_offset
             );
-            return None;
+            error!("{}", e);
+            return Err(e);
         }
 
         // Create the transaction
@@ -1196,8 +1183,9 @@ impl LightWallet {
                 selected.note.clone(),
                 selected.witness.clone(),
             ) {
-                eprintln!("Error adding note: {:?}", e);
-                return None;
+                let e = format!("Error adding note: {:?}", e);
+                error!("{}", e);
+                return Err(e);
             }
         }
 
@@ -1227,8 +1215,9 @@ impl LightWallet {
                     builder.add_transparent_output(&to, value)
                 }
             } {
-                eprintln!("Error adding output: {:?}", e);
-                return None;
+                let e = format!("Error adding output: {:?}", e);
+                error!("{}", e);
+                return Err(e);
             }
         }
         
@@ -1240,8 +1229,9 @@ impl LightWallet {
         ) {
             Ok(res) => res,
             Err(e) => {
-                eprintln!("Error creating transaction: {:?}", e);
-                return None;
+                let e = format!("Error creating transaction: {:?}", e);
+                error!("{}", e);
+                return Err(e);
             }
         };
         println!("{}: Transaction created", now() - start_time);
@@ -1271,7 +1261,7 @@ impl LightWallet {
         // Return the encoded transaction, so the caller can send it.
         let mut raw_tx = vec![];
         tx.write(&mut raw_tx).unwrap();
-        Some(raw_tx.into_boxed_slice())
+        Ok(raw_tx.into_boxed_slice())
     }
 }
 
@@ -2143,7 +2133,7 @@ pub mod tests {
         let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) =get_sapling_params().unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
 
         let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
         const AMOUNT_SENT: u64 = 30;
@@ -2312,7 +2302,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) =get_sapling_params().unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
@@ -2664,6 +2654,41 @@ pub mod tests {
         }
     }
 
+    #[test]
+    fn test_bad_send() {
+        // Test all the ways in which a send should fail
+        const AMOUNT1: u64 = 50000;
+        let _fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let (wallet, _txid1, _block_hash) = get_test_wallet(AMOUNT1);
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
+        let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());       
+
+        // Bad address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                            vec![(&"badaddress", 10, None)]);
+        assert!(raw_tx.err().unwrap().contains("Invalid recipient address"));
+
+        // Insufficient funds
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                            vec![(&ext_taddr, AMOUNT1 + 10, None)]);
+        assert!(raw_tx.err().unwrap().contains("Insufficient verified funds"));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_params() {
+        let (wallet, _, _) = get_test_wallet(100000);
+        let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());  
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        // Bad params
+        let _ = wallet.send_to_address(branch_id, &[], &[],
+                                vec![(&ext_taddr, 10, None)]);
+    }
+
     /// Test helper to add blocks
     fn add_blocks(wallet: &LightWallet, start: i32, num: i32, mut prev_hash: BlockHash) -> Result<BlockHash, i32>{
         // Add it to a block
@@ -2676,7 +2701,6 @@ pub mod tests {
                 Err(e) => return Err(e)
             };
         }
-
 
         Ok(new_blk.hash())
     }

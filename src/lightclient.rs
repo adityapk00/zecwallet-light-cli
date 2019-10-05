@@ -713,11 +713,11 @@ impl LightClient {
         );
         
         match rawtx {
-            Some(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), txbytes) {
+            Ok(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), txbytes) {
                 Ok(k)  => k,
                 Err(e) => e,
             },
-            None            => format!("No Tx to broadcast")
+            Err(e)        => format!("No Tx to broadcast. Error was: {}", e)
         }
     }
 }
