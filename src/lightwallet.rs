@@ -791,7 +791,7 @@ impl LightWallet {
             }
         }
 
-        // Next, remove transactions
+        // Next, remove entire transactions
         {
             let mut txs = self.txs.write().unwrap();
             let txids_to_remove = txs.values()
@@ -818,8 +818,21 @@ impl LightWallet {
                         })
                 })
         }
+
+        // Of the notes that still remain, unroll the witness.
+        // Remove `num_invalidated` items from the witness
+        {
+            let mut txs = self.txs.write().unwrap();
+
+            // Trim all witnesses for the invalidated blocks
+            for tx in txs.values_mut() {
+                for nd in tx.notes.iter_mut() {
+                    nd.witnesses.split_off(nd.witnesses.len().saturating_sub(num_invalidated));
+                }
+            }
+        }
         
-        num_invalidated
+        num_invalidated as u64
     }
 
     // Scan a block. Will return an error with the block height that failed to scan
