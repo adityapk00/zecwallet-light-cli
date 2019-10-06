@@ -215,7 +215,6 @@ impl LightClient {
         lc.sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
 
         info!("Created LightClient to {}", &config.server);
-        println!("Lightclient connecting to {}", config.server);
 
         Ok(lc)
     }
@@ -324,8 +323,12 @@ impl LightClient {
         self.config.server.clone()
     }
 
-    pub fn do_info(uri: http::Uri) -> String {
-        format!("{:?}", get_info(uri))
+    pub fn do_info(uri: http::Uri) -> String {       
+        let r = get_info(uri);
+        match r {
+            Ok(i) => format!("{:?}", i)[11..].to_string(),
+            Err(e) => e
+        }
     }
 
     pub fn do_seed_phrase(&self) -> JsonValue {

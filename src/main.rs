@@ -85,7 +85,23 @@ pub fn main() {
                         .help("Lightwalletd server to connect to.")
                         .takes_value(true)
                         .default_value(lightclient::DEFAULT_SERVER))
+                    .arg(Arg::with_name("nosync")
+                        .help("By default, zecwallet-cli will sync the wallet at startup. Pass --nosync to prevent the automatic sync at startup.")
+                        .long("nosync")
+                        .short("n")
+                        .takes_value(false))
+                    .arg(Arg::with_name("COMMAND")
+                        .help("Command to execute. If a command is not specified, zecwallet-cli will start in interactive mode.")
+                        .required(false)
+                        .index(1))
+                    .arg(Arg::with_name("PARAMS")
+                        .help("Params to execute command with. Run the 'help' command to get usage help.")
+                        .required(false)
+                        .multiple(true))
                     .get_matches();
+
+    let command = matches.value_of("COMMAND");
+    let params = matches.values_of("PARAMS").map(|v| v.collect()).or(Some(vec![])).unwrap();
 
     let maybe_server  = matches.value_of("server").map(|s| s.to_string());
     let seed          = matches.value_of("seed").map(|s| s.to_string());
@@ -136,9 +152,27 @@ pub fn main() {
         Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
     };
 
-    // At startup, run a sync
-    let sync_update = lightclient.do_sync(true);
-    println!("{}", sync_update);
+    // At startup, run a sync. 
+    let sync_output = if matches.is_present("nosync") {
+         None
+    } else {
+        Some(lightclient.do_sync(true))
+    };
+
+    if command.is_none() {
+        // If running in interactive mode, output of the sync command
+        if sync_output.is_some() {
+            println!("{}", sync_output.unwrap());
+        }
+        start_interactive(lightclient, &config);
+    } else {
+        let cmd_response = commands::do_user_command(&command.unwrap(), &params, lightclient.as_ref());
+        println!("{}", cmd_response);
+    }
+}
+
+fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) {
+    println!("Lightclient connecting to {}", config.server);
 
     let (command_tx, command_rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
     let (resp_tx, resp_rx) = std::sync::mpsc::channel::<String>();
