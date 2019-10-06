@@ -42,8 +42,8 @@ const ANCHOR_OFFSET: u32 = 4;
 fn get_log_config(config: &LightClientConfig) -> Result<Config> {
     let window_size = 3; // log0, log1, log2
     let fixed_window_roller =
-        FixedWindowRoller::builder().build("log{}",window_size).unwrap();
-    let size_limit = 5 * 1024; // 5KB as max log file size to roll
+        FixedWindowRoller::builder().build("zecwallet-light-wallet-log{}",window_size).unwrap();
+    let size_limit = 5 * 1024 * 1024; // 5MB as max log file size to roll
     let size_trigger = SizeTrigger::new(size_limit);
     let compound_policy = CompoundPolicy::new(Box::new(size_trigger),Box::new(fixed_window_roller));
 
