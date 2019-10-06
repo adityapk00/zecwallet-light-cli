@@ -2758,10 +2758,22 @@ pub mod tests {
         let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);       
 
         add_blocks(&wallet, 2, 5, block_hash).unwrap();
-        
+
+        // Make sure the note exists with the witnesses
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes[0].witnesses.len(), 7);
+        }
+                
         // Invalidate 2 blocks
         assert_eq!(wallet.last_scanned_height(), 6);
         assert_eq!(wallet.invalidate_block(5), 2);
+
+        // THe witnesses should be rolledback
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes[0].witnesses.len(), 5);
+        }
 
         let blk3_hash;
         let blk4_hash;
@@ -2810,13 +2822,14 @@ pub mod tests {
             assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
             assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
             assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
-
+            
             // The sent tx should generate change
             assert_eq!(txs[&sent_txid].notes.len(), 1);
             assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT - AMOUNT_SENT - fee);
             assert_eq!(txs[&sent_txid].notes[0].is_change, true);
             assert_eq!(txs[&sent_txid].notes[0].spent, None);
             assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].witnesses.len(), 1);
         }
 
         // Invalidate 3 blocks
