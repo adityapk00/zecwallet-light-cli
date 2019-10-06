@@ -4,3 +4,4 @@ Cargo.lock
 history.txt
 /.idea/
 tarpaulin-report.html
+/log*

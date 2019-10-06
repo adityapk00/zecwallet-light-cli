@@ -139,7 +139,7 @@ impl Command for BalanceCommand {
         "Show the current TAZ balance in the wallet".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {        
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         lightclient.do_sync(true);
         
         format!("{}", lightclient.do_balance().pretty(2))
@@ -311,6 +311,32 @@ impl Command for TransactionsCommand {
     }
 }
 
+struct NewAddressCommand {}
+impl Command for NewAddressCommand {
+    fn help(&self)  -> String {
+        let mut h = vec![];
+        h.push("Create a new address in this wallet");
+        h.push("Usage:");
+        h.push("new [z | t]");
+        h.push("");
+        h.push("Example:");
+        h.push("To create a new z address:");
+        h.push("new z");
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Create a new address in this wallet".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        if args.len() != 1 {
+            return format!("No address type specified\n{}", self.help());
+        }
+
+        format!("{}", lightclient.do_new_address(args[0]).pretty(2))
+    }
+}
 
 struct NotesCommand {}
 impl Command for NotesCommand {
@@ -388,6 +414,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("quit".to_string(),      Box::new(QuitCommand{}));
     map.insert("list".to_string(),      Box::new(TransactionsCommand{}));
     map.insert("notes".to_string(),     Box::new(NotesCommand{}));
+    map.insert("new".to_string(),       Box::new(NewAddressCommand{}));
     map.insert("seed".to_string(),      Box::new(SeedCommand{}));
 
     Box::new(map)

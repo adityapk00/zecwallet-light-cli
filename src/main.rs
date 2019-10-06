@@ -7,7 +7,7 @@ mod lightwallet;
 mod commands;
 
 use std::io::{Result, Error, ErrorKind};
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::time::Duration;
 
 use lightclient::{LightClient, LightClientConfig};
@@ -136,7 +136,6 @@ pub fn main() {
         Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
     };
 
-
     // At startup, run a sync
     let sync_update = lightclient.do_sync(true);
     println!("{}", sync_update);
@@ -150,7 +149,8 @@ pub fn main() {
             match command_rx.recv_timeout(Duration::from_secs(5 * 60)) {
                 Ok((cmd, args)) => {
                     let args = args.iter().map(|s| s.as_ref()).collect();
-                    let cmd_response = commands::do_user_command(&cmd, &args, &lc);
+
+                    let cmd_response = commands::do_user_command(&cmd, &args, lc.as_ref());
                     resp_tx.send(cmd_response).unwrap();
 
                     if cmd == "quit" {

@@ -10,7 +10,7 @@ use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter, Error, ErrorKind};
 
-use json::{object, JsonValue};
+use json::{object, array, JsonValue};
 use zcash_primitives::transaction::{TxId, Transaction};
 use zcash_client_backend::{
     constants::testnet, constants::mainnet, constants::regtest, encoding::encode_payment_address,
@@ -190,7 +190,7 @@ impl LightClient {
             
             let wallet = LightWallet::read(&mut file_buffer, config)?;
              LightClient {
-                wallet          : Arc::new(wallet), 
+                wallet          : Arc::new(wallet),
                 config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
@@ -225,7 +225,7 @@ impl LightClient {
     }
 
     // Export private keys
-    pub fn do_export(&self, addr: Option<String>) -> json::JsonValue {
+    pub fn do_export(&self, addr: Option<String>) -> JsonValue {
         // Clone address so it can be moved into the closure
         let address = addr.clone();
 
@@ -259,14 +259,14 @@ impl LightClient {
         all_keys.into()
     }
 
-    pub fn do_address(&self) -> json::JsonValue {
+    pub fn do_address(&self) -> JsonValue {
         // Collect z addresses
-        let z_addresses = self.wallet.address.iter().map( |ad| {
+        let z_addresses = self.wallet.address.read().unwrap().iter().map( |ad| {
             encode_payment_address(self.config.hrp_sapling_address(), &ad)
         }).collect::<Vec<String>>();
 
         // Collect t addresses
-        let t_addresses = self.wallet.tkeys.iter().map( |sk| {
+        let t_addresses = self.wallet.tkeys.read().unwrap().iter().map( |sk| {
             self.wallet.address_from_sk(&sk)
         }).collect::<Vec<String>>();
 
@@ -276,9 +276,9 @@ impl LightClient {
         }
     }
 
-    pub fn do_balance(&self) -> json::JsonValue {       
+    pub fn do_balance(&self) -> JsonValue {
         // Collect z addresses
-        let z_addresses = self.wallet.address.iter().map( |ad| {
+        let z_addresses = self.wallet.address.read().unwrap().iter().map( |ad| {
             let address = encode_payment_address(self.config.hrp_sapling_address(), &ad);
             object!{
                 "address" => address.clone(),
@@ -288,7 +288,7 @@ impl LightClient {
         }).collect::<Vec<JsonValue>>();
 
         // Collect t addresses
-        let t_addresses = self.wallet.tkeys.iter().map( |sk| {
+        let t_addresses = self.wallet.tkeys.read().unwrap().iter().map( |sk| {
             let address = self.wallet.address_from_sk(&sk);
 
             // Get the balance for this address
@@ -516,6 +516,23 @@ impl LightClient {
         JsonValue::Array(tx_list)
     }
 
+    /// Create a new address, deriving it from the seed.
+    pub fn do_new_address(&self, addr_type: &str) -> JsonValue {
+        let new_address = match addr_type {
+            "z" => self.wallet.add_zaddr(),
+            "t" => self.wallet.add_taddr(),
+            _   => {
+                let e = format!("Unrecognized address type: {}", addr_type);
+                error!("{}", e);
+                return object!{
+                    "error" => e
+                };
+            }
+        };
+
+        array![new_address]
+    }
+
     pub fn do_rescan(&self) -> String {
         info!("Rescan starting");
         // First, clear the state from the wallet
@@ -630,7 +647,7 @@ impl LightClient {
 
             // We'll also fetch all the txids that our transparent addresses are involved with
             // TODO: Use for all t addresses
-            let address = self.wallet.address_from_sk(&self.wallet.tkeys[0]);
+            let address = self.wallet.address_from_sk(&self.wallet.tkeys.read().unwrap()[0]);
             let wallet = self.wallet.clone();
             fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, 
                 move |tx_bytes: &[u8], height: u64 | {
@@ -692,15 +709,15 @@ impl LightClient {
         let rawtx = self.wallet.send_to_address(
             u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(),   // Blossom ID
             &self.sapling_spend, &self.sapling_output,
-            &addr, value, memo
+            vec![(&addr, value, memo)]
         );
         
         match rawtx {
-            Some(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), txbytes) {
+            Ok(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), txbytes) {
                 Ok(k)  => k,
                 Err(e) => e,
             },
-            None            => format!("No Tx to broadcast")
+            Err(e)        => format!("No Tx to broadcast. Error was: {}", e)
         }
     }
 }
