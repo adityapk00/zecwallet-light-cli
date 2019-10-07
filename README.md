@@ -1,4 +1,4 @@
-** Archived **
+**Archived**
 Please see https://github.com/adityapk00/zecwallet-lite-lib 
 
 ## Zecwallet CLI - A command line ZecWallet light client. 
