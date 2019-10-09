@@ -712,9 +712,6 @@ impl LightClient {
         for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
             info!("Fetching full Tx: {}", txid);
-            if print_updates {
-                responses.push(format!("Fetching full Tx: {}", txid));
-            }
 
             fetch_full_tx(&self.get_server_uri(), txid, self.config.no_cert_verification, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();

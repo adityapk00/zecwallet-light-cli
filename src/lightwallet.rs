@@ -88,26 +88,6 @@ impl ToBase58Check for [u8] {
         payload.to_base58()
     }
 }
-//
-//pub trait FromBase58Check {
-//    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8>;
-//}
-//
-//
-//impl FromBase58Check for str {
-//    fn from_base58check(&self, version: &[u8], suffix: &[u8]) -> Vec<u8> {
-//        let mut payload: Vec<u8> = Vec::new();
-//        let bytes = self.from_base58().unwrap();
-//
-//        let start = version.len();
-//        let end = bytes.len() - (4 + suffix.len());
-//
-//        payload.extend(&bytes[start..end]);
-//
-//        payload
-//    }
-//}
-
 
 pub struct LightWallet {
     seed: [u8; 32], // Seed phrase for this wallet. 
@@ -268,6 +248,9 @@ impl LightWallet {
 
         // Write the seed
         writer.write_all(&self.seed)?;
+
+        // Flush after writing the seed, so in case of a disaster, we can still recover the seed.
+        writer.flush()?;
 
         // Write all the spending keys
         Vector::write(&mut writer, &self.extsks.read().unwrap(),
