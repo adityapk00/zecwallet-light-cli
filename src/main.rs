@@ -89,6 +89,10 @@ pub fn main() {
                         .long("dangerous")
                         .help("Disable server TLS certificate verification. Use this if you're running a local lightwalletd with a self-signed certificate. WARNING: This is dangerous, don't use it with a server that is not your own.")
                         .takes_value(false))
+                    .arg(Arg::with_name("recover")
+                        .long("recover")
+                        .help("Attempt to recover the seed from the wallet")
+                        .takes_value(false))
                     .arg(Arg::with_name("nosync")
                         .help("By default, zecwallet-cli will sync the wallet at startup. Pass --nosync to prevent the automatic sync at startup.")
                         .long("nosync")
@@ -103,6 +107,11 @@ pub fn main() {
                         .required(false)
                         .multiple(true))
                     .get_matches();
+
+    if matches.is_present("recover") {
+        attempt_recover_seed();
+        return;
+    }
 
     let command = matches.value_of("COMMAND");
     let params = matches.values_of("PARAMS").map(|v| v.collect()).or(Some(vec![])).unwrap();
@@ -128,7 +137,6 @@ pub fn main() {
             return;
         }
     };
-
 
     // Create a Light Client Config
     let config = lightclient::LightClientConfig {
@@ -177,6 +185,36 @@ pub fn main() {
         let cmd_response = commands::do_user_command(&command.unwrap(), &params, lightclient.as_ref());
         println!("{}", cmd_response);
     }
+}
+
+fn attempt_recover_seed() {
+    use std::fs::File;
+    use std::io::prelude::*;
+    use std::io::{BufReader};
+    use byteorder::{LittleEndian, ReadBytesExt,};
+    use bip39::{Mnemonic, Language};
+
+    // Create a Light Client Config in an attempt to recover the file. 
+    let config = LightClientConfig {
+        server: "0.0.0.0:0".parse().unwrap(),
+        chain_name: "main".to_string(),
+        sapling_activation_height: 0,
+        consensus_branch_id: "000000".to_string(),
+        anchor_offset: 0,
+        no_cert_verification: false,
+    };
+
+    let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());
+    let version = reader.read_u64::<LittleEndian>().unwrap();
+    println!("Reading wallet version {}", version);
+
+    // Seed
+    let mut seed_bytes = [0u8; 32];
+    reader.read_exact(&mut seed_bytes).unwrap();
+
+    let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
+
+    println!("Recovered seed phrase:\n{}", phrase);
 }
 
 fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) {
@@ -267,5 +305,4 @@ fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) 
             }
         }
     }
-
 }
