@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::io::{Error, ErrorKind};
 
+use rand::{Rng, rngs::OsRng};
+
 use log::{info, warn, error};
 
 use protobuf::parse_from_bytes;
@@ -165,14 +167,12 @@ impl LightWallet {
     }
 
     pub fn new(seed_phrase: Option<String>, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
-        use rand::{FromEntropy, ChaChaRng, Rng};
-
         // This is the source entropy that corresponds to the 24-word seed phrase
         let mut seed_bytes = [0u8; 32];
 
         if seed_phrase.is_none() {
             // Create a random seed. 
-            let mut system_rng = ChaChaRng::from_entropy();
+            let mut system_rng = OsRng;
             system_rng.fill(&mut seed_bytes);
         } else {
             seed_bytes.copy_from_slice(&Mnemonic::from_phrase(seed_phrase.expect("should have a seed phrase"), 
@@ -881,8 +881,8 @@ impl LightWallet {
     }
 
     // Scan a block. Will return an error with the block height that failed to scan
-    pub fn scan_block(&self, block: &[u8]) -> Result<(), i32> {
-        let block: CompactBlock = match parse_from_bytes(block) {
+    pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
+        let block: CompactBlock = match parse_from_bytes(block_bytes) {
             Ok(block) => block,
             Err(e) => {
                 error!("Could not parse CompactBlock from bytes: {}", e);
@@ -900,7 +900,7 @@ impl LightWallet {
                     return Err(height);
                 }
             }
-            return Ok(())
+            return Ok(vec![]);
         } else if height != (self.last_scanned_height() + 1) {
             error!(
                 "Block is not height-sequential (expected {}, found {})",
@@ -978,12 +978,24 @@ impl LightWallet {
                 .collect();
 
             scan_block(
-                block,
+                block.clone(),
                 &self.extfvks.read().unwrap(),
                 &nf_refs[..],
                 &mut block_data.tree,
                 &mut witness_refs[..],
             )
+        };
+
+        // If this block had any new Txs, return the list of ALL txids in this block, 
+        // so the wallet can fetch them all as a decoy.
+        let all_txs = if !new_txs.is_empty() {
+            block.vtx.iter().map(|vtx| {
+                let mut t = [0u8; 32];
+                t.copy_from_slice(&vtx.hash[..]);
+                TxId{0: t}
+            }).collect::<Vec<TxId>>()
+        } else {
+            vec![]
         };
 
         for tx in new_txs {
@@ -1023,9 +1035,7 @@ impl LightWallet {
             tx_entry.total_shielded_value_spent = total_shielded_value_spent;
 
             // Save notes.
-            for output in tx
-                .shielded_outputs
-                .into_iter()
+            for output in tx.shielded_outputs
             {
                 info!("Received sapling output");
 
@@ -1059,7 +1069,8 @@ impl LightWallet {
             }
         }
 
-        Ok(())
+
+        Ok(all_txs)
     }
 
     pub fn send_to_address(
@@ -1284,9 +1295,10 @@ impl LightWallet {
 pub mod tests {
     use std::convert::TryInto;
     use std::io::{Error};
+    use rand::{RngCore, rngs::OsRng};
+
     use ff::{Field, PrimeField, PrimeFieldRepr};
     use pairing::bls12_381::Bls12;
-    use rand_core::{RngCore, OsRng};
     use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
     use zcash_client_backend::{encoding::encode_payment_address,
         proto::compact_formats::{
@@ -1938,7 +1950,8 @@ pub mod tests {
             chain_name: "test".to_string(),
             sapling_activation_height: 0,
             consensus_branch_id: "000000".to_string(),
-            anchor_offset: 0
+            anchor_offset: 0,
+            no_cert_verification: false,
         }
     }
 
@@ -2860,7 +2873,8 @@ pub mod tests {
             chain_name: "main".to_string(),
             sapling_activation_height: 0,
             consensus_branch_id: "000000".to_string(),
-            anchor_offset: 1
+            anchor_offset: 1,
+            no_cert_verification: false,
         };
 
         let seed_phrase = Some("chimney better bulb horror rebuild whisper improve intact letter giraffe brave rib appear bulk aim burst snap salt hill sad merge tennis phrase raise".to_string());

@@ -2,7 +2,9 @@ use crate::lightwallet::LightWallet;
 
 use log::{info, warn, error};
 
-use std::sync::{Arc};
+use rand::{rngs::OsRng, seq::SliceRandom};
+
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
 use std::path::Path;
 use std::fs::File;
@@ -583,6 +585,11 @@ impl LightClient {
 
         let mut total_reorg = 0;
 
+        // Collect all txns in blocks that we have a tx in. We'll fetch all these
+        // txs along with our own, so that the server doesn't learn which ones
+        // belong to us.
+        let all_new_txs = Arc::new(RwLock::new(vec![]));
+
         // Fetch CompactBlocks in increments
         loop {
             let local_light_wallet = self.wallet.clone();
@@ -599,23 +606,26 @@ impl LightClient {
 
             // Fetch compact blocks
             info!("Fetching blocks {}-{}", start_height, end_height);
-            
+            let all_txs = all_new_txs.clone();
+
             let last_invalid_height = Arc::new(AtomicI32::new(0));
             let last_invalid_height_inner = last_invalid_height.clone();
             fetch_blocks(&self.get_server_uri(), start_height, end_height, self.config.no_cert_verification,
-                move |encoded_block: &[u8]| {
+                move |encoded_block: &[u8], height: u64| {
                     // Process the block only if there were no previous errors
                     if last_invalid_height_inner.load(Ordering::SeqCst) > 0 {
                         return;
                     }
 
                     match local_light_wallet.scan_block(encoded_block) {
-                        Ok(_) => {},
+                        Ok(block_txns) => {
+                            all_txs.write().unwrap().copy_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
+                        },
                         Err(invalid_height) => {
                             // Block at this height seems to be invalid, so invalidate up till that point
                             last_invalid_height_inner.store(invalid_height, Ordering::SeqCst);
                         }
-                    }
+                    };
 
                     local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
             });
@@ -683,12 +693,16 @@ impl LightClient {
 
         // We need to first copy over the Txids from the wallet struct, because
         // we need to free the read lock from here (Because we'll self.wallet.txs later)
-        let txids_to_fetch: Vec<(TxId, i32)> = self.wallet.txs.read().unwrap().values()
+        let mut txids_to_fetch: Vec<(TxId, i32)> = self.wallet.txs.read().unwrap().values()
             .filter(|wtx| wtx.full_tx_scanned == false)
             .map(|wtx| (wtx.txid, wtx.block))
             .collect::<Vec<(TxId, i32)>>();
 
-        info!("Fetching {} new txids", txids_to_fetch.len());
+        info!("Fetching {} new txids, along with {} decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
+        txids_to_fetch.extend_from_slice(&all_new_txs.read().unwrap()[..]);
+        
+        let mut rng = OsRng;        
+        txids_to_fetch.shuffle(&mut rng);
 
         // And go and fetch the txids, getting the full transaction, so we can 
         // read the memos        

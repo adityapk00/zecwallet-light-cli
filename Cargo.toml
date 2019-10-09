@@ -20,7 +20,6 @@ hex = "0.3"
 protobuf = "2"
 rustyline = "5.0.2"
 byteorder = "1"
-rand = "0.5.6"
 json = "0.12.0"
 shellwords = "1.0.0"
 tiny-bip39 = "0.6.2"
@@ -37,6 +36,7 @@ webpki = "0.19.1"
 webpki-roots = "0.16.0"
 tower-h2 = { git = "https://github.com/tower-rs/tower-h2" }
 rust-embed = "5.1.0"
+rand = "0.7.2"
 
 [dependencies.bellman]
 git = "https://github.com/adityapk00/librustzcash.git"
@@ -72,8 +72,7 @@ features = ["ff_derive"]
 [build-dependencies]
 tower-grpc-build = { git = "https://github.com/tower-rs/tower-grpc",  features = ["tower-hyper"]  }
 
-[dev-dependencies]
-rand_core = "0.5.1"
+
 
 [profile.release]
 debug = false

@@ -171,8 +171,8 @@ pub fn get_info(uri: http::Uri, no_cert: bool) -> Result<LightdInfo, String> {
 }
 
 
-pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, no_cert: bool, c: F)
-    where F : Fn(&[u8]) {
+pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, no_cert: bool, mut c: F)
+    where F : FnMut(&[u8], u64) {
     let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap(), no_cert)
         .and_then(move |mut client| {
             let bs = BlockId{ height: start_height, hash: vec!()};
@@ -191,7 +191,7 @@ pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_heig
                         let mut encoded_buf = vec![];
 
                         b.encode(&mut encoded_buf).unwrap();
-                        c(&encoded_buf);
+                        c(&encoded_buf, b.height);
 
                         Ok(())
                     })
