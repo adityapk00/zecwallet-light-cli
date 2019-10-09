@@ -132,7 +132,7 @@ macro_rules! make_grpc_client {
 
         make_client
             .make_service(())
-            .map_err(|e| { format!("HTTP/2 connection failed; err={:?}", e) })
+            .map_err(|e| { format!("HTTP/2 connection failed; err={:?}.\nIf you're connecting to a local server, please pass --dangerous to trust the server without checking its TLS certificate", e) })
             .and_then(move |conn| {
                 let conn = tower_request_modifier::Builder::new()
                     .set_origin(uri)
