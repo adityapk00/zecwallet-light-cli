@@ -32,6 +32,7 @@ ring = "0.14.0"
 lazy_static = "1.2.0"
 tower-service = "0.2"
 tokio-rustls = "0.10.0-alpha.3"
+rustls = { version = "0.15.2", features = ["dangerous_configuration"] }
 webpki = "0.19.1"
 webpki-roots = "0.16.0"
 tower-h2 = { git = "https://github.com/tower-rs/tower-h2" }

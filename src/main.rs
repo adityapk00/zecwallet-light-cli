@@ -85,6 +85,10 @@ pub fn main() {
                         .help("Lightwalletd server to connect to.")
                         .takes_value(true)
                         .default_value(lightclient::DEFAULT_SERVER))
+                    .arg(Arg::with_name("dangerous")
+                        .long("dangerous")
+                        .help("Disable server TLS certificate verification. Use this if you're running a local lightwalletd with a self-signed certificate. WARNING: This is dangerous, don't use it with a server that is not your own.")
+                        .takes_value(false))
                     .arg(Arg::with_name("nosync")
                         .help("By default, zecwallet-cli will sync the wallet at startup. Pass --nosync to prevent the automatic sync at startup.")
                         .long("nosync")
@@ -114,14 +118,17 @@ pub fn main() {
         return;
     }
 
+    let dangerous = matches.is_present("dangerous");
+
     // Do a getinfo first, before opening the wallet
-    let info = match grpcconnector::get_info(server.clone()) {
+    let info = match grpcconnector::get_info(server.clone(), dangerous) {
         Ok(ld) => ld,
         Err(e) => {
             eprintln!("Error:\n{}\nCouldn't get server info, quitting!", e);
             return;
         }
     };
+
 
     // Create a Light Client Config
     let config = lightclient::LightClientConfig {
@@ -130,6 +137,7 @@ pub fn main() {
         sapling_activation_height   : info.sapling_activation_height,
         consensus_branch_id         : info.consensus_branch_id,
         anchor_offset               : ANCHOR_OFFSET,
+        no_cert_verification        : dangerous,
     };
 
     // Configure logging first.

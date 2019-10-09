@@ -33,6 +33,7 @@ pub struct LightClientConfig {
     pub sapling_activation_height   : u64,
     pub consensus_branch_id         : String,
     pub anchor_offset               : u32,
+    pub no_cert_verification        : bool,
 }
 
 impl LightClientConfig {
@@ -323,9 +324,8 @@ impl LightClient {
         self.config.server.clone()
     }
 
-    pub fn do_info(uri: http::Uri) -> String {       
-        let r = get_info(uri);
-        match r {
+    pub fn do_info(&self) -> String {
+        match get_info(self.get_server_uri(), self.config.no_cert_verification) {
             Ok(i) => format!("{:?}", i)[11..].to_string(),
             Err(e) => e
         }
@@ -562,7 +562,7 @@ impl LightClient {
         // This will hold the latest block fetched from the RPC
         let latest_block_height = Arc::new(AtomicU64::new(0));
         let lbh = latest_block_height.clone();
-        fetch_latest_block(&self.get_server_uri(), move |block: BlockId| {
+        fetch_latest_block(&self.get_server_uri(), self.config.no_cert_verification, move |block: BlockId| {
                 lbh.store(block.height, Ordering::SeqCst);
             });
         let latest_block = latest_block_height.load(Ordering::SeqCst);
@@ -602,7 +602,7 @@ impl LightClient {
             
             let last_invalid_height = Arc::new(AtomicI32::new(0));
             let last_invalid_height_inner = last_invalid_height.clone();
-            fetch_blocks(&self.get_server_uri(), start_height, end_height, 
+            fetch_blocks(&self.get_server_uri(), start_height, end_height, self.config.no_cert_verification,
                 move |encoded_block: &[u8]| {
                     // Process the block only if there were no previous errors
                     if last_invalid_height_inner.load(Ordering::SeqCst) > 0 {
@@ -652,7 +652,7 @@ impl LightClient {
             // TODO: Use for all t addresses
             let address = self.wallet.address_from_sk(&self.wallet.tkeys.read().unwrap()[0]);
             let wallet = self.wallet.clone();
-            fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, 
+            fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, self.config.no_cert_verification,
                 move |tx_bytes: &[u8], height: u64 | {
                     let tx = Transaction::read(tx_bytes).unwrap();
 
@@ -697,7 +697,7 @@ impl LightClient {
             info!("Fetching full Tx: {}", txid);
             responses.push(format!("Fetching full Tx: {}", txid));
 
-            fetch_full_tx(&self.get_server_uri(), txid, move |tx_bytes: &[u8] | {
+            fetch_full_tx(&self.get_server_uri(), txid, self.config.no_cert_verification, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
 
                 light_wallet_clone.scan_full_tx(&tx, height);
@@ -716,7 +716,7 @@ impl LightClient {
         );
         
         match rawtx {
-            Ok(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), txbytes) {
+            Ok(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), self.config.no_cert_verification, txbytes) {
                 Ok(k)  => k,
                 Err(e) => e,
             },
