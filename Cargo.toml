@@ -40,33 +40,33 @@ rand = "0.7.2"
 
 [dependencies.bellman]
 git = "https://github.com/adityapk00/librustzcash.git"
-rev = "0743dadcd017b60a0ac7123d04f0d6e7ce1e8016"
+rev = "188537ea025fcb7fbdfc11266f307a084a5451e4"
 default-features = false
 features = ["groth16"]
 
 [dependencies.pairing]
 git = "https://github.com/adityapk00/librustzcash.git"
-rev = "0743dadcd017b60a0ac7123d04f0d6e7ce1e8016"
+rev = "188537ea025fcb7fbdfc11266f307a084a5451e4"
 
 [dependencies.zcash_client_backend]
 git = "https://github.com/adityapk00/librustzcash.git"
-rev = "0743dadcd017b60a0ac7123d04f0d6e7ce1e8016"
+rev = "188537ea025fcb7fbdfc11266f307a084a5451e4"
 default-features = false
 
 [dependencies.zcash_primitives]
 git = "https://github.com/adityapk00/librustzcash.git"
-rev = "0743dadcd017b60a0ac7123d04f0d6e7ce1e8016"
+rev = "188537ea025fcb7fbdfc11266f307a084a5451e4"
 default-features = false
 features = ["transparent-inputs"]
 
 [dependencies.zcash_proofs]
 git = "https://github.com/adityapk00/librustzcash.git"
-rev = "0743dadcd017b60a0ac7123d04f0d6e7ce1e8016"
+rev = "188537ea025fcb7fbdfc11266f307a084a5451e4"
 default-features = false
 
 [dependencies.ff]
 git = "https://github.com/adityapk00/librustzcash.git"
-rev = "0743dadcd017b60a0ac7123d04f0d6e7ce1e8016"
+rev = "188537ea025fcb7fbdfc11266f307a084a5451e4"
 features = ["ff_derive"]
 
 [build-dependencies]

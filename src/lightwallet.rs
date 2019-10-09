@@ -816,8 +816,10 @@ impl LightWallet {
         // Mark this Tx as scanned
         {
             let mut txs = self.txs.write().unwrap();
-            let mut wtx =  txs.get_mut(&tx.txid()).unwrap();
-            wtx.full_tx_scanned = true;
+            match txs.get_mut(&tx.txid()) {
+                Some(wtx) => wtx.full_tx_scanned = true,
+                None => {},
+            };
         }
     }
 

@@ -619,7 +619,7 @@ impl LightClient {
 
                     match local_light_wallet.scan_block(encoded_block) {
                         Ok(block_txns) => {
-                            all_txs.write().unwrap().copy_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
+                            all_txs.write().unwrap().extend_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
                         },
                         Err(invalid_height) => {
                             // Block at this height seems to be invalid, so invalidate up till that point
@@ -698,18 +698,23 @@ impl LightClient {
             .map(|wtx| (wtx.txid, wtx.block))
             .collect::<Vec<(TxId, i32)>>();
 
-        info!("Fetching {} new txids, along with {} decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
+        info!("Fetching {} new txids, total {} with decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
         txids_to_fetch.extend_from_slice(&all_new_txs.read().unwrap()[..]);
-        
+        txids_to_fetch.sort();
+        txids_to_fetch.dedup();
+
         let mut rng = OsRng;        
         txids_to_fetch.shuffle(&mut rng);
 
         // And go and fetch the txids, getting the full transaction, so we can 
-        // read the memos        
+        // read the memos
+
         for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
             info!("Fetching full Tx: {}", txid);
-            responses.push(format!("Fetching full Tx: {}", txid));
+            if print_updates {
+                responses.push(format!("Fetching full Tx: {}", txid));
+            }
 
             fetch_full_tx(&self.get_server_uri(), txid, self.config.no_cert_verification, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
