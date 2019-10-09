@@ -569,6 +569,12 @@ impl LightClient {
             });
         let latest_block = latest_block_height.load(Ordering::SeqCst);
 
+        if latest_block < last_scanned_height {
+            let w = format!("Server's latest block({}) is behind ours({})", latest_block, last_scanned_height);
+            warn!("{}", w);
+            return w;
+        }
+
         info!("Latest block is {}", latest_block);
 
         // Get the end height to scan to.
