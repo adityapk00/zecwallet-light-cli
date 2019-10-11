@@ -8,11 +8,12 @@ mod commands;
 
 use std::io::{Result, Error, ErrorKind};
 use std::sync::{Arc};
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 
 use lightclient::{LightClient, LightClientConfig};
 
-use log::{info, LevelFilter};
+use log::{info, error, LevelFilter};
 use log4rs::append::rolling_file::RollingFileAppender;
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Config, Root};
@@ -129,23 +130,13 @@ pub fn main() {
 
     let dangerous = matches.is_present("dangerous");
 
-    // Do a getinfo first, before opening the wallet
-    let info = match grpcconnector::get_info(server.clone(), dangerous) {
-        Ok(ld) => ld,
+    // Try to get the configuration
+    let (config, latest_block_height) = match create_lightclient_config(server.clone(), dangerous) {
+        Ok((c, h)) => (c, h),
         Err(e) => {
-            eprintln!("Error:\n{}\nCouldn't get server info, quitting!", e);
+            eprintln!("Couldn't create config: {}", e);
             return;
         }
-    };
-
-    // Create a Light Client Config
-    let config = lightclient::LightClientConfig {
-        server                      : server.clone(),
-        chain_name                  : info.chain_name,
-        sapling_activation_height   : info.sapling_activation_height,
-        consensus_branch_id         : info.consensus_branch_id,
-        anchor_offset               : ANCHOR_OFFSET,
-        no_cert_verification        : dangerous,
     };
 
     // Configure logging first.
@@ -158,15 +149,19 @@ pub fn main() {
     };
     log4rs::init_config(log_config).unwrap();
 
+    let lightclient = match create_lightclient(seed, latest_block_height, &config) {
+        Ok(lc) => Arc::new(lc),
+        Err(e) => {
+            eprintln!("Couldn't create Lightclient. {}", e);
+            error!("Couldn't create Lightclient. {}", e);
+            return;
+        }
+    };
+
     // Startup
     info!(""); // Blank line
     info!("Starting Zecwallet-CLI");
     info!("Light Client config {:?}", config);
-
-    let lightclient = match LightClient::new(seed, &config, info.block_height) {
-        Ok(lc) => Arc::new(lc),
-        Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
-    };
 
     // At startup, run a sync. 
     let sync_output = if matches.is_present("nosync") {
@@ -187,65 +182,33 @@ pub fn main() {
     }
 }
 
-fn attempt_recover_seed() {
-    use std::fs::File;
-    use std::io::prelude::*;
-    use std::io::{BufReader};
-    use byteorder::{LittleEndian, ReadBytesExt,};
-    use bip39::{Mnemonic, Language};
+fn create_lightclient_config(server: http::Uri, dangerous: bool) -> Result<(LightClientConfig, u64)> {
+    // Do a getinfo first, before opening the wallet
+    let info = grpcconnector::get_info(server.clone(), dangerous)
+        .map_err(|e| std::io::Error::new(ErrorKind::ConnectionRefused, e))?;
 
-    // Create a Light Client Config in an attempt to recover the file. 
-    let config = LightClientConfig {
-        server: "0.0.0.0:0".parse().unwrap(),
-        chain_name: "main".to_string(),
-        sapling_activation_height: 0,
-        consensus_branch_id: "000000".to_string(),
-        anchor_offset: 0,
-        no_cert_verification: false,
+    // Create a Light Client Config
+    let config = lightclient::LightClientConfig {
+        server,
+        chain_name                  : info.chain_name,
+        sapling_activation_height   : info.sapling_activation_height,
+        consensus_branch_id         : info.consensus_branch_id,
+        anchor_offset               : ANCHOR_OFFSET,
+        no_cert_verification        : dangerous,
     };
 
-    let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());
-    let version = reader.read_u64::<LittleEndian>().unwrap();
-    println!("Reading wallet version {}", version);
+    Ok((config, info.block_height))
+}
 
-    // Seed
-    let mut seed_bytes = [0u8; 32];
-    reader.read_exact(&mut seed_bytes).unwrap();
+fn create_lightclient(seed: Option<String>, latest_block: u64, config: &LightClientConfig) -> Result<(LightClient)> {
+    let lightclient = LightClient::new(seed, config, latest_block)?;
 
-    let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
-
-    println!("Recovered seed phrase:\n{}", phrase);
+    Ok(lightclient)
 }
 
 fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) {
-    println!("Lightclient connecting to {}", config.server);
-
-    let (command_tx, command_rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
-    let (resp_tx, resp_rx) = std::sync::mpsc::channel::<String>();
-
-    let lc = lightclient.clone();
-    std::thread::spawn(move || {
-        loop {
-            match command_rx.recv_timeout(Duration::from_secs(5 * 60)) {
-                Ok((cmd, args)) => {
-                    let args = args.iter().map(|s| s.as_ref()).collect();
-
-                    let cmd_response = commands::do_user_command(&cmd, &args, lc.as_ref());
-                    resp_tx.send(cmd_response).unwrap();
-
-                    if cmd == "quit" {
-                        info!("Quit");
-                        break;
-                    }
-                },
-                Err(_) => {
-                    // Timeout. Do a sync to keep the wallet up-to-date. False to whether to print updates on the console
-                    info!("Timeout, doing a sync");
-                    lc.do_sync(false);
-                }
-            }
-        }
-    });
+    // Start the command loop
+    let (command_tx, resp_rx) = command_loop(lightclient.clone(), config);
 
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
@@ -305,4 +268,68 @@ fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) 
             }
         }
     }
+}
+
+
+fn command_loop(lightclient: Arc<LightClient>, config: &LightClientConfig) -> (Sender<(String, Vec<String>)>, Receiver<String>) {
+    println!("Lightclient connecting to {}", config.server);
+
+    let (command_tx, command_rx) = channel::<(String, Vec<String>)>();
+    let (resp_tx, resp_rx) = channel::<String>();
+
+    let lc = lightclient.clone();
+    std::thread::spawn(move || {
+        loop {
+            match command_rx.recv_timeout(Duration::from_secs(5 * 60)) {
+                Ok((cmd, args)) => {
+                    let args = args.iter().map(|s| s.as_ref()).collect();
+
+                    let cmd_response = commands::do_user_command(&cmd, &args, lc.as_ref());
+                    resp_tx.send(cmd_response).unwrap();
+
+                    if cmd == "quit" {
+                        info!("Quit");
+                        break;
+                    }
+                },
+                Err(_) => {
+                    // Timeout. Do a sync to keep the wallet up-to-date. False to whether to print updates on the console
+                    info!("Timeout, doing a sync");
+                    lc.do_sync(false);
+                }
+            }
+        }
+    });
+
+    (command_tx, resp_rx)
+}
+
+fn attempt_recover_seed() {
+    use std::fs::File;
+    use std::io::prelude::*;
+    use std::io::{BufReader};
+    use byteorder::{LittleEndian, ReadBytesExt,};
+    use bip39::{Mnemonic, Language};
+
+    // Create a Light Client Config in an attempt to recover the file.
+    let config = LightClientConfig {
+        server: "0.0.0.0:0".parse().unwrap(),
+        chain_name: "main".to_string(),
+        sapling_activation_height: 0,
+        consensus_branch_id: "000000".to_string(),
+        anchor_offset: 0,
+        no_cert_verification: false,
+    };
+
+    let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());
+    let version = reader.read_u64::<LittleEndian>().unwrap();
+    println!("Reading wallet version {}", version);
+
+    // Seed
+    let mut seed_bytes = [0u8; 32];
+    reader.read_exact(&mut seed_bytes).unwrap();
+
+    let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
+
+    println!("Recovered seed phrase:\n{}", phrase);
 }
