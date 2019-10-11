@@ -129,57 +129,70 @@ pub fn main() {
     }
 
     let dangerous = matches.is_present("dangerous");
+    let nosync = matches.is_present("nosync");
 
-    // Try to get the configuration
-    let (config, latest_block_height) = match create_lightclient_config(server.clone(), dangerous) {
-        Ok((c, h)) => (c, h),
-        Err(e) => {
-            eprintln!("Couldn't create config: {}", e);
-            return;
-        }
-    };
-
-    // Configure logging first.
-    let log_config = match get_log_config(&config) {
+    let (command_tx, resp_rx) = match startup(server, dangerous, seed, !nosync, command.is_none()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Error:\n{}\nCouldn't configure logging, quitting!", e);
-            return;
-        }
-    };
-    log4rs::init_config(log_config).unwrap();
-
-    let lightclient = match create_lightclient(seed, latest_block_height, &config) {
-        Ok(lc) => Arc::new(lc),
-        Err(e) => {
-            eprintln!("Couldn't create Lightclient. {}", e);
-            error!("Couldn't create Lightclient. {}", e);
+            eprintln!("Error during startup: {}", e);
+            error!("Error during startup: {}", e);
             return;
         }
     };
 
-    // Startup
+    if command.is_none() {
+        start_interactive(command_tx, resp_rx);
+    } else {
+        command_tx.send(
+            (command.unwrap().to_string(),
+                params.iter().map(|s| s.to_string()).collect::<Vec<String>>()))
+            .unwrap();
+
+        match resp_rx.recv() {
+            Ok(s) => println!("{}", s),
+            Err(e) => {
+                let e = format!("Error executing command {}: {}", command.unwrap(), e);
+                eprintln!("{}", e);
+                error!("{}", e);
+            }
+        }
+    }
+}
+
+fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync: bool, print_updates: bool)
+        -> Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
+    // Try to get the configuration
+    let (config, latest_block_height) = create_lightclient_config(server.clone(), dangerous)?;
+
+    // Configure logging first.
+    let log_config = get_log_config(&config)?;
+    log4rs::init_config(log_config).map_err(|e| {
+        std::io::Error::new(ErrorKind::Other, e)
+    })?;
+
+    let lightclient = Arc::new(create_lightclient(seed, latest_block_height, &config)?);
+
+    // Print startup Messages
     info!(""); // Blank line
     info!("Starting Zecwallet-CLI");
     info!("Light Client config {:?}", config);
 
-    // At startup, run a sync. 
-    let sync_output = if matches.is_present("nosync") {
-         None
-    } else {
-        Some(lightclient.do_sync(true))
-    };
-
-    if command.is_none() {
-        // If running in interactive mode, output of the sync command
-        if sync_output.is_some() {
-            println!("{}", sync_output.unwrap());
-        }
-        start_interactive(lightclient, &config);
-    } else {
-        let cmd_response = commands::do_user_command(&command.unwrap(), &params, lightclient.as_ref());
-        println!("{}", cmd_response);
+    if print_updates {
+        println!("Lightclient connecting to {}", config.server);
     }
+
+    // Start the command loop
+    let (command_tx, resp_rx) = command_loop(lightclient.clone());
+
+    // At startup, run a sync.
+    if first_sync {
+        let update = lightclient.do_sync(true);
+        if print_updates {
+            println!("{}", update);
+        }
+    }
+
+    Ok((command_tx, resp_rx))
 }
 
 fn create_lightclient_config(server: http::Uri, dangerous: bool) -> Result<(LightClientConfig, u64)> {
@@ -206,19 +219,34 @@ fn create_lightclient(seed: Option<String>, latest_block: u64, config: &LightCli
     Ok(lightclient)
 }
 
-fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) {
-    // Start the command loop
-    let (command_tx, resp_rx) = command_loop(lightclient.clone(), config);
-
+fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receiver<String>) {
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
 
     println!("Ready!");
 
+    let send_command = |cmd: String, args: Vec<String>| -> String {
+        command_tx.send((cmd.clone(), args)).unwrap();
+        match resp_rx.recv() {
+            Ok(s) => s,
+            Err(e) => {
+                let e = format!("Error executing command {}: {}", cmd, e);
+                eprintln!("{}", e);
+                error!("{}", e);
+                return "".to_string()
+            }
+        }
+    };
+
+    let info = &send_command("info".to_string(), vec![]);
+    let chain_name = json::parse(info).unwrap()["chain_name"].as_str().unwrap().to_string();
+
     loop {
+        // Read the height first
+        let height = json::parse(&send_command("height".to_string(), vec![])).unwrap()["height"].as_i64().unwrap();
+
         let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
-                                            config.chain_name,
-                                            lightclient.last_scanned_height()));
+                                                    chain_name, height));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
@@ -236,14 +264,9 @@ fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) 
                 }
 
                 let cmd = cmd_args.remove(0);
-                let args: Vec<String> = cmd_args;            
-                command_tx.send((cmd, args)).unwrap();
+                let args: Vec<String> = cmd_args;
 
-                // Wait for the response
-                match resp_rx.recv() {
-                    Ok(response) => println!("{}", response),
-                    _ => { eprintln!("Error receiving response");}
-                }
+                println!("{}", send_command(cmd, args));
 
                 // Special check for Quit command.
                 if line == "quit" {
@@ -253,13 +276,13 @@ fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) 
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
                 info!("CTRL-C");
-                println!("{}", lightclient.do_save());
+                println!("{}", send_command("save".to_string(), vec![]));
                 break
             },
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
                 info!("CTRL-D");
-                println!("{}", lightclient.do_save());
+                println!("{}", send_command("save".to_string(), vec![]));
                 break
             },
             Err(err) => {
@@ -271,9 +294,7 @@ fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) 
 }
 
 
-fn command_loop(lightclient: Arc<LightClient>, config: &LightClientConfig) -> (Sender<(String, Vec<String>)>, Receiver<String>) {
-    println!("Lightclient connecting to {}", config.server);
-
+fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>, Receiver<String>) {
     let (command_tx, command_rx) = channel::<(String, Vec<String>)>();
     let (resp_tx, resp_rx) = channel::<String>();
 

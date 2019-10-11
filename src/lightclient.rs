@@ -1,7 +1,6 @@
 use crate::lightwallet::LightWallet;
 
 use log::{info, warn, error};
-
 use rand::{rngs::OsRng, seq::SliceRandom};
 
 use std::sync::{Arc, RwLock};
@@ -328,7 +327,18 @@ impl LightClient {
 
     pub fn do_info(&self) -> String {
         match get_info(self.get_server_uri(), self.config.no_cert_verification) {
-            Ok(i) => format!("{:?}", i)[11..].to_string(),
+            Ok(i) => {
+                let o = object!{
+                    "version" => i.version,
+                    "vendor" => i.vendor,
+                    "taddr_support" => i.taddr_support,
+                    "chain_name" => i.chain_name,
+                    "sapling_activation_height" => i.sapling_activation_height,
+                    "consensus_branch_id" => i.consensus_branch_id,
+                    "latest_block_height" => i.block_height
+                };
+                o.pretty(2)
+            },
             Err(e) => e
         }
     }
