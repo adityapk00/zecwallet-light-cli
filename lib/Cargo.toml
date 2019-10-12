@@ -32,7 +32,7 @@ rustls = { version = "0.15.2", features = ["dangerous_configuration"] }
 webpki = "0.19.1"
 webpki-roots = "0.16.0"
 tower-h2 = { git = "https://github.com/tower-rs/tower-h2" }
-rust-embed = "5.1.0"
+rust-embed = { version = "5.1.0", features = ["debug-embed"] }
 rand = "0.7.2"
 
 [dependencies.bellman]
