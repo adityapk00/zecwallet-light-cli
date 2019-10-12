@@ -3,9 +3,8 @@ use std::sync::{Arc};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 
-use zecwalletlitelib::{grpcconnector, commands, 
+use zecwalletlitelib::{commands, 
     lightclient::{self, LightClient, LightClientConfig},
-    ANCHOR_OFFSET,
 };
 
 use log::{info, error, LevelFilter};
@@ -148,7 +147,7 @@ pub fn main() {
 fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync: bool, print_updates: bool)
         -> Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
-    let (config, latest_block_height) = create_lightclient_config(server.clone(), dangerous)?;
+    let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
 
     // Configure logging first.
     let log_config = get_log_config(&config)?;
@@ -156,7 +155,7 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
         std::io::Error::new(ErrorKind::Other, e)
     })?;
 
-    let lightclient = Arc::new(create_lightclient(seed, latest_block_height, &config)?);
+    let lightclient = Arc::new(LightClient::new(seed, &config, latest_block_height)?);
 
     // Print startup Messages
     info!(""); // Blank line
@@ -181,29 +180,6 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
     Ok((command_tx, resp_rx))
 }
 
-fn create_lightclient_config(server: http::Uri, dangerous: bool) -> Result<(LightClientConfig, u64)> {
-    // Do a getinfo first, before opening the wallet
-    let info = grpcconnector::get_info(server.clone(), dangerous)
-        .map_err(|e| std::io::Error::new(ErrorKind::ConnectionRefused, e))?;
-
-    // Create a Light Client Config
-    let config = lightclient::LightClientConfig {
-        server,
-        chain_name                  : info.chain_name,
-        sapling_activation_height   : info.sapling_activation_height,
-        consensus_branch_id         : info.consensus_branch_id,
-        anchor_offset               : ANCHOR_OFFSET,
-        no_cert_verification        : dangerous,
-    };
-
-    Ok((config, info.block_height))
-}
-
-fn create_lightclient(seed: Option<String>, latest_block: u64, config: &LightClientConfig) -> Result<(LightClient)> {
-    let lightclient = LightClient::new(seed, config, latest_block)?;
-
-    Ok(lightclient)
-}
 
 fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receiver<String>) {
     // `()` can be used when no completer is required

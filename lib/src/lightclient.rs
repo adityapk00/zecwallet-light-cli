@@ -18,9 +18,9 @@ use zcash_client_backend::{
 };
 
 use crate::grpc_client::{BlockId};
-use crate::grpcconnector::*;
+use crate::grpcconnector::{self, *};
 use crate::SaplingParams;
-
+use crate::ANCHOR_OFFSET;
 
 pub const DEFAULT_SERVER: &str = "https://lightd-main.zecwallet.co:443";
 pub const WALLET_NAME: &str    = "zecwallet-light-wallet.dat";
@@ -38,6 +38,24 @@ pub struct LightClientConfig {
 }
 
 impl LightClientConfig {
+
+    pub fn create(server: http::Uri, dangerous: bool) -> io::Result<(LightClientConfig, u64)> {
+        // Do a getinfo first, before opening the wallet
+        let info = grpcconnector::get_info(server.clone(), dangerous)
+            .map_err(|e| std::io::Error::new(ErrorKind::ConnectionRefused, e))?;
+
+        // Create a Light Client Config
+        let config = LightClientConfig {
+            server,
+            chain_name                  : info.chain_name,
+            sapling_activation_height   : info.sapling_activation_height,
+            consensus_branch_id         : info.consensus_branch_id,
+            anchor_offset               : ANCHOR_OFFSET,
+            no_cert_verification        : dangerous,
+        };
+
+        Ok((config, info.block_height))
+    }
 
     pub fn get_zcash_data_path(&self) -> Box<Path> {
         let mut zcash_data_location; 
