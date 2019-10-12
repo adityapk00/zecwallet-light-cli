@@ -8,11 +8,12 @@ mod commands;
 
 use std::io::{Result, Error, ErrorKind};
 use std::sync::{Arc};
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 
 use lightclient::{LightClient, LightClientConfig};
 
-use log::{info, LevelFilter};
+use log::{info, error, LevelFilter};
 use log4rs::append::rolling_file::RollingFileAppender;
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Config, Root};
@@ -85,6 +86,14 @@ pub fn main() {
                         .help("Lightwalletd server to connect to.")
                         .takes_value(true)
                         .default_value(lightclient::DEFAULT_SERVER))
+                    .arg(Arg::with_name("dangerous")
+                        .long("dangerous")
+                        .help("Disable server TLS certificate verification. Use this if you're running a local lightwalletd with a self-signed certificate. WARNING: This is dangerous, don't use it with a server that is not your own.")
+                        .takes_value(false))
+                    .arg(Arg::with_name("recover")
+                        .long("recover")
+                        .help("Attempt to recover the seed from the wallet")
+                        .takes_value(false))
                     .arg(Arg::with_name("nosync")
                         .help("By default, zecwallet-cli will sync the wallet at startup. Pass --nosync to prevent the automatic sync at startup.")
                         .long("nosync")
@@ -100,6 +109,11 @@ pub fn main() {
                         .multiple(true))
                     .get_matches();
 
+    if matches.is_present("recover") {
+        attempt_recover_seed();
+        return;
+    }
+
     let command = matches.value_of("COMMAND");
     let params = matches.values_of("PARAMS").map(|v| v.collect()).or(Some(vec![])).unwrap();
 
@@ -114,68 +128,175 @@ pub fn main() {
         return;
     }
 
-    // Do a getinfo first, before opening the wallet
-    let info = match grpcconnector::get_info(server.clone()) {
-        Ok(ld) => ld,
-        Err(e) => {
-            eprintln!("Error:\n{}\nCouldn't get server info, quitting!", e);
-            return;
-        }
-    };
+    let dangerous = matches.is_present("dangerous");
+    let nosync = matches.is_present("nosync");
 
-    // Create a Light Client Config
-    let config = lightclient::LightClientConfig {
-        server                      : server.clone(),
-        chain_name                  : info.chain_name,
-        sapling_activation_height   : info.sapling_activation_height,
-        consensus_branch_id         : info.consensus_branch_id,
-        anchor_offset               : ANCHOR_OFFSET,
-    };
-
-    // Configure logging first.
-    let log_config = match get_log_config(&config) {
+    let (command_tx, resp_rx) = match startup(server, dangerous, seed, !nosync, command.is_none()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Error:\n{}\nCouldn't configure logging, quitting!", e);
+            eprintln!("Error during startup: {}", e);
+            error!("Error during startup: {}", e);
             return;
         }
     };
-    log4rs::init_config(log_config).unwrap();
 
-    // Startup
+    if command.is_none() {
+        start_interactive(command_tx, resp_rx);
+    } else {
+        command_tx.send(
+            (command.unwrap().to_string(),
+                params.iter().map(|s| s.to_string()).collect::<Vec<String>>()))
+            .unwrap();
+
+        match resp_rx.recv() {
+            Ok(s) => println!("{}", s),
+            Err(e) => {
+                let e = format!("Error executing command {}: {}", command.unwrap(), e);
+                eprintln!("{}", e);
+                error!("{}", e);
+            }
+        }
+    }
+}
+
+fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync: bool, print_updates: bool)
+        -> Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
+    // Try to get the configuration
+    let (config, latest_block_height) = create_lightclient_config(server.clone(), dangerous)?;
+
+    // Configure logging first.
+    let log_config = get_log_config(&config)?;
+    log4rs::init_config(log_config).map_err(|e| {
+        std::io::Error::new(ErrorKind::Other, e)
+    })?;
+
+    let lightclient = Arc::new(create_lightclient(seed, latest_block_height, &config)?);
+
+    // Print startup Messages
     info!(""); // Blank line
     info!("Starting Zecwallet-CLI");
     info!("Light Client config {:?}", config);
 
-    let lightclient = match LightClient::new(seed, &config, info.block_height) {
-        Ok(lc) => Arc::new(lc),
-        Err(e) => { eprintln!("Failed to start wallet. Error was:\n{}", e); return; }
-    };
+    if print_updates {
+        println!("Lightclient connecting to {}", config.server);
+    }
 
-    // At startup, run a sync. 
-    let sync_output = if matches.is_present("nosync") {
-         None
-    } else {
-        Some(lightclient.do_sync(true))
-    };
+    // Start the command loop
+    let (command_tx, resp_rx) = command_loop(lightclient.clone());
 
-    if command.is_none() {
-        // If running in interactive mode, output of the sync command
-        if sync_output.is_some() {
-            println!("{}", sync_output.unwrap());
+    // At startup, run a sync.
+    if first_sync {
+        let update = lightclient.do_sync(true);
+        if print_updates {
+            println!("{}", update);
         }
-        start_interactive(lightclient, &config);
-    } else {
-        let cmd_response = commands::do_user_command(&command.unwrap(), &params, lightclient.as_ref());
-        println!("{}", cmd_response);
+    }
+
+    Ok((command_tx, resp_rx))
+}
+
+fn create_lightclient_config(server: http::Uri, dangerous: bool) -> Result<(LightClientConfig, u64)> {
+    // Do a getinfo first, before opening the wallet
+    let info = grpcconnector::get_info(server.clone(), dangerous)
+        .map_err(|e| std::io::Error::new(ErrorKind::ConnectionRefused, e))?;
+
+    // Create a Light Client Config
+    let config = lightclient::LightClientConfig {
+        server,
+        chain_name                  : info.chain_name,
+        sapling_activation_height   : info.sapling_activation_height,
+        consensus_branch_id         : info.consensus_branch_id,
+        anchor_offset               : ANCHOR_OFFSET,
+        no_cert_verification        : dangerous,
+    };
+
+    Ok((config, info.block_height))
+}
+
+fn create_lightclient(seed: Option<String>, latest_block: u64, config: &LightClientConfig) -> Result<(LightClient)> {
+    let lightclient = LightClient::new(seed, config, latest_block)?;
+
+    Ok(lightclient)
+}
+
+fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receiver<String>) {
+    // `()` can be used when no completer is required
+    let mut rl = Editor::<()>::new();
+
+    println!("Ready!");
+
+    let send_command = |cmd: String, args: Vec<String>| -> String {
+        command_tx.send((cmd.clone(), args)).unwrap();
+        match resp_rx.recv() {
+            Ok(s) => s,
+            Err(e) => {
+                let e = format!("Error executing command {}: {}", cmd, e);
+                eprintln!("{}", e);
+                error!("{}", e);
+                return "".to_string()
+            }
+        }
+    };
+
+    let info = &send_command("info".to_string(), vec![]);
+    let chain_name = json::parse(info).unwrap()["chain_name"].as_str().unwrap().to_string();
+
+    loop {
+        // Read the height first
+        let height = json::parse(&send_command("height".to_string(), vec![])).unwrap()["height"].as_i64().unwrap();
+
+        let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
+                                                    chain_name, height));
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str());
+                // Parse command line arguments
+                let mut cmd_args = match shellwords::split(&line) {
+                    Ok(args) => args,
+                    Err(_)   => {
+                        println!("Mismatched Quotes");
+                        continue;
+                    }
+                };
+
+                if cmd_args.is_empty() {
+                    continue;
+                }
+
+                let cmd = cmd_args.remove(0);
+                let args: Vec<String> = cmd_args;
+
+                println!("{}", send_command(cmd, args));
+
+                // Special check for Quit command.
+                if line == "quit" {
+                    break;
+                }
+            },
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                info!("CTRL-C");
+                println!("{}", send_command("save".to_string(), vec![]));
+                break
+            },
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                info!("CTRL-D");
+                println!("{}", send_command("save".to_string(), vec![]));
+                break
+            },
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break
+            }
+        }
     }
 }
 
-fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) {
-    println!("Lightclient connecting to {}", config.server);
 
-    let (command_tx, command_rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
-    let (resp_tx, resp_rx) = std::sync::mpsc::channel::<String>();
+fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>, Receiver<String>) {
+    let (command_tx, command_rx) = channel::<(String, Vec<String>)>();
+    let (resp_tx, resp_rx) = channel::<String>();
 
     let lc = lightclient.clone();
     std::thread::spawn(move || {
@@ -201,63 +322,35 @@ fn start_interactive(lightclient: Arc<LightClient>, config: &LightClientConfig) 
         }
     });
 
-    // `()` can be used when no completer is required
-    let mut rl = Editor::<()>::new();
+    (command_tx, resp_rx)
+}
 
-    println!("Ready!");
+fn attempt_recover_seed() {
+    use std::fs::File;
+    use std::io::prelude::*;
+    use std::io::{BufReader};
+    use byteorder::{LittleEndian, ReadBytesExt,};
+    use bip39::{Mnemonic, Language};
 
-    loop {
-        let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
-                                            config.chain_name,
-                                            lightclient.last_scanned_height()));
-        match readline {
-            Ok(line) => {
-                rl.add_history_entry(line.as_str());
-                // Parse command line arguments
-                let mut cmd_args = match shellwords::split(&line) {
-                    Ok(args) => args,
-                    Err(_)   => {
-                        println!("Mismatched Quotes");
-                        continue;
-                    }
-                };
+    // Create a Light Client Config in an attempt to recover the file.
+    let config = LightClientConfig {
+        server: "0.0.0.0:0".parse().unwrap(),
+        chain_name: "main".to_string(),
+        sapling_activation_height: 0,
+        consensus_branch_id: "000000".to_string(),
+        anchor_offset: 0,
+        no_cert_verification: false,
+    };
 
-                if cmd_args.is_empty() {
-                    continue;
-                }
+    let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());
+    let version = reader.read_u64::<LittleEndian>().unwrap();
+    println!("Reading wallet version {}", version);
 
-                let cmd = cmd_args.remove(0);
-                let args: Vec<String> = cmd_args;            
-                command_tx.send((cmd, args)).unwrap();
+    // Seed
+    let mut seed_bytes = [0u8; 32];
+    reader.read_exact(&mut seed_bytes).unwrap();
 
-                // Wait for the response
-                match resp_rx.recv() {
-                    Ok(response) => println!("{}", response),
-                    _ => { eprintln!("Error receiving response");}
-                }
+    let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
 
-                // Special check for Quit command.
-                if line == "quit" {
-                    break;
-                }
-            },
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                info!("CTRL-C");
-                println!("{}", lightclient.do_save());
-                break
-            },
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
-                info!("CTRL-D");
-                println!("{}", lightclient.do_save());
-                break
-            },
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break
-            }
-        }
-    }
-
+    println!("Recovered seed phrase:\n{}", phrase);
 }

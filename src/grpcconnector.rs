@@ -24,11 +24,28 @@ use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction,
                          TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
 use crate::grpc_client::client::CompactTxStreamer;
 
+mod danger {
+    use rustls;
+    use webpki;
+
+    pub struct NoCertificateVerification {}
+
+    impl rustls::ServerCertVerifier for NoCertificateVerification {
+        fn verify_server_cert(&self,
+                              _roots: &rustls::RootCertStore,
+                              _presented_certs: &[rustls::Certificate],
+                              _dns_name: webpki::DNSNameRef<'_>,
+                              _ocsp: &[u8]) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
+            Ok(rustls::ServerCertVerified::assertion())
+        }
+    }
+}
 
 /// A Secure (https) grpc destination.
 struct Dst {
-    addr:       SocketAddr, 
-    host:       String,
+    addr:        SocketAddr, 
+    host:        String,
+    no_cert:     bool,
 }
 
 impl tower_service::Service<()> for Dst {
@@ -43,15 +60,24 @@ impl tower_service::Service<()> for Dst {
     fn call(&mut self, _: ()) -> Self::Future {
         let mut config = ClientConfig::new();
 
+
         config.alpn_protocols.push(b"h2".to_vec());
         config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        
+        if self.no_cert {
+            config.dangerous()
+                .set_certificate_verifier(Arc::new(danger::NoCertificateVerification {}));
+        }
 
         let config = Arc::new(config);
         let tls_connector = TlsConnector::from(config);
 
         let addr_string_local = self.host.clone();
 
-        let domain = webpki::DNSNameRef::try_from_ascii_str(&addr_string_local).unwrap();
+        let domain = match webpki::DNSNameRef::try_from_ascii_str(&addr_string_local) {
+            Ok(d)  => d,
+            Err(_) => webpki::DNSNameRef::try_from_ascii_str("localhost").unwrap()
+        };
         let domain_local = domain.to_owned();
 
         let stream = TcpStream::connect(&self.addr).and_then(move |sock| {
@@ -92,7 +118,7 @@ impl tower_service::Service<()> for Dst {
 
 
 macro_rules! make_grpc_client {
-    ($protocol:expr, $host:expr, $port:expr) => {{
+    ($protocol:expr, $host:expr, $port:expr, $nocert:expr) => {{
         let uri: http::Uri = format!("{}://{}", $protocol, $host).parse().unwrap();
 
         let addr = format!("{}:{}", $host, $port)
@@ -102,11 +128,11 @@ macro_rules! make_grpc_client {
             .unwrap();
 
         let h2_settings = Default::default();
-        let mut make_client = tower_h2::client::Connect::new(Dst {addr, host: $host.to_string()}, h2_settings, DefaultExecutor::current());
+        let mut make_client = tower_h2::client::Connect::new(Dst {addr, host: $host.to_string(), no_cert: $nocert}, h2_settings, DefaultExecutor::current());
 
         make_client
             .make_service(())
-            .map_err(|e| { format!("HTTP/2 connection failed; err={:?}", e) })
+            .map_err(|e| { format!("HTTP/2 connection failed; err={:?}.\nIf you're connecting to a local server, please pass --dangerous to trust the server without checking its TLS certificate", e) })
             .and_then(move |conn| {
                 let conn = tower_request_modifier::Builder::new()
                     .set_origin(uri)
@@ -126,8 +152,8 @@ macro_rules! make_grpc_client {
 // GRPC code
 // ==============
 
-pub fn get_info(uri: http::Uri) -> Result<LightdInfo, String> {
-    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
+pub fn get_info(uri: http::Uri, no_cert: bool) -> Result<LightdInfo, String> {
+    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap(), no_cert)
         .and_then(move |mut client| {
             client.get_lightd_info(Request::new(Empty{}))
                 .map_err(|e| {
@@ -145,9 +171,9 @@ pub fn get_info(uri: http::Uri) -> Result<LightdInfo, String> {
 }
 
 
-pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, c: F)
-    where F : Fn(&[u8]) {
-    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
+pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, no_cert: bool, mut c: F)
+    where F : FnMut(&[u8], u64) {
+    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap(), no_cert)
         .and_then(move |mut client| {
             let bs = BlockId{ height: start_height, hash: vec!()};
             let be = BlockId{ height: end_height,   hash: vec!()};
@@ -165,7 +191,7 @@ pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_heig
                         let mut encoded_buf = vec![];
 
                         b.encode(&mut encoded_buf).unwrap();
-                        c(&encoded_buf);
+                        c(&encoded_buf, b.height);
 
                         Ok(())
                     })
@@ -183,9 +209,9 @@ pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_heig
 }
 
 pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(uri: &http::Uri, address: String, 
-    start_height: u64, end_height: u64,c: F)
+    start_height: u64, end_height: u64, no_cert: bool, c: F)
         where F : Fn(&[u8], u64) {
-    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
+    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap(), no_cert)
         .and_then(move |mut client| {
             let start = Some(BlockId{ height: start_height, hash: vec!()});
             let end   = Some(BlockId{ height: end_height,   hash: vec!()});
@@ -218,9 +244,9 @@ pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(uri: &http::Uri,
     };
 }
 
-pub fn fetch_full_tx<F : 'static + std::marker::Send>(uri: &http::Uri, txid: TxId, c: F)
+pub fn fetch_full_tx<F : 'static + std::marker::Send>(uri: &http::Uri, txid: TxId, no_cert: bool, c: F)
         where F : Fn(&[u8]) {
-    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
+    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap(), no_cert)
         .and_then(move |mut client| {
             let txfilter = TxFilter { block: None, index: 0, hash: txid.0.to_vec() };
             client.get_transaction(Request::new(txfilter))
@@ -244,8 +270,8 @@ pub fn fetch_full_tx<F : 'static + std::marker::Send>(uri: &http::Uri, txid: TxI
     };
 }
 
-pub fn broadcast_raw_tx(uri: &http::Uri, tx_bytes: Box<[u8]>) -> Result<String, String> {
-    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
+pub fn broadcast_raw_tx(uri: &http::Uri, no_cert: bool, tx_bytes: Box<[u8]>) -> Result<String, String> {
+    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap(), no_cert)
         .and_then(move |mut client| {
             client.send_transaction(Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0}))
                 .map_err(|e| {
@@ -265,9 +291,9 @@ pub fn broadcast_raw_tx(uri: &http::Uri, tx_bytes: Box<[u8]>) -> Result<String, 
     tokio::runtime::current_thread::Runtime::new().unwrap().block_on(runner)
 }
 
-pub fn fetch_latest_block<F : 'static + std::marker::Send>(uri: &http::Uri,  mut c : F) 
+pub fn fetch_latest_block<F : 'static + std::marker::Send>(uri: &http::Uri, no_cert: bool, mut c : F) 
     where F : FnMut(BlockId) {
-    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap())
+    let runner = make_grpc_client!(uri.scheme_str().unwrap(), uri.host().unwrap(), uri.port_part().unwrap(), no_cert)
         .and_then(|mut client| {
             client.get_latest_block(Request::new(ChainSpec {}))
             .map_err(|e| { format!("ERR = {:?}", e) })

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use json::{object};
 
 use crate::LightClient;
 
@@ -118,7 +119,7 @@ impl Command for InfoCommand {
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         lightclient.do_sync(true);
         
-        LightClient::do_info(lightclient.get_server_uri())
+        lightclient.do_info()
     }
 }
 
@@ -311,6 +312,31 @@ impl Command for TransactionsCommand {
     }
 }
 
+struct HeightCommand {}
+impl Command for HeightCommand {
+    fn help(&self)  -> String {
+        let mut h = vec![];
+        h.push("Get the latest block height that the wallet is at");
+        h.push("Usage:");
+        h.push("height");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Get the latest block height that the wallet is at".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        format!("{}",
+            object! {
+                "height" => lightclient.last_scanned_height()
+            }.pretty(2))
+    }
+}
+
+
 struct NewAddressCommand {}
 impl Command for NewAddressCommand {
     fn help(&self)  -> String {
@@ -407,6 +433,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("help".to_string(),      Box::new(HelpCommand{}));
     map.insert("balance".to_string(),   Box::new(BalanceCommand{}));
     map.insert("addresses".to_string(), Box::new(AddressCommand{}));
+    map.insert("height".to_string(),    Box::new(HeightCommand{}));
     map.insert("export".to_string(),    Box::new(ExportCommand{}));
     map.insert("info".to_string(),      Box::new(InfoCommand{}));
     map.insert("send".to_string(),      Box::new(SendCommand{}));

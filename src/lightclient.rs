@@ -1,8 +1,9 @@
 use crate::lightwallet::LightWallet;
 
 use log::{info, warn, error};
+use rand::{rngs::OsRng, seq::SliceRandom};
 
-use std::sync::{Arc};
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
 use std::path::Path;
 use std::fs::File;
@@ -33,6 +34,7 @@ pub struct LightClientConfig {
     pub sapling_activation_height   : u64,
     pub consensus_branch_id         : String,
     pub anchor_offset               : u32,
+    pub no_cert_verification        : bool,
 }
 
 impl LightClientConfig {
@@ -323,10 +325,20 @@ impl LightClient {
         self.config.server.clone()
     }
 
-    pub fn do_info(uri: http::Uri) -> String {       
-        let r = get_info(uri);
-        match r {
-            Ok(i) => format!("{:?}", i)[11..].to_string(),
+    pub fn do_info(&self) -> String {
+        match get_info(self.get_server_uri(), self.config.no_cert_verification) {
+            Ok(i) => {
+                let o = object!{
+                    "version" => i.version,
+                    "vendor" => i.vendor,
+                    "taddr_support" => i.taddr_support,
+                    "chain_name" => i.chain_name,
+                    "sapling_activation_height" => i.sapling_activation_height,
+                    "consensus_branch_id" => i.consensus_branch_id,
+                    "latest_block_height" => i.block_height
+                };
+                o.pretty(2)
+            },
             Err(e) => e
         }
     }
@@ -562,10 +574,16 @@ impl LightClient {
         // This will hold the latest block fetched from the RPC
         let latest_block_height = Arc::new(AtomicU64::new(0));
         let lbh = latest_block_height.clone();
-        fetch_latest_block(&self.get_server_uri(), move |block: BlockId| {
+        fetch_latest_block(&self.get_server_uri(), self.config.no_cert_verification, move |block: BlockId| {
                 lbh.store(block.height, Ordering::SeqCst);
             });
         let latest_block = latest_block_height.load(Ordering::SeqCst);
+
+        if latest_block < last_scanned_height {
+            let w = format!("Server's latest block({}) is behind ours({})", latest_block, last_scanned_height);
+            warn!("{}", w);
+            return w;
+        }
 
         info!("Latest block is {}", latest_block);
 
@@ -583,6 +601,11 @@ impl LightClient {
 
         let mut total_reorg = 0;
 
+        // Collect all txns in blocks that we have a tx in. We'll fetch all these
+        // txs along with our own, so that the server doesn't learn which ones
+        // belong to us.
+        let all_new_txs = Arc::new(RwLock::new(vec![]));
+
         // Fetch CompactBlocks in increments
         loop {
             let local_light_wallet = self.wallet.clone();
@@ -599,23 +622,26 @@ impl LightClient {
 
             // Fetch compact blocks
             info!("Fetching blocks {}-{}", start_height, end_height);
-            
+            let all_txs = all_new_txs.clone();
+
             let last_invalid_height = Arc::new(AtomicI32::new(0));
             let last_invalid_height_inner = last_invalid_height.clone();
-            fetch_blocks(&self.get_server_uri(), start_height, end_height, 
-                move |encoded_block: &[u8]| {
+            fetch_blocks(&self.get_server_uri(), start_height, end_height, self.config.no_cert_verification,
+                move |encoded_block: &[u8], height: u64| {
                     // Process the block only if there were no previous errors
                     if last_invalid_height_inner.load(Ordering::SeqCst) > 0 {
                         return;
                     }
 
                     match local_light_wallet.scan_block(encoded_block) {
-                        Ok(_) => {},
+                        Ok(block_txns) => {
+                            all_txs.write().unwrap().extend_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
+                        },
                         Err(invalid_height) => {
                             // Block at this height seems to be invalid, so invalidate up till that point
                             last_invalid_height_inner.store(invalid_height, Ordering::SeqCst);
                         }
-                    }
+                    };
 
                     local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
             });
@@ -652,7 +678,7 @@ impl LightClient {
             // TODO: Use for all t addresses
             let address = self.wallet.address_from_sk(&self.wallet.tkeys.read().unwrap()[0]);
             let wallet = self.wallet.clone();
-            fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, 
+            fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, self.config.no_cert_verification,
                 move |tx_bytes: &[u8], height: u64 | {
                     let tx = Transaction::read(tx_bytes).unwrap();
 
@@ -683,21 +709,27 @@ impl LightClient {
 
         // We need to first copy over the Txids from the wallet struct, because
         // we need to free the read lock from here (Because we'll self.wallet.txs later)
-        let txids_to_fetch: Vec<(TxId, i32)> = self.wallet.txs.read().unwrap().values()
+        let mut txids_to_fetch: Vec<(TxId, i32)> = self.wallet.txs.read().unwrap().values()
             .filter(|wtx| wtx.full_tx_scanned == false)
             .map(|wtx| (wtx.txid, wtx.block))
             .collect::<Vec<(TxId, i32)>>();
 
-        info!("Fetching {} new txids", txids_to_fetch.len());
+        info!("Fetching {} new txids, total {} with decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
+        txids_to_fetch.extend_from_slice(&all_new_txs.read().unwrap()[..]);
+        txids_to_fetch.sort();
+        txids_to_fetch.dedup();
+
+        let mut rng = OsRng;        
+        txids_to_fetch.shuffle(&mut rng);
 
         // And go and fetch the txids, getting the full transaction, so we can 
-        // read the memos        
+        // read the memos
+
         for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
             info!("Fetching full Tx: {}", txid);
-            responses.push(format!("Fetching full Tx: {}", txid));
 
-            fetch_full_tx(&self.get_server_uri(), txid, move |tx_bytes: &[u8] | {
+            fetch_full_tx(&self.get_server_uri(), txid, self.config.no_cert_verification, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
 
                 light_wallet_clone.scan_full_tx(&tx, height);
@@ -716,7 +748,7 @@ impl LightClient {
         );
         
         match rawtx {
-            Ok(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), txbytes) {
+            Ok(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), self.config.no_cert_verification, txbytes) {
                 Ok(k)  => k,
                 Err(e) => e,
             },
