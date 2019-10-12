@@ -1,17 +1,12 @@
-#[macro_use]
-extern crate rust_embed;
-
-mod lightclient;
-mod grpcconnector;
-mod lightwallet;
-mod commands;
-
 use std::io::{Result, Error, ErrorKind};
 use std::sync::{Arc};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 
-use lightclient::{LightClient, LightClientConfig};
+use zecwalletlitelib::{grpcconnector, commands, 
+    lightclient::{self, LightClient, LightClientConfig},
+    ANCHOR_OFFSET,
+};
 
 use log::{info, error, LevelFilter};
 use log4rs::append::rolling_file::RollingFileAppender;
@@ -29,15 +24,6 @@ use rustyline::Editor;
 
 use clap::{Arg, App};
 
-pub mod grpc_client {
-    include!(concat!(env!("OUT_DIR"), "/cash.z.wallet.sdk.rpc.rs"));
-}
-
-#[derive(RustEmbed)]
-#[folder = "zcash-params/"]
-pub struct SaplingParams;
-
-const ANCHOR_OFFSET: u32 = 4;
 
 /// Build the Logging config
 fn get_log_config(config: &LightClientConfig) -> Result<Config> {
