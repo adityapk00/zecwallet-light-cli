@@ -4,7 +4,6 @@
 
 This will launch the interactive prompt. Type `help` to get a list of commands
 
-**zecwallet-cli is currently in beta**
 
 
 ## Notes:
