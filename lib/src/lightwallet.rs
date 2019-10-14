@@ -1070,7 +1070,7 @@ impl LightWallet {
         let total_value = tos.iter().map(|to| to.1).sum::<u64>();
 
         println!(
-            "0: Creating transaction sending {} tazoshis to {} addresses",
+            "0: Creating transaction sending {} ztoshis to {} addresses",
             total_value, tos.len()
         );
 
