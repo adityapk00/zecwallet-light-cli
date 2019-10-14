@@ -58,7 +58,7 @@ fn get_log_config(config: &LightClientConfig) -> Result<Config> {
 pub fn main() {
     // Get command line arguments
     let matches = App::new("Zecwallet CLI")
-                    .version("0.2.1") 
+                    .version("1.0.0")
                     .arg(Arg::with_name("seed")
                         .short("s")
                         .long("seed")
