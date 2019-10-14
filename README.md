@@ -32,7 +32,7 @@ cargo build --release
 ```
 
 ## Options
-CLI arguments you can pass to `zecwallet-cli`
+Here are some CLI arguments you can pass to `zecwallet-cli`. Please run `zecwallet-cli --help` for the full list. 
 
 * `--server`: Connect to a custom zecwallet lightwalletd server. 
     * Example: `./zecwallet-cli --server 127.0.0.1:9067`
