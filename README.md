@@ -4,7 +4,9 @@
 
 This will launch the interactive prompt. Type `help` to get a list of commands
 
-
+## Running in non-interactive mode:
+You can also run `zecwallet-cli` in non-interactive mode by passing the command you want to run as an argument. For example, `zecwallet-cli addresses` will list all wallet addresses and exit. 
+Run `zecwallet-cli help` to see a list of all commands. 
 
 ## Notes:
 * The wallet is currently in beta, and connects to the mainnet by default. To connect to testnet, please pass `--server https://lightd-test.zecwallet.co:443`
