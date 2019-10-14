@@ -38,3 +38,5 @@ CLI arguments you can pass to `zecwallet-cli`
     * Example: `./zecwallet-cli --server 127.0.0.1:9067`
 * `--seed`: Restore a wallet from a seed phrase. Note that this will fail if there is an existing wallet. Delete (or move) any existing wallet to restore from the 24-word seed phrase
     * Example: `./zecwallet-cli --seed "twenty four words seed phrase"`
+ * `--recover`: Attempt to recover the seed phrase from a corrupted wallet
+ 
