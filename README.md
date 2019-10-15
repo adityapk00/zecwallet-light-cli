@@ -8,6 +8,10 @@ This will launch the interactive prompt. Type `help` to get a list of commands
 You can also run `zecwallet-cli` in non-interactive mode by passing the command you want to run as an argument. For example, `zecwallet-cli addresses` will list all wallet addresses and exit. 
 Run `zecwallet-cli help` to see a list of all commands. 
 
+## Privacy 
+* While all the keys and transaction detection happens on the client, the server can learn what blocks contain your shielded transactions.
+* The server also learns other metadata about you like your ip address etc...
+
 ## Notes:
 * The wallet connects to the mainnet by default. To connect to testnet, please pass `--server https://lightd-test.zecwallet.co:443`
 * If you want to run your own server, please see [zecwallet lightwalletd](https://github.com/adityapk00/lightwalletd), and then run `./zecwallet-cli --server http://127.0.0.1:9067`. You might also need to pass `--dangerous` if you are using a self-signed  TLS certificate.
