@@ -435,7 +435,7 @@ impl LightClient {
                     "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
                 }
             )
-            .collect::<Vec<JsonValue>>();;
+            .collect::<Vec<JsonValue>>();
 
         let mut res = object!{
             "unspent_notes" => unspent_notes,

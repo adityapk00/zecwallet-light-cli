@@ -232,7 +232,7 @@ impl Command for SendCommand {
         let value = match args[1].parse::<u64>() {
             Ok(amt) => amt,
             Err(e)  => {
-                return format!("Couldn't parse amount: {}", e);;
+                return format!("Couldn't parse amount: {}", e);
             }
         };
 
