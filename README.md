@@ -11,6 +11,7 @@ Run `zecwallet-cli help` to see a list of all commands.
 ## Privacy 
 * While all the keys and transaction detection happens on the client, the server can learn what blocks contain your shielded transactions.
 * The server also learns other metadata about you like your ip address etc...
+* Also remember that t-addresses don't provide any privacy protection.
 
 ## Notes:
 * The wallet connects to the mainnet by default. To connect to testnet, please pass `--server https://lightd-test.zecwallet.co:443`
