@@ -34,7 +34,7 @@ Zecwallet-CLI does automatic note and utxo management, which means it doesn't al
     * Run `rustup update` to get the latest version of Rust if you already have it installed
 
 ```
-git clone https://github.com/adityapk00/lightwalletclient.git
+git clone git@github.com:adityapk00/zecwallet-light-cli.git
 cargo build --release
 ./target/release/zecwallet-cli
 ```
