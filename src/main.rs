@@ -18,7 +18,6 @@ use log4rs::append::rolling_file::policy::compound::{
     roll::fixed_window::FixedWindowRoller,
 };
 
-use clap::{Arg, App};
 
 
 /// Build the Logging config
@@ -54,6 +53,7 @@ fn get_log_config(config: &LightClientConfig) -> Result<Config> {
 
 pub fn main() {
     // Get command line arguments
+    use clap::{Arg, App};
     let matches = App::new("Zecwallet CLI")
                     .version("1.0.0")
                     .arg(Arg::with_name("seed")
