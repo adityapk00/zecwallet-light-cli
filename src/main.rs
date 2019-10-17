@@ -19,7 +19,6 @@ use log4rs::append::rolling_file::policy::compound::{
 };
 
 use rustyline::error::ReadlineError;
-use rustyline::Editor;
 
 use clap::{Arg, App};
 
@@ -183,7 +182,7 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
 
 fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receiver<String>) {
     // `()` can be used when no completer is required
-    let mut rl = Editor::<()>::new();
+    let mut rl = rustyline::Editor::<()>::new();
 
     println!("Ready!");
 
