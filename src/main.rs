@@ -1,7 +1,6 @@
 use std::io::{Result, Error, ErrorKind};
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
-use std::time::Duration;
 
 use zecwalletlitelib::{commands, 
     lightclient::{self, LightClient, LightClientConfig},
@@ -18,10 +17,6 @@ use log4rs::append::rolling_file::policy::compound::{
     roll::fixed_window::FixedWindowRoller,
 };
 
-use rustyline::error::ReadlineError;
-use rustyline::Editor;
-
-use clap::{Arg, App};
 
 
 /// Build the Logging config
@@ -57,6 +52,7 @@ fn get_log_config(config: &LightClientConfig) -> Result<Config> {
 
 pub fn main() {
     // Get command line arguments
+    use clap::{Arg, App};
     let matches = App::new("Zecwallet CLI")
                     .version("1.0.0")
                     .arg(Arg::with_name("seed")
@@ -183,7 +179,7 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
 
 fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receiver<String>) {
     // `()` can be used when no completer is required
-    let mut rl = Editor::<()>::new();
+    let mut rl = rustyline::Editor::<()>::new();
 
     println!("Ready!");
 
@@ -235,13 +231,13 @@ fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receive
                     break;
                 }
             },
-            Err(ReadlineError::Interrupted) => {
+            Err(rustyline::error::ReadlineError::Interrupted) => {
                 println!("CTRL-C");
                 info!("CTRL-C");
                 println!("{}", send_command("save".to_string(), vec![]));
                 break
             },
-            Err(ReadlineError::Eof) => {
+            Err(rustyline::error::ReadlineError::Eof) => {
                 println!("CTRL-D");
                 info!("CTRL-D");
                 println!("{}", send_command("save".to_string(), vec![]));
@@ -263,7 +259,7 @@ fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>
     let lc = lightclient.clone();
     std::thread::spawn(move || {
         loop {
-            match command_rx.recv_timeout(Duration::from_secs(5 * 60)) {
+            match command_rx.recv_timeout(std::time::Duration::from_secs(5 * 60)) {
                 Ok((cmd, args)) => {
                     let args = args.iter().map(|s| s.as_ref()).collect();
 
