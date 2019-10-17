@@ -1,37 +1,37 @@
-use std::io::{Result, Error, ErrorKind};
-use std::sync::{Arc};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::io::{Error, ErrorKind, Result};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 
-use zecwalletlitelib::{commands, 
+use zecwalletlitelib::{
+    commands,
     lightclient::{self, LightClient, LightClientConfig},
 };
 
-use log::{info, error, LevelFilter};
-use log4rs::append::rolling_file::RollingFileAppender;
-use log4rs::encode::pattern::PatternEncoder;
-use log4rs::config::{Appender, Config, Root};
-use log4rs::filter::threshold::ThresholdFilter;
+use log::{error, info, LevelFilter};
 use log4rs::append::rolling_file::policy::compound::{
-    CompoundPolicy,
-    trigger::size::SizeTrigger,
-    roll::fixed_window::FixedWindowRoller,
+    roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
 };
+use log4rs::append::rolling_file::RollingFileAppender;
+use log4rs::config::{Appender, Config, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::filter::threshold::ThresholdFilter;
 
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
-use clap::{Arg, App};
-
+use clap::{App, Arg};
 
 /// Build the Logging config
 fn get_log_config(config: &LightClientConfig) -> Result<Config> {
     let window_size = 3; // log0, log1, log2
-    let fixed_window_roller =
-        FixedWindowRoller::builder().build("zecwallet-light-wallet-log{}",window_size).unwrap();
+    let fixed_window_roller = FixedWindowRoller::builder()
+        .build("zecwallet-light-wallet-log{}", window_size)
+        .unwrap();
     let size_limit = 5 * 1024 * 1024; // 5MB as max log file size to roll
     let size_trigger = SizeTrigger::new(size_limit);
-    let compound_policy = CompoundPolicy::new(Box::new(size_trigger),Box::new(fixed_window_roller));
+    let compound_policy =
+        CompoundPolicy::new(Box::new(size_trigger), Box::new(fixed_window_roller));
 
     Config::builder()
         .appender(
@@ -51,9 +51,8 @@ fn get_log_config(config: &LightClientConfig) -> Result<Config> {
                 .appender("logfile")
                 .build(LevelFilter::Debug),
         )
-        .map_err(|e|Error::new(ErrorKind::Other, format!("{}", e)))
+        .map_err(|e| Error::new(ErrorKind::Other, format!("{}", e)))
 }
-
 
 pub fn main() {
     // Get command line arguments
@@ -100,16 +99,23 @@ pub fn main() {
     }
 
     let command = matches.value_of("COMMAND");
-    let params = matches.values_of("PARAMS").map(|v| v.collect()).or(Some(vec![])).unwrap();
+    let params = matches
+        .values_of("PARAMS")
+        .map(|v| v.collect())
+        .or(Some(vec![]))
+        .unwrap();
 
-    let maybe_server  = matches.value_of("server").map(|s| s.to_string());
-    let seed          = matches.value_of("seed").map(|s| s.to_string());
+    let maybe_server = matches.value_of("server").map(|s| s.to_string());
+    let seed = matches.value_of("seed").map(|s| s.to_string());
 
     let server = LightClientConfig::get_server_or_default(maybe_server);
 
     // Test to make sure the server has all of scheme, host and port
     if server.scheme_str().is_none() || server.host().is_none() || server.port_part().is_none() {
-        eprintln!("Please provide the --server parameter as [scheme]://[host]:[port].\nYou provided: {}", server);
+        eprintln!(
+            "Please provide the --server parameter as [scheme]://[host]:[port].\nYou provided: {}",
+            server
+        );
         return;
     }
 
@@ -128,9 +134,14 @@ pub fn main() {
     if command.is_none() {
         start_interactive(command_tx, resp_rx);
     } else {
-        command_tx.send(
-            (command.unwrap().to_string(),
-                params.iter().map(|s| s.to_string()).collect::<Vec<String>>()))
+        command_tx
+            .send((
+                command.unwrap().to_string(),
+                params
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>(),
+            ))
             .unwrap();
 
         match resp_rx.recv() {
@@ -144,16 +155,19 @@ pub fn main() {
     }
 }
 
-fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync: bool, print_updates: bool)
-        -> Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
+fn startup(
+    server: http::Uri,
+    dangerous: bool,
+    seed: Option<String>,
+    first_sync: bool,
+    print_updates: bool,
+) -> Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
     let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
 
     // Configure logging first.
     let log_config = get_log_config(&config)?;
-    log4rs::init_config(log_config).map_err(|e| {
-        std::io::Error::new(ErrorKind::Other, e)
-    })?;
+    log4rs::init_config(log_config).map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
 
     let lightclient = Arc::new(LightClient::new(seed, &config, latest_block_height)?);
 
@@ -180,7 +194,6 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
     Ok((command_tx, resp_rx))
 }
 
-
 fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receiver<String>) {
     // `()` can be used when no completer is required
     let mut rl = Editor::<()>::new();
@@ -195,27 +208,34 @@ fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receive
                 let e = format!("Error executing command {}: {}", cmd, e);
                 eprintln!("{}", e);
                 error!("{}", e);
-                return "".to_string()
+                return "".to_string();
             }
         }
     };
 
     let info = &send_command("info".to_string(), vec![]);
-    let chain_name = json::parse(info).unwrap()["chain_name"].as_str().unwrap().to_string();
+    let chain_name = json::parse(info).unwrap()["chain_name"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     loop {
         // Read the height first
-        let height = json::parse(&send_command("height".to_string(), vec![])).unwrap()["height"].as_i64().unwrap();
+        let height = json::parse(&send_command("height".to_string(), vec![])).unwrap()["height"]
+            .as_i64()
+            .unwrap();
 
-        let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
-                                                    chain_name, height));
+        let readline = rl.readline(&format!(
+            "({}) Block:{} (type 'help') >> ",
+            chain_name, height
+        ));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
                 // Parse command line arguments
                 let mut cmd_args = match shellwords::split(&line) {
                     Ok(args) => args,
-                    Err(_)   => {
+                    Err(_) => {
                         println!("Mismatched Quotes");
                         continue;
                     }
@@ -234,29 +254,30 @@ fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receive
                 if line == "quit" {
                     break;
                 }
-            },
+            }
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
                 info!("CTRL-C");
                 println!("{}", send_command("save".to_string(), vec![]));
-                break
-            },
+                break;
+            }
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
                 info!("CTRL-D");
                 println!("{}", send_command("save".to_string(), vec![]));
-                break
-            },
+                break;
+            }
             Err(err) => {
                 println!("Error: {:?}", err);
-                break
+                break;
             }
         }
     }
 }
 
-
-fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>, Receiver<String>) {
+fn command_loop(
+    lightclient: Arc<LightClient>,
+) -> (Sender<(String, Vec<String>)>, Receiver<String>) {
     let (command_tx, command_rx) = channel::<(String, Vec<String>)>();
     let (resp_tx, resp_rx) = channel::<String>();
 
@@ -274,7 +295,7 @@ fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>
                         info!("Quit");
                         break;
                     }
-                },
+                }
                 Err(_) => {
                     // Timeout. Do a sync to keep the wallet up-to-date. False to whether to print updates on the console
                     info!("Timeout, doing a sync");
@@ -288,11 +309,11 @@ fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>
 }
 
 fn attempt_recover_seed() {
+    use bip39::{Language, Mnemonic};
+    use byteorder::{LittleEndian, ReadBytesExt};
     use std::fs::File;
     use std::io::prelude::*;
-    use std::io::{BufReader};
-    use byteorder::{LittleEndian, ReadBytesExt,};
-    use bip39::{Mnemonic, Language};
+    use std::io::BufReader;
 
     // Create a Light Client Config in an attempt to recover the file.
     let config = LightClientConfig {
@@ -312,7 +333,10 @@ fn attempt_recover_seed() {
     let mut seed_bytes = [0u8; 32];
     reader.read_exact(&mut seed_bytes).unwrap();
 
-    let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
+    let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English)
+        .unwrap()
+        .phrase()
+        .to_string();
 
     println!("Recovered seed phrase:\n{}", phrase);
 }
