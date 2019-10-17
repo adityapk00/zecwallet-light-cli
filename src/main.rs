@@ -18,8 +18,6 @@ use log4rs::append::rolling_file::policy::compound::{
     roll::fixed_window::FixedWindowRoller,
 };
 
-use rustyline::error::ReadlineError;
-
 use clap::{Arg, App};
 
 
@@ -234,13 +232,13 @@ fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Receive
                     break;
                 }
             },
-            Err(ReadlineError::Interrupted) => {
+            Err(rustyline::error::ReadlineError::Interrupted) => {
                 println!("CTRL-C");
                 info!("CTRL-C");
                 println!("{}", send_command("save".to_string(), vec![]));
                 break
             },
-            Err(ReadlineError::Eof) => {
+            Err(rustyline::error::ReadlineError::Eof) => {
                 println!("CTRL-D");
                 info!("CTRL-D");
                 println!("{}", send_command("save".to_string(), vec![]));
