@@ -1,7 +1,6 @@
 use std::io::{Result, Error, ErrorKind};
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
-use std::time::Duration;
 
 use zecwalletlitelib::{commands, 
     lightclient::{self, LightClient, LightClientConfig},
@@ -260,7 +259,7 @@ fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>
     let lc = lightclient.clone();
     std::thread::spawn(move || {
         loop {
-            match command_rx.recv_timeout(Duration::from_secs(5 * 60)) {
+            match command_rx.recv_timeout(std::time::Duration::from_secs(5 * 60)) {
                 Ok((cmd, args)) => {
                     let args = args.iter().map(|s| s.as_ref()).collect();
 
