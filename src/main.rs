@@ -1,5 +1,5 @@
 use std::io::{Result, Error, ErrorKind};
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 
