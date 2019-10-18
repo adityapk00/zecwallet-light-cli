@@ -362,7 +362,11 @@ impl OutgoingTxMetadata {
 }
 
 pub struct WalletTx {
+    // Block in which this tx was included
     pub block: i32,
+
+    // Timestamp of Tx. Added in v4
+    pub datetime: u64,
 
     // Txid of this transaction. It's duplicated here (It is also the Key in the HashMap that points to this
     // WalletTx in LightWallet::txs)
@@ -392,12 +396,13 @@ pub struct WalletTx {
 
 impl WalletTx {
     pub fn serialized_version() -> u64 {
-        return 3;
+        return 4;
     }
 
-    pub fn new(height: i32, txid: &TxId) -> Self {
+    pub fn new(height: i32, datetime: u64, txid: &TxId) -> Self {
         WalletTx {
             block: height,
+            datetime,
             txid: txid.clone(),
             notes: vec![],
             utxos: vec![],
@@ -413,6 +418,12 @@ impl WalletTx {
         assert!(version <= WalletTx::serialized_version());
 
         let block = reader.read_i32::<LittleEndian>()?;
+
+        let datetime = if version >= 4 {
+            reader.read_u64::<LittleEndian>()?
+        } else {
+            0
+        };
 
         let mut txid_bytes = [0u8; 32];
         reader.read_exact(&mut txid_bytes)?;
@@ -432,6 +443,7 @@ impl WalletTx {
             
         Ok(WalletTx{
             block,
+            datetime,
             txid,
             notes,
             utxos,
@@ -446,6 +458,8 @@ impl WalletTx {
         writer.write_u64::<LittleEndian>(WalletTx::serialized_version())?;
 
         writer.write_i32::<LittleEndian>(self.block)?;
+
+        writer.write_u64::<LittleEndian>(self.datetime)?;
 
         writer.write_all(&self.txid.0)?;
 

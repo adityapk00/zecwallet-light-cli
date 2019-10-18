@@ -7,9 +7,12 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
 use std::path::Path;
 use std::fs::File;
+use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter, Error, ErrorKind};
+
+use protobuf::parse_from_bytes;
 
 use json::{object, array, JsonValue};
 use zcash_primitives::transaction::{TxId, Transaction};
@@ -393,6 +396,7 @@ impl LightClient {
                     } else {
                         Some(object!{
                             "created_in_block"   => wtx.block,
+                            "datetime"           => wtx.datetime,
                             "created_in_txid"    => format!("{}", txid),
                             "value"              => nd.note.value,
                             "is_change"          => nd.is_change,
@@ -413,71 +417,50 @@ impl LightClient {
                 }
             });
         
-        // Collect UTXOs
-        let utxos = self.wallet.get_utxos().iter()
-            .filter(|utxo| utxo.unconfirmed_spent.is_none())    // Filter out unconfirmed from the list of utxos
-            .map(|utxo| {
-                object!{
-                    "created_in_block"   => utxo.height,
-                    "created_in_txid"    => format!("{}", utxo.txid),
-                    "value"              => utxo.value,
-                    "scriptkey"          => hex::encode(utxo.script.clone()),
-                    "is_change"          => false,  // TODO: Identify notes as change if we send change to taddrs
-                    "address"            => utxo.address.clone(),
-                    "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                    "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
-                }
-            })
-            .collect::<Vec<JsonValue>>();
+        let mut unspent_utxos: Vec<JsonValue> = vec![];
+        let mut spent_utxos  : Vec<JsonValue> = vec![];
+        let mut pending_utxos: Vec<JsonValue> = vec![];
 
-        // Collect pending UTXOs
-        let pending_utxos = self.wallet.get_utxos().iter()
-            .filter(|utxo| utxo.unconfirmed_spent.is_some())    // Filter to include only unconfirmed utxos
-            .map(|utxo| 
-                object!{
-                    "created_in_block"   => utxo.height,
-                    "created_in_txid"    => format!("{}", utxo.txid),
-                    "value"              => utxo.value,
-                    "scriptkey"          => hex::encode(utxo.script.clone()),
-                    "is_change"          => false,  // TODO: Identify notes as change if we send change to taddrs
-                    "address"            => utxo.address.clone(),
-                    "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                    "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+        self.wallet.txs.read().unwrap().iter()
+            .flat_map( |(txid, wtx)| {
+                wtx.utxos.iter().filter_map(move |utxo| 
+                    if !all_notes && utxo.spent.is_some() {
+                        None
+                    } else {
+                        Some(object!{
+                            "created_in_block"   => wtx.block,
+                            "datetime"           => wtx.datetime,
+                            "created_in_txid"    => format!("{}", txid),
+                            "value"              => utxo.value,
+                            "scriptkey"          => hex::encode(utxo.script.clone()),
+                            "is_change"          => false, // TODO: Identify notes as change if we send change to taddrs
+                            "address"            => utxo.address.clone(),
+                            "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
+                            "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                        })
+                    }
+                )
+            })
+            .for_each( |utxo| {
+                if utxo["spent"].is_null() && utxo["unconfirmed_spent"].is_null() {
+                    unspent_utxos.push(utxo);
+                } else if !utxo["spent"].is_null() {
+                    spent_utxos.push(utxo);
+                } else {
+                    pending_utxos.push(utxo);
                 }
-            )
-            .collect::<Vec<JsonValue>>();
+            });
 
         let mut res = object!{
             "unspent_notes" => unspent_notes,
             "pending_notes" => pending_notes,
-            "utxos"         => utxos,
+            "utxos"         => unspent_utxos,
             "pending_utxos" => pending_utxos,
         };
 
         if all_notes {
             res["spent_notes"] = JsonValue::Array(spent_notes);
-        }
-
-        // If all notes, also add historical utxos
-        if all_notes {
-            res["spent_utxos"] = JsonValue::Array(self.wallet.txs.read().unwrap().values()
-                .flat_map(|wtx| {
-                    wtx.utxos.iter()
-                        .filter(|utxo| utxo.spent.is_some())
-                        .map(|utxo| {
-                            object!{
-                                "created_in_block"   => wtx.block,
-                                "created_in_txid"    => format!("{}", utxo.txid),
-                                "value"              => utxo.value,
-                                "scriptkey"          => hex::encode(utxo.script.clone()),
-                                "is_change"          => false,  // TODO: Identify notes as change if we send change to taddrs
-                                "address"            => utxo.address.clone(),
-                                "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
-                            }
-                        }).collect::<Vec<JsonValue>>()
-                }).collect::<Vec<JsonValue>>()
-            );
+            res["spent_utxos"] = JsonValue::Array(spent_utxos);
         }
 
         res
@@ -511,6 +494,7 @@ impl LightClient {
 
                     txns.push(object! {
                         "block_height" => v.block,
+                        "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
                         "amount"       => total_change as i64 
                                             - v.total_shielded_value_spent as i64 
@@ -525,6 +509,7 @@ impl LightClient {
                     .map ( |nd| 
                         object! {
                             "block_height" => v.block,
+                            "datetime"     => v.datetime,
                             "txid"         => format!("{}", v.txid),
                             "amount"       => nd.note.value as i64,
                             "address"      => self.wallet.note_address(nd),
@@ -538,6 +523,7 @@ impl LightClient {
                     // Create an input transaction for the transparent value as well.
                     txns.push(object!{
                         "block_height" => v.block,
+                        "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
                         "amount"       => total_transparent_received as i64 - v.total_transparent_value_spent as i64,
                         "address"      => v.utxos.iter().map(|u| u.address.clone()).collect::<Vec<String>>().join(","),
@@ -636,6 +622,10 @@ impl LightClient {
 
         // Fetch CompactBlocks in increments
         loop {
+            // Collect all block times, because we'll need to update transparent tx
+            // datetime via the block height timestamp
+            let block_times = Arc::new(RwLock::new(HashMap::new()));
+
             let local_light_wallet = self.wallet.clone();
             let local_bytes_downloaded = bytes_downloaded.clone();
 
@@ -650,7 +640,9 @@ impl LightClient {
 
             // Fetch compact blocks
             info!("Fetching blocks {}-{}", start_height, end_height);
+
             let all_txs = all_new_txs.clone();
+            let block_times_inner = block_times.clone();
 
             let last_invalid_height = Arc::new(AtomicI32::new(0));
             let last_invalid_height_inner = last_invalid_height.clone();
@@ -661,8 +653,18 @@ impl LightClient {
                         return;
                     }
 
+                    let block: Result<zcash_client_backend::proto::compact_formats::CompactBlock, _>
+                                        = parse_from_bytes(encoded_block);
+                    match block {
+                        Ok(b) => {
+                            block_times_inner.write().unwrap().insert(b.height, b.time);
+                        },
+                        Err(_) => {}
+                    }
+
                     match local_light_wallet.scan_block(encoded_block) {
                         Ok(block_txns) => {
+                            // Add to global tx list
                             all_txs.write().unwrap().extend_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
                         },
                         Err(invalid_height) => {
@@ -711,7 +713,8 @@ impl LightClient {
                     let tx = Transaction::read(tx_bytes).unwrap();
 
                     // Scan this Tx for transparent inputs and outputs
-                    wallet.scan_full_tx(&tx, height as i32); 
+                    let datetime = block_times.read().unwrap().get(&height).map(|v| *v).unwrap_or(0);
+                    wallet.scan_full_tx(&tx, height as i32, datetime as u64); 
                 }
             );
             
@@ -722,8 +725,9 @@ impl LightClient {
                 break;
             } else if end_height > latest_block {
                 end_height = latest_block;
-            }        
+            }
         }
+
         if print_updates{
             println!(""); // New line to finish up the updates
         }
@@ -752,7 +756,6 @@ impl LightClient {
 
         // And go and fetch the txids, getting the full transaction, so we can 
         // read the memos
-
         for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
             info!("Fetching full Tx: {}", txid);
@@ -760,7 +763,7 @@ impl LightClient {
             fetch_full_tx(&self.get_server_uri(), txid, self.config.no_cert_verification, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
 
-                light_wallet_clone.scan_full_tx(&tx, height);
+                light_wallet_clone.scan_full_tx(&tx, height, 0);
             });
         };
 

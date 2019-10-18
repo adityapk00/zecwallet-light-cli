@@ -560,12 +560,12 @@ impl LightWallet {
             .sum::<u64>()
     }
 
-    fn add_toutput_to_wtx(&self, height: i32, txid: &TxId, vout: &TxOut, n: u64) {
+    fn add_toutput_to_wtx(&self, height: i32, timestamp: u64, txid: &TxId, vout: &TxOut, n: u64) {
         let mut txs = self.txs.write().unwrap();
 
         // Find the existing transaction entry, or create a new one.
         if !txs.contains_key(&txid) {
-            let tx_entry = WalletTx::new(height, &txid);
+            let tx_entry = WalletTx::new(height, timestamp, &txid);
             txs.insert(txid.clone(), tx_entry);
         }
         let tx_entry = txs.get_mut(&txid).unwrap();
@@ -600,7 +600,7 @@ impl LightWallet {
     }
 
     // Scan the full Tx and update memos for incoming shielded transactions
-    pub fn scan_full_tx(&self, tx: &Transaction, height: i32) {
+    pub fn scan_full_tx(&self, tx: &Transaction, height: i32, datetime: u64) {
         // Scan all the inputs to see if we spent any transparent funds in this tx
         
         // TODO: Save this object
@@ -639,7 +639,7 @@ impl LightWallet {
             let mut txs = self.txs.write().unwrap();
 
             if !txs.contains_key(&tx.txid()) {
-                let tx_entry = WalletTx::new(height, &tx.txid());
+                let tx_entry = WalletTx::new(height, datetime, &tx.txid());
                 txs.insert(tx.txid().clone(), tx_entry);
             }
             
@@ -661,7 +661,7 @@ impl LightWallet {
                     Some(TransparentAddress::PublicKey(hash)) => {
                         if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
                             // This is our address. Add this as an output to the txid
-                            self.add_toutput_to_wtx(height, &tx.txid(), &vout, n as u64);
+                            self.add_toutput_to_wtx(height, datetime, &tx.txid(), &vout, n as u64);
                         }
                     },
                     _ => {}
@@ -1013,7 +1013,7 @@ impl LightWallet {
 
             // Find the existing transaction entry, or create a new one.
             if !txs.contains_key(&tx.txid) {
-                let tx_entry = WalletTx::new(block_data.height as i32, &tx.txid);
+                let tx_entry = WalletTx::new(block_data.height as i32, block.time as u64, &tx.txid);
                 txs.insert(tx.txid, tx_entry);
             }
             let tx_entry = txs.get_mut(&tx.txid).unwrap();
@@ -1669,7 +1669,7 @@ pub mod tests {
         tx.add_t_output(&pk, AMOUNT1);
         let txid1 = tx.get_tx().txid();
 
-        wallet.scan_full_tx(&tx.get_tx(), 100);  // Pretend it is at height 100
+        wallet.scan_full_tx(&tx.get_tx(), 100, 0);  // Pretend it is at height 100
 
         {
             let txs = wallet.txs.read().unwrap();
@@ -1694,7 +1694,7 @@ pub mod tests {
         tx.add_t_input(txid1, 0);
         let txid2 = tx.get_tx().txid();
 
-        wallet.scan_full_tx(&tx.get_tx(), 101);  // Pretent it is at height 101
+        wallet.scan_full_tx(&tx.get_tx(), 101, 0);  // Pretent it is at height 101
 
         {
             // Make sure the txid was spent
@@ -1741,7 +1741,7 @@ pub mod tests {
         tx.add_t_output(&non_wallet_pk, 25);
         let txid1 = tx.get_tx().txid();
 
-        wallet.scan_full_tx(&tx.get_tx(), 100);  // Pretend it is at height 100
+        wallet.scan_full_tx(&tx.get_tx(), 100, 0);  // Pretend it is at height 100
 
         {
             let txs = wallet.txs.read().unwrap();
@@ -1766,7 +1766,7 @@ pub mod tests {
         tx.add_t_input(txid1, 1);   // Ours was at position 1 in the input tx
         let txid2 = tx.get_tx().txid();
 
-        wallet.scan_full_tx(&tx.get_tx(), 101);  // Pretent it is at height 101
+        wallet.scan_full_tx(&tx.get_tx(), 101, 0);  // Pretent it is at height 101
 
         {
             // Make sure the txid was spent
@@ -1815,7 +1815,7 @@ pub mod tests {
 
         let mut tx = FakeTransaction::new_with_txid(txid1);
         tx.add_t_output(&pk, TAMOUNT1);
-        wallet.scan_full_tx(&tx.get_tx(), 0);  // Height 0
+        wallet.scan_full_tx(&tx.get_tx(), 0, 0);  // Height 0
 
         const AMOUNT2:u64 = 2;
 
@@ -1828,7 +1828,7 @@ pub mod tests {
 
         let mut tx = FakeTransaction::new_with_txid(txid2);
         tx.add_t_input(txid1, 0);
-        wallet.scan_full_tx(&tx.get_tx(), 1);  // Height 1
+        wallet.scan_full_tx(&tx.get_tx(), 1, 0);  // Height 1
 
         // Now, the original note should be spent and there should be a change
         assert_eq!(wallet.zbalance(None), AMOUNT1 - AMOUNT2 ); // The t addr amount is received + spent, so it cancels out
@@ -2023,7 +2023,7 @@ pub mod tests {
         }
 
         // Now, full scan the Tx, which should populate the Outgoing Meta data
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         // Check Outgoing Metadata
         {
@@ -2063,7 +2063,7 @@ pub mod tests {
         let mut cb3 = FakeCompactBlock::new(2, block_hash);
         cb3.add_tx(&sent_tx);
         wallet.scan_block(&cb3.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         // Because the builder will randomize notes outputted, we need to find
         // which note number is the change and which is the output note (Because this tx
@@ -2116,7 +2116,7 @@ pub mod tests {
         let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
         cb4.add_tx(&sent_tx);
         wallet.scan_block(&cb4.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 3);
+        wallet.scan_full_tx(&sent_tx, 3, 0);
 
         {
             // Both notes should be spent now.
@@ -2187,7 +2187,7 @@ pub mod tests {
         }
 
         // Now, full scan the Tx, which should populate the Outgoing Meta data
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         // Check Outgoing Metadata for t address
         {
@@ -2215,7 +2215,7 @@ pub mod tests {
         tx.add_t_output(&pk, AMOUNT_T);
         let txid_t = tx.get_tx().txid();
 
-        wallet.scan_full_tx(&tx.get_tx(), 1);  // Pretend it is at height 1
+        wallet.scan_full_tx(&tx.get_tx(), 1, 0);  // Pretend it is at height 1
 
         {
             let txs = wallet.txs.read().unwrap();
@@ -2277,7 +2277,7 @@ pub mod tests {
 
         // Scan the compact block and the full Tx
         wallet.scan_block(&cb3.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         // Now this new Spent tx should be in, so the note should be marked confirmed spent
         {
@@ -2327,7 +2327,7 @@ pub mod tests {
         wallet.scan_block(&cb3.as_bytes()).unwrap();
 
         // And scan the Full Tx to get the memo
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         {
             let txs = wallet.txs.read().unwrap();
@@ -2366,7 +2366,7 @@ pub mod tests {
         wallet.scan_block(&cb3.as_bytes()).unwrap();
 
         // And scan the Full Tx to get the memo
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         {
             let txs = wallet.txs.read().unwrap();
@@ -2424,7 +2424,7 @@ pub mod tests {
         let mut cb3 = FakeCompactBlock::new(2, block_hash);
         cb3.add_tx(&sent_tx);
         wallet.scan_block(&cb3.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         // Check that the send to the second taddr worked
         {
@@ -2468,7 +2468,7 @@ pub mod tests {
         let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
         cb4.add_tx(&sent_tx);
         wallet.scan_block(&cb4.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 3);
+        wallet.scan_full_tx(&sent_tx, 3, 0);
 
         // Quickly check we have it
         {
@@ -2505,7 +2505,7 @@ pub mod tests {
         let mut cb5 = FakeCompactBlock::new(4, cb4.hash());
         cb5.add_tx(&sent_tx);
         wallet.scan_block(&cb5.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 4);
+        wallet.scan_full_tx(&sent_tx, 4, 0);
 
         {
             let txs = wallet.txs.read().unwrap();
@@ -2561,7 +2561,7 @@ pub mod tests {
         let mut cb3 = FakeCompactBlock::new(2, block_hash);
         cb3.add_tx(&sent_tx);
         wallet.scan_block(&cb3.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 2);
+        wallet.scan_full_tx(&sent_tx, 2, 0);
 
         // Make sure all the outputs are there!
         {
@@ -2633,7 +2633,7 @@ pub mod tests {
         let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
         cb4.add_tx(&sent_tx);
         wallet.scan_block(&cb4.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 3);
+        wallet.scan_full_tx(&sent_tx, 3, 0);
 
         // Make sure all the outputs are there!
         {
@@ -2811,7 +2811,7 @@ pub mod tests {
         let mut cb3 = FakeCompactBlock::new(7, blk6_hash);
         cb3.add_tx(&sent_tx);
         wallet.scan_block(&cb3.as_bytes()).unwrap();
-        wallet.scan_full_tx(&sent_tx, 7);
+        wallet.scan_full_tx(&sent_tx, 7, 0);
 
         // Make sure the Tx is in.
         {
