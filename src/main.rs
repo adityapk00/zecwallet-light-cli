@@ -2,7 +2,7 @@ use std::io::{Result, Error, ErrorKind};
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
 
-use zecwalletlitelib::{commands, error_helpers,
+use zecwalletlitelib::{commands, startup_helpers,
     lightclient::{self, LightClient, LightClientConfig},
 };
 
@@ -118,7 +118,7 @@ pub fn main() {
             error!("Error during startup: {}", e);
             match e.raw_os_error() {
                 Some(13) => {
-                    error_helpers::report_permission_error();
+                    startup_helpers::report_permission_error();
                 },
                 _ => eprintln!("Something else!")
             }
