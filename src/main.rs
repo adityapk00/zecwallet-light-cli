@@ -137,6 +137,10 @@ pub fn main() {
                 error!("{}", e);
             }
         }
+
+        // Save before exit
+        command_tx.send(("save".to_string(), vec![])).unwrap();
+        resp_rx.recv().unwrap();
     }
 }
 

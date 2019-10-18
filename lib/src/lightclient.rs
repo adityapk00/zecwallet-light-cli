@@ -333,10 +333,20 @@ impl LightClient {
             1_000_000, // 1 MB write buffer
             File::create(self.config.get_wallet_path()).unwrap());
         
-        self.wallet.write(&mut file_buffer).unwrap();
-        info!("Saved wallet");
-
-        format!("Saved Wallet")
+        match self.wallet.write(&mut file_buffer) {
+            Ok(_) => {
+                info!("Saved wallet");
+                let response = object!{
+                    "result" => "success"
+                };
+                response.pretty(2)
+            },
+            Err(e) => {
+                let err = format!("ERR: {}", e);
+                error!("{}", err);
+                err
+            }
+        }
     }
 
     pub fn get_server_uri(&self) -> http::Uri {
