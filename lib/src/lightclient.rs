@@ -771,7 +771,7 @@ impl LightClient {
                 Ok(k)  => k,
                 Err(e) => e,
             },
-            Err(e)        => format!("No Tx to broadcast. Error was: {}", e)
+            Err(e)        => format!("Error: No Tx to broadcast. Error was: {}", e)
         }
     }
 }

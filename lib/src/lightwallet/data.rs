@@ -386,6 +386,7 @@ pub struct WalletTx {
     // All outgoing sapling sends to addresses outside this wallet
     pub outgoing_metadata: Vec<OutgoingTxMetadata>,
 
+    // Whether this TxID was downloaded from the server and scanned for Memos
     pub full_tx_scanned: bool,
 }
 
