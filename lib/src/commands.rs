@@ -209,6 +209,8 @@ impl Command for SendCommand {
         h.push("Send ZEC to a given address");
         h.push("Usage:");
         h.push("send <address> <amount in zatoshis> \"optional_memo\"");
+        h.push("OR");
+        h.push("send '[{'address': <address>, 'amount': <amount in zatoshis>, 'memo': <optional memo>}, ...]'");
         h.push("");
         h.push("Example:");
         h.push("send ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d 200000 \"Hello from the command line\"");
@@ -222,25 +224,64 @@ impl Command for SendCommand {
     }
 
     fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
-        // Parse the args. 
+        // Parse the args. There are two argument types.
+        // 1 - A set of 2(+1 optional) arguments for a single address send representing address, value, memo?
+        // 2 - A single argument in the form of a JSON string that is "[{address: address, value: value, memo: memo},...]"
+
         // 1 - Destination address. T or Z address
-        if args.len() < 2 || args.len() > 3 {
+        if args.len() < 1 || args.len() > 3 {
             return self.help();
         }
 
-        // Make sure we can parse the amount
-        let value = match args[1].parse::<u64>() {
-            Ok(amt) => amt,
-            Err(e)  => {
-                return format!("Couldn't parse amount: {}", e);
+        // Check for a single argument that can be parsed as JSON
+        if args.len() == 1 {
+            // Sometimes on the command line, people use "'" for the quotes, which json::parse doesn't
+            // understand. So replace it with double-quotes
+            let arg_list = args[0].replace("'", "\"");
+
+            let json_args = match json::parse(&arg_list) {
+                Ok(j)  => j,
+                Err(e) => {
+                    let es = format!("Couldn't understand JSON: {}", e);
+                    return format!("{}\n{}", es, self.help());
+                }
+            };
+
+            if !json_args.is_array() {
+                return format!("Couldn't parse argument as array\n{}", self.help());
             }
-        };
 
-        let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
-        
-        lightclient.do_sync(true);
+            let maybe_send_args = json_args.members().map( |j| {
+                if !j.has_key("address") || !j.has_key("amount") {
+                    Err(format!("Need 'address' and 'amount'\n"))
+                } else {
+                    Ok((j["address"].as_str().unwrap(), j["amount"].as_u64().unwrap(), j["memo"].as_str().map(|s| s.to_string())))
+                }
+            }).collect::<Result<Vec<(&str, u64, Option<String>)>, String>>();
 
-        lightclient.do_send(args[0], value, memo)
+            let send_args = match maybe_send_args {
+                Ok(a) => a,
+                Err(s) => { return format!("Error: {}\n{}", s, self.help()); }
+            };
+
+            lightclient.do_sync(true);
+            return lightclient.do_send(send_args);
+        } else if args.len() == 2 || args.len() == 3 {
+            // Make sure we can parse the amount
+            let value = match args[1].parse::<u64>() {
+                Ok(amt) => amt,
+                Err(e)  => {
+                    return format!("Couldn't parse amount: {}", e);
+                }
+            };
+
+            let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
+            
+            lightclient.do_sync(true);
+            return lightclient.do_send(vec!((args[0], value, memo)));
+        }
+
+        self.help()
     }
 }
 

@@ -757,12 +757,13 @@ impl LightClient {
         responses.join("\n")
     }
 
-    pub fn do_send(&self, addr: &str, value: u64, memo: Option<String>) -> String {
+    pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> String {
         info!("Creating transaction");
+
         let rawtx = self.wallet.send_to_address(
-            u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(),   // Blossom ID
+            u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(), 
             &self.sapling_spend, &self.sapling_output,
-            vec![(&addr, value, memo)]
+            addrs
         );
         
         match rawtx {
