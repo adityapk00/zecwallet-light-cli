@@ -179,7 +179,7 @@ impl LightClientConfig {
 }
 
 pub struct LightClient {
-    pub wallet          : Arc<LightWallet>,
+    pub wallet          : Arc<RwLock<LightWallet>>,
 
     pub config          : LightClientConfig,
 
@@ -196,7 +196,7 @@ impl LightClient {
         let state = self.config.get_initial_state();
 
         match state {
-            Some((height, hash, tree)) => self.wallet.set_initial_block(height.try_into().unwrap(), hash, tree),
+            Some((height, hash, tree)) => self.wallet.read().unwrap().set_initial_block(height.try_into().unwrap(), hash, tree),
             _ => true,
         };
     }
@@ -213,14 +213,14 @@ impl LightClient {
             
             let wallet = LightWallet::read(&mut file_buffer, config)?;
              LightClient {
-                wallet          : Arc::new(wallet),
+                wallet          : Arc::new(RwLock::new(wallet)),
                 config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
             }
         } else {
             let l = LightClient {
-                wallet          : Arc::new(LightWallet::new(seed_phrase, config, latest_block)?),
+                wallet          : Arc::new(RwLock::new(LightWallet::new(seed_phrase, config, latest_block)?)),
                 config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
@@ -231,7 +231,7 @@ impl LightClient {
             l
         };
 
-        info!("Read wallet with birthday {}", lc.wallet.get_first_tx_block());
+        info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         
         // Read Sapling Params
         lc.sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
@@ -243,16 +243,16 @@ impl LightClient {
     }
 
     pub fn last_scanned_height(&self) -> u64 {
-        self.wallet.last_scanned_height() as u64
+        self.wallet.read().unwrap().last_scanned_height() as u64
     }
 
     // Export private keys
     pub fn do_export(&self, addr: Option<String>) -> JsonValue {
         // Clone address so it can be moved into the closure
         let address = addr.clone();
-
+        let wallet = self.wallet.read().unwrap();
         // Go over all z addresses
-        let z_keys = self.wallet.get_z_private_keys().iter()
+        let z_keys = wallet.get_z_private_keys().iter()
             .filter( move |(addr, _)| address.is_none() || address.as_ref() == Some(addr))
             .map( |(addr, pk)|
                 object!{
@@ -265,7 +265,7 @@ impl LightClient {
         let address = addr.clone();
 
         // Go over all t addresses
-        let t_keys = self.wallet.get_t_secret_keys().iter()
+        let t_keys = wallet.get_t_secret_keys().iter()
             .filter( move |(addr, _)| address.is_none() || address.as_ref() == Some(addr))
             .map( |(addr, sk)|
                 object!{
@@ -282,15 +282,15 @@ impl LightClient {
     }
 
     pub fn do_address(&self) -> JsonValue {
+        let wallet = self.wallet.read().unwrap();
         // Collect z addresses
-        let z_addresses = self.wallet.address.read().unwrap().iter().map( |ad| {
+        let z_addresses = wallet.zaddress.read().unwrap().iter().map( |ad| {
             encode_payment_address(self.config.hrp_sapling_address(), &ad)
         }).collect::<Vec<String>>();
 
         // Collect t addresses
-        let t_addresses = self.wallet.tkeys.read().unwrap().iter().map( |sk| {
-            self.wallet.address_from_sk(&sk)
-        }).collect::<Vec<String>>();
+        let t_addresses = wallet.taddresses.read().unwrap().iter().map( |a| a.clone() )
+                            .collect::<Vec<String>>();
 
         object!{
             "z_addresses" => z_addresses,
@@ -299,33 +299,33 @@ impl LightClient {
     }
 
     pub fn do_balance(&self) -> JsonValue {
+        let wallet = self.wallet.read().unwrap();
+
         // Collect z addresses
-        let z_addresses = self.wallet.address.read().unwrap().iter().map( |ad| {
+        let z_addresses = wallet.zaddress.read().unwrap().iter().map( |ad| {
             let address = encode_payment_address(self.config.hrp_sapling_address(), &ad);
             object!{
                 "address" => address.clone(),
-                "zbalance" => self.wallet.zbalance(Some(address.clone())),
-                "verified_zbalance" => self.wallet.verified_zbalance(Some(address)),
+                "zbalance" => wallet.zbalance(Some(address.clone())),
+                "verified_zbalance" => wallet.verified_zbalance(Some(address)),
             }
         }).collect::<Vec<JsonValue>>();
 
         // Collect t addresses
-        let t_addresses = self.wallet.tkeys.read().unwrap().iter().map( |sk| {
-            let address = self.wallet.address_from_sk(&sk);
-
+        let t_addresses = wallet.taddresses.read().unwrap().iter().map( |address| {
             // Get the balance for this address
-            let balance = self.wallet.tbalance(Some(address.clone()));
+            let balance = wallet.tbalance(Some(address.clone()));
             
             object!{
-                "address" => address,
+                "address" => address.clone(),
                 "balance" => balance,
             }
         }).collect::<Vec<JsonValue>>();
 
         object!{
-            "zbalance"           => self.wallet.zbalance(None),
-            "verified_zbalance"  => self.wallet.verified_zbalance(None),
-            "tbalance"           => self.wallet.tbalance(None),
+            "zbalance"           => wallet.zbalance(None),
+            "verified_zbalance"  => wallet.verified_zbalance(None),
+            "tbalance"           => wallet.tbalance(None),
             "z_addresses"        => z_addresses,
             "t_addresses"        => t_addresses,
         }
@@ -336,7 +336,7 @@ impl LightClient {
             1_000_000, // 1 MB write buffer
             File::create(self.config.get_wallet_path()).unwrap());
         
-        match self.wallet.write(&mut file_buffer) {
+        match self.wallet.write().unwrap().write(&mut file_buffer) {
             Ok(_) => {
                 info!("Saved wallet");
                 let response = object!{
@@ -375,9 +375,10 @@ impl LightClient {
     }
 
     pub fn do_seed_phrase(&self) -> JsonValue {
+        let wallet = self.wallet.read().unwrap();
         object!{
-            "seed"     => self.wallet.get_seed_phrase(),
-            "birthday" => self.wallet.get_birthday()
+            "seed"     => wallet.get_seed_phrase(),
+            "birthday" => wallet.get_birthday()
         }
     }
 
@@ -387,69 +388,75 @@ impl LightClient {
         let mut spent_notes  : Vec<JsonValue> = vec![];
         let mut pending_notes: Vec<JsonValue> = vec![];
 
-        // Collect Sapling notes
-        self.wallet.txs.read().unwrap().iter()
-            .flat_map( |(txid, wtx)| {
-                wtx.notes.iter().filter_map(move |nd| 
-                    if !all_notes && nd.spent.is_some() {
-                        None
+        {
+            // Collect Sapling notes
+            let wallet = self.wallet.read().unwrap();
+            wallet.txs.read().unwrap().iter()
+                .flat_map( |(txid, wtx)| {
+                    wtx.notes.iter().filter_map(move |nd| 
+                        if !all_notes && nd.spent.is_some() {
+                            None
+                        } else {
+                            Some(object!{
+                                "created_in_block"   => wtx.block,
+                                "datetime"           => wtx.datetime,
+                                "created_in_txid"    => format!("{}", txid),
+                                "value"              => nd.note.value,
+                                "is_change"          => nd.is_change,
+                                "address"            => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
+                                "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                            })
+                        }
+                    )
+                })
+                .for_each( |note| {
+                    if note["spent"].is_null() && note["unconfirmed_spent"].is_null() {
+                        unspent_notes.push(note);
+                    } else if !note["spent"].is_null() {
+                        spent_notes.push(note);
                     } else {
-                        Some(object!{
-                            "created_in_block"   => wtx.block,
-                            "datetime"           => wtx.datetime,
-                            "created_in_txid"    => format!("{}", txid),
-                            "value"              => nd.note.value,
-                            "is_change"          => nd.is_change,
-                            "address"            => self.wallet.note_address(nd),
-                            "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
-                            "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
-                        })
+                        pending_notes.push(note);
                     }
-                )
-            })
-            .for_each( |note| {
-                if note["spent"].is_null() && note["unconfirmed_spent"].is_null() {
-                    unspent_notes.push(note);
-                } else if !note["spent"].is_null() {
-                    spent_notes.push(note);
-                } else {
-                    pending_notes.push(note);
-                }
-            });
+                });
+        }
         
         let mut unspent_utxos: Vec<JsonValue> = vec![];
         let mut spent_utxos  : Vec<JsonValue> = vec![];
         let mut pending_utxos: Vec<JsonValue> = vec![];
-
-        self.wallet.txs.read().unwrap().iter()
-            .flat_map( |(txid, wtx)| {
-                wtx.utxos.iter().filter_map(move |utxo| 
-                    if !all_notes && utxo.spent.is_some() {
-                        None
+        
+        {
+            let wallet = self.wallet.read().unwrap();
+            wallet.txs.read().unwrap().iter()
+                .flat_map( |(txid, wtx)| {
+                    wtx.utxos.iter().filter_map(move |utxo| 
+                        if !all_notes && utxo.spent.is_some() {
+                            None
+                        } else {
+                            Some(object!{
+                                "created_in_block"   => wtx.block,
+                                "datetime"           => wtx.datetime,
+                                "created_in_txid"    => format!("{}", txid),
+                                "value"              => utxo.value,
+                                "scriptkey"          => hex::encode(utxo.script.clone()),
+                                "is_change"          => false, // TODO: Identify notes as change if we send change to taddrs
+                                "address"            => utxo.address.clone(),
+                                "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                            })
+                        }
+                    )
+                })
+                .for_each( |utxo| {
+                    if utxo["spent"].is_null() && utxo["unconfirmed_spent"].is_null() {
+                        unspent_utxos.push(utxo);
+                    } else if !utxo["spent"].is_null() {
+                        spent_utxos.push(utxo);
                     } else {
-                        Some(object!{
-                            "created_in_block"   => wtx.block,
-                            "datetime"           => wtx.datetime,
-                            "created_in_txid"    => format!("{}", txid),
-                            "value"              => utxo.value,
-                            "scriptkey"          => hex::encode(utxo.script.clone()),
-                            "is_change"          => false, // TODO: Identify notes as change if we send change to taddrs
-                            "address"            => utxo.address.clone(),
-                            "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                            "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
-                        })
+                        pending_utxos.push(utxo);
                     }
-                )
-            })
-            .for_each( |utxo| {
-                if utxo["spent"].is_null() && utxo["unconfirmed_spent"].is_null() {
-                    unspent_utxos.push(utxo);
-                } else if !utxo["spent"].is_null() {
-                    spent_utxos.push(utxo);
-                } else {
-                    pending_utxos.push(utxo);
-                }
-            });
+                });
+        }
 
         let mut res = object!{
             "unspent_notes" => unspent_notes,
@@ -467,8 +474,9 @@ impl LightClient {
     }
 
     pub fn do_list_transactions(&self) -> JsonValue {
+        let wallet = self.wallet.read().unwrap();
         // Create a list of TransactionItems
-        let mut tx_list = self.wallet.txs.read().unwrap().iter()
+        let mut tx_list = wallet.txs.read().unwrap().iter()
             .flat_map(| (_k, v) | {
                 let mut txns: Vec<JsonValue> = vec![];
 
@@ -512,7 +520,7 @@ impl LightClient {
                             "datetime"     => v.datetime,
                             "txid"         => format!("{}", v.txid),
                             "amount"       => nd.note.value as i64,
-                            "address"      => self.wallet.note_address(nd),
+                            "address"      => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
                             "memo"         => LightWallet::memo_str(&nd.memo),
                     })
                 );
@@ -547,9 +555,11 @@ impl LightClient {
 
     /// Create a new address, deriving it from the seed.
     pub fn do_new_address(&self, addr_type: &str) -> JsonValue {
+        let wallet = self.wallet.write().unwrap();
+
         let new_address = match addr_type {
-            "z" => self.wallet.add_zaddr(),
-            "t" => self.wallet.add_taddr(),
+            "z" => wallet.add_zaddr(),
+            "t" => wallet.add_taddr(),
             _   => {
                 let e = format!("Unrecognized address type: {}", addr_type);
                 error!("{}", e);
@@ -565,7 +575,7 @@ impl LightClient {
     pub fn do_rescan(&self) -> String {
         info!("Rescan starting");
         // First, clear the state from the wallet
-        self.wallet.clear_blocks();
+        self.wallet.read().unwrap().clear_blocks();
 
         // Then set the initial block
         self.set_wallet_initial_state();
@@ -583,7 +593,7 @@ impl LightClient {
         // 2. Get all the blocks that we don't have
         // 3. Find all new Txns that don't have the full Tx, and get them as full transactions 
         //    and scan them, mainly to get the memos
-        let mut last_scanned_height = self.wallet.last_scanned_height() as u64;
+        let mut last_scanned_height = self.wallet.read().unwrap().last_scanned_height() as u64;
 
         // This will hold the latest block fetched from the RPC
         let latest_block_height = Arc::new(AtomicU64::new(0));
@@ -662,7 +672,7 @@ impl LightClient {
                         Err(_) => {}
                     }
 
-                    match local_light_wallet.scan_block(encoded_block) {
+                    match local_light_wallet.read().unwrap().scan_block(encoded_block) {
                         Ok(block_txns) => {
                             // Add to global tx list
                             all_txs.write().unwrap().extend_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
@@ -679,7 +689,7 @@ impl LightClient {
             // Check if there was any invalid block, which means we might have to do a reorg
             let invalid_height = last_invalid_height.load(Ordering::SeqCst);
             if invalid_height > 0 {
-                total_reorg += self.wallet.invalidate_block(invalid_height);
+                total_reorg += self.wallet.read().unwrap().invalidate_block(invalid_height);
 
                 warn!("Invalidated block at height {}. Total reorg is now {}", invalid_height, total_reorg);
             }
@@ -705,19 +715,28 @@ impl LightClient {
             total_reorg = 0;
 
             // We'll also fetch all the txids that our transparent addresses are involved with
-            // TODO: Use for all t addresses
-            let address = self.wallet.address_from_sk(&self.wallet.tkeys.read().unwrap()[0]);
-            let wallet = self.wallet.clone();
-            fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, self.config.no_cert_verification,
-                move |tx_bytes: &[u8], height: u64 | {
-                    let tx = Transaction::read(tx_bytes).unwrap();
+            {
+                // Copy over addresses so as to not lock up the wallet, which we'll use inside the callback below. 
+                let addresses = self.wallet.read().unwrap()
+                                    .taddresses.read().unwrap().iter().map(|a| a.clone())
+                                    .collect::<Vec<String>>();
+                for address in addresses {
+                    let wallet = self.wallet.clone();
+                    let block_times_inner = block_times.clone();
 
-                    // Scan this Tx for transparent inputs and outputs
-                    let datetime = block_times.read().unwrap().get(&height).map(|v| *v).unwrap_or(0);
-                    wallet.scan_full_tx(&tx, height as i32, datetime as u64); 
+                    fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, self.config.no_cert_verification,
+                        move |tx_bytes: &[u8], height: u64| {
+                            let tx = Transaction::read(tx_bytes).unwrap();
+
+                            // Scan this Tx for transparent inputs and outputs
+                            let datetime = block_times_inner.read().unwrap().get(&height).map(|v| *v).unwrap_or(0);
+                            wallet.read().unwrap().scan_full_tx(&tx, height as i32, datetime as u64); 
+                        }
+                    );
                 }
-            );
+            }           
             
+            // Do block height accounting
             last_scanned_height = end_height;
             end_height = last_scanned_height + 1000;
 
@@ -741,10 +760,10 @@ impl LightClient {
 
         // We need to first copy over the Txids from the wallet struct, because
         // we need to free the read lock from here (Because we'll self.wallet.txs later)
-        let mut txids_to_fetch: Vec<(TxId, i32)> = self.wallet.txs.read().unwrap().values()
-            .filter(|wtx| wtx.full_tx_scanned == false)
-            .map(|wtx| (wtx.txid, wtx.block))
-            .collect::<Vec<(TxId, i32)>>();
+        let mut txids_to_fetch: Vec<(TxId, i32)> = self.wallet.read().unwrap().txs.read().unwrap().values()
+                                                        .filter(|wtx| wtx.full_tx_scanned == false)
+                                                        .map(|wtx| (wtx.txid.clone(), wtx.block))
+                                                        .collect::<Vec<(TxId, i32)>>();
 
         info!("Fetching {} new txids, total {} with decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
         txids_to_fetch.extend_from_slice(&all_new_txs.read().unwrap()[..]);
@@ -763,7 +782,7 @@ impl LightClient {
             fetch_full_tx(&self.get_server_uri(), txid, self.config.no_cert_verification, move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
 
-                light_wallet_clone.scan_full_tx(&tx, height, 0);
+                light_wallet_clone.read().unwrap().scan_full_tx(&tx, height, 0);
             });
         };
 
@@ -773,7 +792,7 @@ impl LightClient {
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> String {
         info!("Creating transaction");
 
-        let rawtx = self.wallet.send_to_address(
+        let rawtx = self.wallet.write().unwrap().send_to_address(
             u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(), 
             &self.sapling_spend, &self.sapling_output,
             addrs
