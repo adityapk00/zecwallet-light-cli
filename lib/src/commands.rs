@@ -444,6 +444,40 @@ impl Command for NotesCommand {
     }
 }
 
+struct FixBip39BugCommand {}
+impl Command for FixBip39BugCommand {
+    fn help(&self)  -> String {
+        let mut h = vec![];
+        h.push("Detect if the wallet has the Bip39 derivation bug, and fix it automatically");
+        h.push("Usage:");
+        h.push("fixbip39bug");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Detect if the wallet has the Bip39 derivation bug, and fix it automatically".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        use crate::lightwallet::bugs::BugBip39Derivation;
+
+        let r = if BugBip39Derivation::has_bug(&lightclient.wallet.read().unwrap()) {
+            object!{
+                "has_bug" => true,
+                "fixed" => false,
+            }
+        } else {
+            object!{
+                "has_bug" => false,
+                "fixed" => false,
+            }
+        };
+
+        r.pretty(2)
+    }
+}
 
 struct QuitCommand {}
 impl Command for QuitCommand {
@@ -469,21 +503,22 @@ impl Command for QuitCommand {
 pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     let mut map: HashMap<String, Box<dyn Command>> = HashMap::new();
 
-    map.insert("sync".to_string(),      Box::new(SyncCommand{}));
-    map.insert("rescan".to_string(),    Box::new(RescanCommand{}));
-    map.insert("help".to_string(),      Box::new(HelpCommand{}));
-    map.insert("balance".to_string(),   Box::new(BalanceCommand{}));
-    map.insert("addresses".to_string(), Box::new(AddressCommand{}));
-    map.insert("height".to_string(),    Box::new(HeightCommand{}));
-    map.insert("export".to_string(),    Box::new(ExportCommand{}));
-    map.insert("info".to_string(),      Box::new(InfoCommand{}));
-    map.insert("send".to_string(),      Box::new(SendCommand{}));
-    map.insert("save".to_string(),      Box::new(SaveCommand{}));
-    map.insert("quit".to_string(),      Box::new(QuitCommand{}));
-    map.insert("list".to_string(),      Box::new(TransactionsCommand{}));
-    map.insert("notes".to_string(),     Box::new(NotesCommand{}));
-    map.insert("new".to_string(),       Box::new(NewAddressCommand{}));
-    map.insert("seed".to_string(),      Box::new(SeedCommand{}));
+    map.insert("sync".to_string(),          Box::new(SyncCommand{}));
+    map.insert("rescan".to_string(),        Box::new(RescanCommand{}));
+    map.insert("help".to_string(),          Box::new(HelpCommand{}));
+    map.insert("balance".to_string(),       Box::new(BalanceCommand{}));
+    map.insert("addresses".to_string(),     Box::new(AddressCommand{}));
+    map.insert("height".to_string(),        Box::new(HeightCommand{}));
+    map.insert("export".to_string(),        Box::new(ExportCommand{}));
+    map.insert("info".to_string(),          Box::new(InfoCommand{}));
+    map.insert("send".to_string(),          Box::new(SendCommand{}));
+    map.insert("save".to_string(),          Box::new(SaveCommand{}));
+    map.insert("quit".to_string(),          Box::new(QuitCommand{}));
+    map.insert("list".to_string(),          Box::new(TransactionsCommand{}));
+    map.insert("notes".to_string(),         Box::new(NotesCommand{}));
+    map.insert("new".to_string(),           Box::new(NewAddressCommand{}));
+    map.insert("seed".to_string(),          Box::new(SeedCommand{}));
+    map.insert("fixbip39bug".to_string(),   Box::new(FixBip39BugCommand{}));
 
     Box::new(map)
 }

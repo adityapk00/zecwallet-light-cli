@@ -47,6 +47,7 @@ mod extended_key;
 mod utils;
 mod address;
 mod prover;
+pub mod bugs;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 use extended_key::{KeyIndex, ExtendedPrivKey};
@@ -625,7 +626,6 @@ impl LightWallet {
                 return Err(io::Error::new(ErrorKind::InvalidData, 
                             format!("fvk mismatch at {}. {:?} vs {:?}", pos, extfvk, self.extfvks.read().unwrap()[pos])));
             }
-
 
             // Don't add it to self yet, we'll do that at the end when everything is verified
             extsks.push(extsk);
