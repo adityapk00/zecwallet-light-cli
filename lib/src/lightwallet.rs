@@ -3046,6 +3046,12 @@ pub mod tests {
         assert_eq!(taddr, "t1eQ63fwkQ4n4Eo5uCrPGaAV8FWB2tmx7ui");
         assert_eq!(pk, "Kz9ybX4giKag4NtnP1pi8WQF2B2hZDkFU85S7Dciz3UUhM59AnhE");
 
+        // Test a couple more
+        wallet.add_taddr();
+        let (taddr, pk) = &wallet.get_t_secret_keys()[1];
+        assert_eq!(taddr, "t1NoS6ZgaUTpmjkge2cVpXGcySasdYDrXqh");
+        assert_eq!(pk, "KxdmS38pxskS6bbKX43zhTu8ppWckNmWjKsQFX1hwidvhRRgRd3c");
+
         let (zaddr, sk) = &wallet.get_z_private_keys()[0];
         assert_eq!(zaddr, "zs1q6xk3q783t5k92kjqt2rkuuww8pdw2euzy5rk6jytw97enx8fhpazdv3th4xe7vsk6e9sfpawfg");
         assert_eq!(sk, "secret-extended-key-main1qvpa0qr8qqqqpqxn4l054nzxpxzp3a8r2djc7sekdek5upce8mc2j2z0arzps4zv940qeg706hd0wq6g5snzvhp332y6vhwyukdn8dhekmmsk7fzvzkqm6ypc99uy63tpesqwxhpre78v06cx8k5xpp9mrhtgqs5dvp68cqx2yrvthflmm2ynl8c0506dekul0f6jkcdmh0292lpphrksyc5z3pxwws97zd5els3l2mjt2s7hntap27mlmt6w0drtfmz36vz8pgu7ec0twfrq");
@@ -3132,6 +3138,22 @@ pub mod tests {
             assert_eq!(taddr1, wallet2.address_from_sk(&tkeys[1]));
             assert_eq!(taddr2, wallet2.address_from_sk(&tkeys[2]));
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_invalid_bip39_t() {
+        // Passing a 32-byte seed to bip32 should fail. 
+        let config = get_test_config();
+        LightWallet::get_taddr_from_bip39seed(&config, &[0u8; 32], 0);
+    }
+  
+    #[test]
+    #[should_panic]
+    fn test_invalid_bip39_z() {
+        // Passing a 32-byte seed to bip32 should fail. 
+        let config = get_test_config();
+        LightWallet::get_zaddr_from_bip39seed(&config, &[0u8; 32], 0);
     }
 
     #[test]
