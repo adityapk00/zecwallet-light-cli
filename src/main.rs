@@ -2,7 +2,7 @@ use std::io::{Result, Error, ErrorKind};
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
 
-use zecwalletlitelib::{commands, 
+use zecwalletlitelib::{commands, startup_helpers,
     lightclient::{self, LightClient, LightClientConfig},
 };
 
@@ -111,12 +111,17 @@ pub fn main() {
 
     let dangerous = matches.is_present("dangerous");
     let nosync = matches.is_present("nosync");
-
     let (command_tx, resp_rx) = match startup(server, dangerous, seed, !nosync, command.is_none()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error during startup: {}", e);
             error!("Error during startup: {}", e);
+            match e.raw_os_error() {
+                Some(13) => {
+                    startup_helpers::report_permission_error();
+                },
+                _ => eprintln!("Something else!")
+            }
             return;
         }
     };
