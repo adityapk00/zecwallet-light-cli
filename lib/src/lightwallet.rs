@@ -90,13 +90,15 @@ impl ToBase58Check for [u8] {
 }
 
 pub struct LightWallet {
-    seed: [u8; 32], // Seed phrase for this wallet. 
+    locked: bool,   // Is the wallet's spending keys locked?
 
-    // List of keys, actually in this wallet. This may include more
-    // than keys derived from the seed, for example, if user imports 
-    // a private key
+    seed: [u8; 32], // Seed phrase for this wallet. If wallet is locked, this is encrypted
+
+    // List of keys, actually in this wallet. If the wallet is locked, the `extsks` will be
+    // encrypted (but the fvks are not encrpyted)
     extsks:  Arc<RwLock<Vec<ExtendedSpendingKey>>>,
     extfvks: Arc<RwLock<Vec<ExtendedFullViewingKey>>>,
+
     pub address: Arc<RwLock<Vec<PaymentAddress<Bls12>>>>,
     
     // Transparent keys. TODO: Make it not pubic
@@ -115,7 +117,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 3;
+        return 4;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -172,6 +174,7 @@ impl LightWallet {
             = LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed.as_bytes(), 0);
 
         Ok(LightWallet {
+            locked:   false,
             seed:     seed_bytes,
             extsks:   Arc::new(RwLock::new(vec![extsk])),
             extfvks:  Arc::new(RwLock::new(vec![extfvk])),
@@ -189,6 +192,12 @@ impl LightWallet {
         assert!(version <= LightWallet::serialized_version());
         info!("Reading wallet version {}", version);
 
+        let locked = if version >= 4 {
+            reader.read_u8()? > 0
+        } else {
+            false
+        };
+
         // Seed
         let mut seed_bytes = [0u8; 32];
         reader.read_exact(&mut seed_bytes)?;
@@ -196,9 +205,14 @@ impl LightWallet {
         // Read the spending keys
         let extsks = Vector::read(&mut reader, |r| ExtendedSpendingKey::read(r))?;
 
-        // Calculate the viewing keys
-        let extfvks = extsks.iter().map(|sk| ExtendedFullViewingKey::from(sk))
-            .collect::<Vec<ExtendedFullViewingKey>>();
+        let extfvks = if version >= 4 {
+            // Read the viewing keys
+            Vector::read(&mut reader, |r| ExtendedFullViewingKey::read(r))?
+        } else {
+            // Calculate the viewing keys
+            extsks.iter().map(|sk| ExtendedFullViewingKey::from(sk))
+                .collect::<Vec<ExtendedFullViewingKey>>()
+        };
 
         // Calculate the addresses
         let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
@@ -230,6 +244,7 @@ impl LightWallet {
         let birthday = reader.read_u64::<LittleEndian>()?;
 
         Ok(LightWallet{
+            locked:  locked,
             seed:    seed_bytes,
             extsks:  Arc::new(RwLock::new(extsks)),
             extfvks: Arc::new(RwLock::new(extfvks)),
@@ -246,6 +261,9 @@ impl LightWallet {
         // Write the version
         writer.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
 
+        // Write if it is locked
+        writer.write_u8(if self.locked {1} else {0})?;
+
         // Write the seed
         writer.write_all(&self.seed)?;
 
@@ -255,6 +273,11 @@ impl LightWallet {
         // Write all the spending keys
         Vector::write(&mut writer, &self.extsks.read().unwrap(),
              |w, sk| sk.write(w)
+        )?;
+
+        // Write the FVKs
+        Vector::write(&mut writer, &self.extfvks.read().unwrap(),
+             |w, fvk| fvk.write(w)
         )?;
 
         // Write the transparent private key
