@@ -463,19 +463,7 @@ impl Command for FixBip39BugCommand {
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         use crate::lightwallet::bugs::BugBip39Derivation;
 
-        let r = if BugBip39Derivation::has_bug(&lightclient.wallet.read().unwrap()) {
-            object!{
-                "has_bug" => true,
-                "fixed" => false,
-            }
-        } else {
-            object!{
-                "has_bug" => false,
-                "fixed" => false,
-            }
-        };
-
-        r.pretty(2)
+        BugBip39Derivation::fix_bug(lightclient)
     }
 }
 

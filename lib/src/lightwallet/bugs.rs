@@ -1,12 +1,16 @@
 use super::LightWallet;
+use crate::lightclient::LightClient;
 
+use json::object;
 use bip39::{Mnemonic, Language};
 
 pub struct BugBip39Derivation {}
 
 impl BugBip39Derivation {
 
-    pub fn has_bug(wallet: &LightWallet) -> bool {
+    pub fn has_bug(client: &LightClient) -> bool {
+        let wallet = client.wallet.read().unwrap();
+
         if wallet.zaddress.read().unwrap().len() <= 1 {
             return false;
         }
@@ -36,5 +40,44 @@ impl BugBip39Derivation {
         }
 
         false
+    }
+
+    pub fn fix_bug(client: &LightClient) -> String {
+        if !BugBip39Derivation::has_bug(client) {
+            let r = object!{
+                "has_bug" => false
+            };
+
+            return r.pretty(2);
+        } 
+        
+        // TODO: Tranfer money
+
+        // regen addresses
+        let wallet = client.wallet.read().unwrap();
+        let num_zaddrs = wallet.zaddress.read().unwrap().len();
+        let num_taddrs = wallet.taddresses.read().unwrap().len();
+
+        wallet.extsks.write().unwrap().truncate(1);
+        wallet.extfvks.write().unwrap().truncate(1);
+        wallet.zaddress.write().unwrap().truncate(1);
+
+        wallet.tkeys.write().unwrap().truncate(1);
+        wallet.taddresses.write().unwrap().truncate(1);
+
+        for _ in 1..num_zaddrs {
+            wallet.add_zaddr();
+        }
+
+        for _ in 1..num_taddrs {
+            wallet.add_taddr();
+        }
+
+        let r = object!{
+            "has_bug" => true,
+            "fixed" => true,
+        };
+
+        return r.pretty(2);
     }
 }
