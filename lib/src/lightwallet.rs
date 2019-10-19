@@ -90,9 +90,11 @@ impl ToBase58Check for [u8] {
 }
 
 pub struct LightWallet {
-    locked: bool,   // Is the wallet's spending keys locked?
+    locked: bool,       // Is the wallet's spending keys locked?
+    enc_seed: [u8; 48], // If locked, this contains the encrypted seed
+    nonce: Vec<u8>,     // Nonce used to encrypt the wallet. 
 
-    seed: [u8; 32], // Seed phrase for this wallet. If wallet is locked, this is encrypted
+    seed: [u8; 32],    // Seed phrase for this wallet. If wallet is locked, this is 0
 
     // List of keys, actually in this wallet. If the wallet is locked, the `extsks` will be
     // encrypted (but the fvks are not encrpyted)
@@ -123,6 +125,8 @@ impl LightWallet {
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
+        assert_eq!(bip39_seed.len(), 64);
+
         let ext_t_key = ExtendedPrivKey::with_seed(bip39_seed).unwrap();
         ext_t_key
             .derive_private_key(KeyIndex::hardened_from_normalize_index(44).unwrap()).unwrap()
@@ -134,10 +138,12 @@ impl LightWallet {
     }
 
 
-    fn get_zaddr_from_bip39seed(config: &LightClientConfig, bip39seed: &[u8], pos: u32) ->
+    fn get_zaddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) ->
             (ExtendedSpendingKey, ExtendedFullViewingKey, PaymentAddress<Bls12>) {
+        assert_eq!(bip39_seed.len(), 64);
+        
         let extsk: ExtendedSpendingKey = ExtendedSpendingKey::from_path(
-            &ExtendedSpendingKey::master(bip39seed),
+            &ExtendedSpendingKey::master(bip39_seed),
             &[
                 ChildIndex::Hardened(32),
                 ChildIndex::Hardened(config.get_coin_type()),
@@ -178,6 +184,8 @@ impl LightWallet {
 
         Ok(LightWallet {
             locked:     false,
+            enc_seed:   [0u8; 48],
+            nonce:      vec![],
             seed:       seed_bytes,
             extsks:     Arc::new(RwLock::new(vec![extsk])),
             extfvks:    Arc::new(RwLock::new(vec![extfvk])),
@@ -200,6 +208,17 @@ impl LightWallet {
             reader.read_u8()? > 0
         } else {
             false
+        };
+
+        let mut enc_seed = [0u8; 48];
+        if version >= 4 {
+            reader.read_exact(&mut enc_seed)?;
+        }
+
+        let nonce = if version >= 4 {
+            Vector::read(&mut reader, |r| r.read_u8())?
+        } else {
+            vec![]
         };
 
         // Seed
@@ -257,6 +276,8 @@ impl LightWallet {
 
         Ok(LightWallet{
             locked:     locked,
+            enc_seed:   enc_seed,
+            nonce:      nonce,
             seed:       seed_bytes,
             extsks:     Arc::new(RwLock::new(extsks)),
             extfvks:    Arc::new(RwLock::new(extfvks)),
@@ -276,6 +297,12 @@ impl LightWallet {
 
         // Write if it is locked
         writer.write_u8(if self.locked {1} else {0})?;
+
+        // Write the encrypted seed bytes
+        writer.write_all(&self.enc_seed)?;
+
+        // Write the nonce
+        Vector::write(&mut writer, &self.nonce, |w, b| w.write_u8(*b))?;
 
         // Write the seed
         writer.write_all(&self.seed)?;
@@ -368,8 +395,10 @@ impl LightWallet {
     /// NOTE: This does NOT rescan
     pub fn add_zaddr(&self) -> String {
         let pos = self.extsks.read().unwrap().len() as u32;
+        let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&self.seed, Language::English).unwrap(), "");
+
         let (extsk, extfvk, address) =
-            LightWallet::get_zaddr_from_bip39seed(&self.config, &self.seed, pos);
+            LightWallet::get_zaddr_from_bip39seed(&self.config, &bip39_seed.as_bytes(), pos);
 
         let zaddr = encode_payment_address(self.config.hrp_sapling_address(), &address);
         self.extsks.write().unwrap().push(extsk);
@@ -384,8 +413,9 @@ impl LightWallet {
     /// NOTE: This is not rescan the wallet
     pub fn add_taddr(&self) -> String {
         let pos = self.tkeys.read().unwrap().len() as u32;
+        let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&self.seed, Language::English).unwrap(), "");
         
-        let sk = LightWallet::get_taddr_from_bip39seed(&self.config, &self.seed, pos);
+        let sk = LightWallet::get_taddr_from_bip39seed(&self.config, &bip39_seed.as_bytes(), pos);
         let address = self.address_from_sk(&sk);
 
         self.tkeys.write().unwrap().push(sk);
@@ -529,6 +559,102 @@ impl LightWallet {
         Mnemonic::from_entropy(&self.seed, 
                                 Language::English,
         ).unwrap().phrase().to_string()
+    }
+
+    pub fn lock(&mut self, passwd: String) -> io::Result<()> {
+        use sodiumoxide::crypto::secretbox;
+
+        if self.locked {
+            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is already locked"));
+        }
+
+        // Get the doublesha256 of the password, which is the right length
+        let key = secretbox::Key::from_slice(&double_sha256(passwd.as_bytes())).unwrap();
+        let nonce = secretbox::gen_nonce();
+
+        let cipher = secretbox::seal(&self.seed, &nonce, &key);
+        
+        self.enc_seed.copy_from_slice(&cipher);
+        self.nonce = vec![];
+        self.nonce.extend_from_slice(nonce.as_ref());
+
+        // Empty the seed and the secret keys
+        self.seed.copy_from_slice(&[0u8; 32]);
+        self.tkeys = Arc::new(RwLock::new(vec![]));
+        self.extsks = Arc::new(RwLock::new(vec![]));
+
+        self.locked = true;
+        Ok(())
+    }
+
+    pub fn unlock(&mut self, passwd: String) -> io::Result<()> {
+         use sodiumoxide::crypto::secretbox;
+
+        if !self.locked {
+            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is not locked"));
+        }
+
+        // Get the doublesha256 of the password, which is the right length
+        let key = secretbox::Key::from_slice(&double_sha256(passwd.as_bytes())).unwrap();
+        let nonce = secretbox::Nonce::from_slice(&self.nonce).unwrap();
+
+        let seed = match secretbox::open(&self.enc_seed, &nonce, &key) {
+            Ok(s) => s,
+            Err(_) => {return Err(io::Error::new(ErrorKind::InvalidData, "Decryption failed. Is your password correct?"));}
+        };
+
+        // Now that we have the seed, we'll generate the extsks and tkeys, and verify the fvks and addresses
+        // respectively match
+
+        // The seed bytes is the raw entropy. To pass it to HD wallet generation, 
+        // we need to get the 64 byte bip39 entropy
+        let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&seed, Language::English).unwrap(), "");
+
+        // Sapling keys
+        let mut extsks = vec![];
+        for pos in 0..self.zaddress.read().unwrap().len() {
+            let (extsk, extfvk, address) =
+                LightWallet::get_zaddr_from_bip39seed(&self.config, &bip39_seed.as_bytes(), pos as u32);
+
+            if address != self.zaddress.read().unwrap()[pos] {
+                return Err(io::Error::new(ErrorKind::InvalidData, 
+                        format!("zaddress mismatch at {}. {:?} vs {:?}", pos, address, self.zaddress.read().unwrap()[pos])));
+            }
+
+            if extfvk != self.extfvks.read().unwrap()[pos] {
+                return Err(io::Error::new(ErrorKind::InvalidData, 
+                            format!("fvk mismatch at {}. {:?} vs {:?}", pos, extfvk, self.extfvks.read().unwrap()[pos])));
+            }
+
+
+            // Don't add it to self yet, we'll do that at the end when everything is verified
+            extsks.push(extsk);
+        }
+
+        // Transparent keys
+        let mut tkeys = vec![];
+        for pos in 0..self.taddresses.read().unwrap().len() {
+            let sk = LightWallet::get_taddr_from_bip39seed(&self.config, &bip39_seed.as_bytes(), pos as u32);
+            let address = self.address_from_sk(&sk);
+
+            if address != self.taddresses.read().unwrap()[pos] {
+                return Err(io::Error::new(ErrorKind::InvalidData, 
+                    format!("taddress mismatch at {}. {} vs {}", pos, address, self.taddresses.read().unwrap()[pos])));
+            }
+
+            tkeys.push(sk);
+        }
+
+        // Everything checks out, so we'll update our wallet with the unlocked values
+        self.extsks = Arc::new(RwLock::new(extsks));
+        self.tkeys = Arc::new(RwLock::new(tkeys));
+        self.seed.copy_from_slice(&seed);
+        
+        self.nonce = vec![];
+        self.enc_seed.copy_from_slice(&[0u8; 48]);
+        self.locked = false;
+
+        Ok(())
     }
 
     pub fn zbalance(&self, addr: Option<String>) -> u64 {
@@ -2925,6 +3051,87 @@ pub mod tests {
         assert_eq!(sk, "secret-extended-key-main1qvpa0qr8qqqqpqxn4l054nzxpxzp3a8r2djc7sekdek5upce8mc2j2z0arzps4zv940qeg706hd0wq6g5snzvhp332y6vhwyukdn8dhekmmsk7fzvzkqm6ypc99uy63tpesqwxhpre78v06cx8k5xpp9mrhtgqs5dvp68cqx2yrvthflmm2ynl8c0506dekul0f6jkcdmh0292lpphrksyc5z3pxwws97zd5els3l2mjt2s7hntap27mlmt6w0drtfmz36vz8pgu7ec0twfrq");
 
         assert_eq!(seed_phrase, Some(wallet.get_seed_phrase()));
+    }
+
+    #[test]
+    fn test_lock_unlock() {
+        const AMOUNT: u64 = 500000;
+
+        let (mut wallet, _, _) = get_test_wallet(AMOUNT);  
+        let config = wallet.config.clone();     
+
+        // Add some addresses
+        let zaddr0 = encode_payment_address(config.hrp_sapling_address(), 
+                                            &wallet.extfvks.read().unwrap()[0].default_address().unwrap().1);
+        let zaddr1 = wallet.add_zaddr();
+        let zaddr2 = wallet.add_zaddr();
+
+        let taddr0 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+        let taddr1 = wallet.add_taddr();
+        let taddr2 = wallet.add_taddr();
+
+        let seed = wallet.seed;
+
+        wallet.lock("somepassword".to_string()).unwrap();
+
+        // Locking a locked wallet should fail
+        assert!(wallet.lock("somepassword".to_string()).is_err());
+
+        // Serialize a locked wallet
+        let mut serialized_data = vec![];
+        wallet.write(&mut serialized_data).expect("Serialize wallet");
+
+        // Should fail when there's a wrong password
+        assert!(wallet.unlock("differentpassword".to_string()).is_err());
+
+        // Properly unlock
+        wallet.unlock("somepassword".to_string()).unwrap();
+
+        assert_eq!(seed, wallet.seed);
+        {
+            let extsks = wallet.extsks.read().unwrap();
+            let tkeys = wallet.tkeys.read().unwrap();
+            assert_eq!(extsks.len(), 3);
+            assert_eq!(tkeys.len(), 3);
+
+            assert_eq!(zaddr0, encode_payment_address(config.hrp_sapling_address(), 
+                                    &ExtendedFullViewingKey::from(&extsks[0]).default_address().unwrap().1));
+            assert_eq!(zaddr1, encode_payment_address(config.hrp_sapling_address(), 
+                                    &ExtendedFullViewingKey::from(&extsks[1]).default_address().unwrap().1));
+            assert_eq!(zaddr2, encode_payment_address(config.hrp_sapling_address(), 
+                                    &ExtendedFullViewingKey::from(&extsks[2]).default_address().unwrap().1));
+
+            assert_eq!(taddr0, wallet.address_from_sk(&tkeys[0]));
+            assert_eq!(taddr1, wallet.address_from_sk(&tkeys[1]));
+            assert_eq!(taddr2, wallet.address_from_sk(&tkeys[2]));
+        }
+
+        // Unlocking an already unlocked wallet should fail
+        assert!(wallet.unlock("somepassword".to_string()).is_err());
+
+
+        // Try from a deserialized, locked wallet
+        let mut wallet2 = LightWallet::read(&serialized_data[..], &config).unwrap();
+        wallet2.unlock("somepassword".to_string()).unwrap();
+
+        assert_eq!(seed, wallet2.seed);
+        {
+            let extsks = wallet2.extsks.read().unwrap();
+            let tkeys = wallet2.tkeys.read().unwrap();
+            assert_eq!(extsks.len(), 3);
+            assert_eq!(tkeys.len(), 3);
+
+            assert_eq!(zaddr0, encode_payment_address(wallet2.config.hrp_sapling_address(), 
+                                    &ExtendedFullViewingKey::from(&extsks[0]).default_address().unwrap().1));
+            assert_eq!(zaddr1, encode_payment_address(wallet2.config.hrp_sapling_address(), 
+                                    &ExtendedFullViewingKey::from(&extsks[1]).default_address().unwrap().1));
+            assert_eq!(zaddr2, encode_payment_address(wallet2.config.hrp_sapling_address(), 
+                                    &ExtendedFullViewingKey::from(&extsks[2]).default_address().unwrap().1));
+
+            assert_eq!(taddr0, wallet2.address_from_sk(&tkeys[0]));
+            assert_eq!(taddr1, wallet2.address_from_sk(&tkeys[1]));
+            assert_eq!(taddr2, wallet2.address_from_sk(&tkeys[2]));
+        }
     }
 
     #[test]
