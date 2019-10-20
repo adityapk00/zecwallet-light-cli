@@ -70,6 +70,7 @@ impl BugBip39Derivation {
         
         // Tranfer money
         // 1. The desination is z address #0
+        println!("Sending funds to ourself.");
         let zaddr = client.do_address()["z_addresses"][0].as_str().unwrap().to_string();
         let balance_json = client.do_balance();
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();

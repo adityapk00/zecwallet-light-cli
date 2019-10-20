@@ -42,6 +42,18 @@ pub struct LightClientConfig {
 
 impl LightClientConfig {
 
+    // Create an unconnected (to any server) config to test for local wallet etc...
+    pub fn create_unconnected(chain_name: String) -> LightClientConfig {
+        LightClientConfig {
+            server                      : http::Uri::default(),
+            chain_name                  : chain_name,
+            sapling_activation_height   : 0,
+            consensus_branch_id         : "".to_string(),
+            anchor_offset               : ANCHOR_OFFSET,
+            no_cert_verification        : false,
+        }
+    }
+
     pub fn create(server: http::Uri, dangerous: bool) -> io::Result<(LightClientConfig, u64)> {
         // Do a getinfo first, before opening the wallet
         let info = grpcconnector::get_info(server.clone(), dangerous)
@@ -254,6 +266,12 @@ impl LightClient {
 
         info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
+
+        if crate::lightwallet::bugs::BugBip39Derivation::has_bug(&lc) {
+            let m = format!("WARNING!!!\nYour wallet has a bip39derivation bug that's showing incorrect addresses.\nPlease run 'fixbip39bug' to automatically fix the address derivation in your wallet!\nPlease see: https://github.com/adityapk00/zecwallet-light-cli/blob/master/bip39bug.md");
+             info!("{}", m);
+             println!("{}", m);
+        }
 
         Ok(lc)
     }
