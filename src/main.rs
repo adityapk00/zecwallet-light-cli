@@ -160,7 +160,10 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
         std::io::Error::new(ErrorKind::Other, e)
     })?;
 
-    let lightclient = Arc::new(LightClient::new(seed, &config, latest_block_height)?);
+    let lightclient = match seed {
+        Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, latest_block_height)?),
+        None => Arc::new(LightClient::read_from_disk(&config)?)
+    };
 
     // Print startup Messages
     info!(""); // Blank line

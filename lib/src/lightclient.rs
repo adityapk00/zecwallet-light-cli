@@ -87,6 +87,10 @@ impl LightClientConfig {
         wallet_location.into_boxed_path()
     }
 
+    pub fn wallet_exists(&self) -> bool {
+        return self.get_wallet_path().exists()
+    }
+
     pub fn get_log_path(&self) -> Box<Path> {
         let mut log_path = self.get_zcash_data_path().into_path_buf();
         log_path.push(LOGFILE_NAME);
@@ -201,42 +205,54 @@ impl LightClient {
         };
     }
 
-    pub fn new(seed_phrase: Option<String>, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
-        let mut lc = if config.get_wallet_path().exists() {
-            // Make sure that if a wallet exists, there is no seed phrase being attempted
-            if !seed_phrase.is_none() {
-                return Err(Error::new(ErrorKind::AlreadyExists,
-                    "Cannot create a new wallet from seed, because a wallet already exists"));
-            }
+    fn read_sapling_params(&mut self) {
+        // Read Sapling Params
+        self.sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
+        self.sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
 
-            let mut file_buffer = BufReader::new(File::open(config.get_wallet_path())?);
-            
-            let wallet = LightWallet::read(&mut file_buffer, config)?;
-             LightClient {
-                wallet          : Arc::new(RwLock::new(wallet)),
-                config          : config.clone(),
-                sapling_output  : vec![], 
-                sapling_spend   : vec![]
-            }
-        } else {
-            let l = LightClient {
-                wallet          : Arc::new(RwLock::new(LightWallet::new(seed_phrase, config, latest_block)?)),
+    }
+
+    pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
+        if config.get_wallet_path().exists() {
+            return Err(Error::new(ErrorKind::AlreadyExists,
+                    "Cannot create a new wallet from seed, because a wallet already exists"));
+        }
+
+        let mut l = LightClient {
+                wallet          : Arc::new(RwLock::new(LightWallet::new(Some(seed_phrase), config, latest_block)?)),
                 config          : config.clone(),
                 sapling_output  : vec![], 
                 sapling_spend   : vec![]
             };
 
-            l.set_wallet_initial_state();
+        l.set_wallet_initial_state();
+        l.read_sapling_params();
 
-            l
+        info!("Created new wallet!");
+        info!("Created LightClient to {}", &config.server);
+
+        Ok(l)
+    }
+
+    pub fn read_from_disk(config: &LightClientConfig) -> io::Result<Self> {
+        if !config.get_wallet_path().exists() {
+            return Err(Error::new(ErrorKind::AlreadyExists,
+                    format!("Cannot read wallet. No file at {}", config.get_wallet_path().display())));
+        }
+
+        let mut file_buffer = BufReader::new(File::open(config.get_wallet_path())?);
+            
+        let wallet = LightWallet::read(&mut file_buffer, config)?;
+        let mut lc = LightClient {
+            wallet          : Arc::new(RwLock::new(wallet)),
+            config          : config.clone(),
+            sapling_output  : vec![], 
+            sapling_spend   : vec![]
         };
 
-        info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
-        
-        // Read Sapling Params
-        lc.sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
-        lc.sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
+        lc.read_sapling_params();
 
+        info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
 
         Ok(lc)
