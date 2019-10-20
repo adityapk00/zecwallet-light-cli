@@ -310,7 +310,19 @@ impl Command for SaveCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_save()
+        match lightclient.do_save() {
+            Ok(_) => {
+                let r = object!{ "result" => "success" };
+                r.pretty(2)
+            },
+            Err(e) => {
+                let r = object!{ 
+                    "result" => "error",
+                    "error" => e 
+                };
+                r.pretty(2)
+            }
+        }
     }
 }
 
@@ -490,7 +502,10 @@ impl Command for QuitCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_save()
+        match lightclient.do_save() {
+            Ok(_) => {"".to_string()},
+            Err(e) => e
+        }
     }
 }
 

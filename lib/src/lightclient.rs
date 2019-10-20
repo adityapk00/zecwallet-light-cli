@@ -331,23 +331,17 @@ impl LightClient {
         }
     }
 
-    pub fn do_save(&self) -> String {
+    pub fn do_save(&self) -> Result<(), String> {
         let mut file_buffer = BufWriter::with_capacity(
             1_000_000, // 1 MB write buffer
             File::create(self.config.get_wallet_path()).unwrap());
         
         match self.wallet.write().unwrap().write(&mut file_buffer) {
-            Ok(_) => {
-                info!("Saved wallet");
-                let response = object!{
-                    "result" => "success"
-                };
-                response.pretty(2)
-            },
+            Ok(_) => Ok(()),
             Err(e) => {
                 let err = format!("ERR: {}", e);
                 error!("{}", err);
-                err
+                Err(e.to_string())
             }
         }
     }
