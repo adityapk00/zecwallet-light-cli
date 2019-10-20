@@ -4,8 +4,6 @@ use std::sync::{Arc};
 use std::net::ToSocketAddrs;
 use std::net::SocketAddr;
 
-use json::object;
-
 use futures::{Future};
 use futures::stream::Stream;
 
@@ -286,11 +284,7 @@ pub fn broadcast_raw_tx(uri: &http::Uri, no_cert: bool, tx_bytes: Box<[u8]>) -> 
                             txid = txid[1..txid.len()-1].to_string();
                         }
 
-                        let r = object!{
-                            "result" => "success",
-                            "txid" => txid,
-                        };
-                        Ok(r.pretty(2))
+                        Ok(txid)
                     } else {
                         Err(format!("Error: {:?}", sendresponse))
                     }
