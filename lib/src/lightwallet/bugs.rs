@@ -1,3 +1,15 @@
+///
+/// In v1.0 of zecwallet-cli, there was a bug that incorrectly derived HD wallet keys after the first key. That is, the 
+/// first key, address was correct, but subsequent ones were not. 
+/// 
+/// The issue was that the 32-byte seed was directly being used to derive then subsequent addresses instead of the 
+/// 64-byte pkdf2(seed). The issue affected both t and z addresses
+/// 
+/// To fix the bug, we need to:
+/// 1. Check if the wallet has more than 1 address for t or z addresses
+/// 2. Move any funds in these addresses to the first address
+/// 3. Re-derive the addresses
+
 use super::LightWallet;
 use crate::lightclient::LightClient;
 
@@ -8,6 +20,7 @@ pub struct BugBip39Derivation {}
 
 impl BugBip39Derivation {
 
+    /// Check if this bug exists in the wallet
     pub fn has_bug(client: &LightClient) -> bool {
         let wallet = client.wallet.read().unwrap();
 
@@ -42,6 +55,7 @@ impl BugBip39Derivation {
         false
     }
 
+    /// Automatically fix the bug if it exists in the wallet
     pub fn fix_bug(client: &LightClient) -> String {
         use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
         use std::convert::TryInto;
