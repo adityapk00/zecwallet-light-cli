@@ -202,7 +202,12 @@ impl LightWallet {
 
     pub fn read<R: Read>(mut reader: R, config: &LightClientConfig) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        assert!(version <= LightWallet::serialized_version());
+        if version > LightWallet::serialized_version() {
+            let e = format!("Don't know how to read wallet version {}. Do you have the latest version?", version);
+            error!("{}", e);
+            return Err(io::Error::new(ErrorKind::InvalidData, e));
+        }
+
         info!("Reading wallet version {}", version);
 
         let locked = if version >= 4 {
@@ -1350,7 +1355,7 @@ impl LightWallet {
 
         if selected_value < u64::from(target_value) {
             let e = format!(
-                "Insufficient verified funds (have {}, need {:?}).\nNote: funds need {} confirmations before they can be spent",
+                "Insufficient verified funds (have {}, need {:?}). NOTE: funds need {} confirmations before they can be spent.",
                 selected_value, target_value, self.config.anchor_offset
             );
             error!("{}", e);

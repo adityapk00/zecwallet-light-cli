@@ -43,6 +43,9 @@ impl BugBip39Derivation {
     }
 
     pub fn fix_bug(client: &LightClient) -> String {
+        use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
+        use std::convert::TryInto;
+
         if !BugBip39Derivation::has_bug(client) {
             let r = object!{
                 "has_bug" => false
@@ -51,7 +54,32 @@ impl BugBip39Derivation {
             return r.pretty(2);
         } 
         
-        // TODO: Tranfer money
+        // Tranfer money
+        // 1. The desination is z address #0
+        let zaddr = client.do_address()["z_addresses"][0].as_str().unwrap().to_string();
+        let balance_json = client.do_balance();
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+        let amount: u64 =  balance_json["zbalance"].as_u64().unwrap() 
+                         + balance_json["tbalance"].as_u64().unwrap()
+                         - fee;
+
+        let txid = if amount > 0 {
+            match client.do_send(vec![(&zaddr, amount, None)]) {
+                Ok(txid) => txid,
+                Err(e) => {
+                    let r = object!{
+                        "has_bug" => true,
+                        "fixed"   => false,
+                        "error"   => e,
+                    };
+
+                    return r.pretty(2);
+                }
+            }
+        } else {
+            "".to_string()
+        };
+
 
         // regen addresses
         let wallet = client.wallet.read().unwrap();
@@ -75,7 +103,8 @@ impl BugBip39Derivation {
 
         let r = object!{
             "has_bug" => true,
-            "fixed" => true,
+            "fixed"   => true,
+            "txid"    => txid,
         };
 
         return r.pretty(2);
