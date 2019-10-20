@@ -248,6 +248,13 @@ impl LightClient {
 
     // Export private keys
     pub fn do_export(&self, addr: Option<String>) -> JsonValue {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return object!{
+                "error" => "Wallet is locked"
+            };
+        }
+
         // Clone address so it can be moved into the closure
         let address = addr.clone();
         let wallet = self.wallet.read().unwrap();
@@ -332,6 +339,22 @@ impl LightClient {
     }
 
     pub fn do_save(&self) -> Result<(), String> {
+        
+        // If the wallet is encrypted but unlocked, lock it again.
+        {
+            let mut wallet = self.wallet.write().unwrap();
+            if wallet.is_encrypted() && wallet.is_unlocked_for_spending() {
+                match wallet.lock() {
+                    Ok(_) => {},
+                    Err(e) => {
+                        let err = format!("ERR: {}", e);
+                        error!("{}", err);
+                        return Err(e.to_string());
+                    }
+                }
+            }
+        }        
+
         let mut file_buffer = BufWriter::with_capacity(
             1_000_000, // 1 MB write buffer
             File::create(self.config.get_wallet_path()).unwrap());
@@ -369,6 +392,13 @@ impl LightClient {
     }
 
     pub fn do_seed_phrase(&self) -> JsonValue {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return object!{
+                "error" => "Wallet is locked"
+            };
+        }
+
         let wallet = self.wallet.read().unwrap();
         object!{
             "seed"     => wallet.get_seed_phrase(),
@@ -549,6 +579,13 @@ impl LightClient {
 
     /// Create a new address, deriving it from the seed.
     pub fn do_new_address(&self, addr_type: &str) -> JsonValue {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return object!{
+                "error" => "Wallet is locked"
+            };
+        }
+
         let wallet = self.wallet.write().unwrap();
 
         let new_address = match addr_type {
@@ -784,6 +821,11 @@ impl LightClient {
     }
 
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return Err("Wallet is locked".to_string());
+        }
+
         info!("Creating transaction");
 
         let rawtx = self.wallet.write().unwrap().send_to_address(

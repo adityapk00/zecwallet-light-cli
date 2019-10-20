@@ -91,7 +91,14 @@ impl ToBase58Check for [u8] {
 }
 
 pub struct LightWallet {
-    locked: bool,       // Is the wallet's spending keys locked?
+    // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
+    // and the individual spending keys are not written    
+    encrypted: bool,       
+
+    // In memory only (i.e, this field is not written to disk). Is the wallet unlocked and are
+    // the spending keys present to allow spending from this wallet?
+    unlocked: bool,
+
     enc_seed: [u8; 48], // If locked, this contains the encrypted seed
     nonce: Vec<u8>,     // Nonce used to encrypt the wallet. 
 
@@ -184,7 +191,8 @@ impl LightWallet {
             = LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed.as_bytes(), 0);
 
         Ok(LightWallet {
-            locked:     false,
+            encrypted:  false,
+            unlocked:   true,
             enc_seed:   [0u8; 48],
             nonce:      vec![],
             seed:       seed_bytes,
@@ -210,7 +218,7 @@ impl LightWallet {
 
         info!("Reading wallet version {}", version);
 
-        let locked = if version >= 4 {
+        let encrypted = if version >= 4 {
             reader.read_u8()? > 0
         } else {
             false
@@ -281,7 +289,8 @@ impl LightWallet {
         let birthday = reader.read_u64::<LittleEndian>()?;
 
         Ok(LightWallet{
-            locked:     locked,
+            encrypted:  encrypted,
+            unlocked:   !encrypted, // When reading from disk, if wallet is encrypted, it starts off locked. 
             enc_seed:   enc_seed,
             nonce:      nonce,
             seed:       seed_bytes,
@@ -298,11 +307,16 @@ impl LightWallet {
     }
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        if self.encrypted && self.unlocked {
+            return Err(Error::new(ErrorKind::InvalidInput, 
+                        format!("Cannot write while wallet is unlocked while encrypted.")));
+        }
+
         // Write the version
         writer.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
 
         // Write if it is locked
-        writer.write_u8(if self.locked {1} else {0})?;
+        writer.write_u8(if self.encrypted {1} else {0})?;
 
         // Write the encrypted seed bytes
         writer.write_all(&self.enc_seed)?;
@@ -400,6 +414,10 @@ impl LightWallet {
     /// at the next position and add it to the wallet.
     /// NOTE: This does NOT rescan
     pub fn add_zaddr(&self) -> String {
+        if !self.unlocked {
+            return "".to_string();
+        }
+
         let pos = self.extsks.read().unwrap().len() as u32;
         let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&self.seed, Language::English).unwrap(), "");
 
@@ -418,6 +436,10 @@ impl LightWallet {
     /// at the next position.
     /// NOTE: This is not rescan the wallet
     pub fn add_taddr(&self) -> String {
+        if !self.unlocked {
+            return "".to_string();
+        }
+
         let pos = self.tkeys.read().unwrap().len() as u32;
         let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&self.seed, Language::English).unwrap(), "");
         
@@ -562,16 +584,20 @@ impl LightWallet {
     }
 
     pub fn get_seed_phrase(&self) -> String {
+        if !self.unlocked {
+            return "".to_string();
+        }
+
         Mnemonic::from_entropy(&self.seed, 
                                 Language::English,
         ).unwrap().phrase().to_string()
     }
 
-    pub fn lock(&mut self, passwd: String) -> io::Result<()> {
+    pub fn encrypt(&mut self, passwd: String) -> io::Result<()> {
         use sodiumoxide::crypto::secretbox;
 
-        if self.locked {
-            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is already locked"));
+        if self.encrypted && !self.unlocked {
+            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is already encrypted and locked"));
         }
 
         // Get the doublesha256 of the password, which is the right length
@@ -584,20 +610,32 @@ impl LightWallet {
         self.nonce = vec![];
         self.nonce.extend_from_slice(nonce.as_ref());
 
+        self.encrypted = true;
+        self.lock()?;
+
+        Ok(())
+    }
+
+    pub fn lock(&mut self) -> io::Result<()> {
         // Empty the seed and the secret keys
         self.seed.copy_from_slice(&[0u8; 32]);
         self.tkeys = Arc::new(RwLock::new(vec![]));
         self.extsks = Arc::new(RwLock::new(vec![]));
 
-        self.locked = true;
+        self.unlocked = false;
+
         Ok(())
     }
 
     pub fn unlock(&mut self, passwd: String) -> io::Result<()> {
-         use sodiumoxide::crypto::secretbox;
+        use sodiumoxide::crypto::secretbox;
 
-        if !self.locked {
-            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is not locked"));
+        if !self.encrypted {
+            return Err(Error::new(ErrorKind::AlreadyExists, "Wallet is not encrypted"));
+        }
+
+        if self.encrypted && self.unlocked {
+            return Err(Error::new(ErrorKind::AlreadyExists, "Wallet is already unlocked"));
         }
 
         // Get the doublesha256 of the password, which is the right length
@@ -650,16 +688,43 @@ impl LightWallet {
             tkeys.push(sk);
         }
 
-        // Everything checks out, so we'll update our wallet with the unlocked values
+        // Everything checks out, so we'll update our wallet with the decrypted values
         self.extsks = Arc::new(RwLock::new(extsks));
         self.tkeys = Arc::new(RwLock::new(tkeys));
         self.seed.copy_from_slice(&seed);
-        
-        self.nonce = vec![];
-        self.enc_seed.copy_from_slice(&[0u8; 48]);
-        self.locked = false;
+                
+        self.encrypted = true;
+        self.unlocked = true;
 
         Ok(())
+    }
+
+    // Removing encryption means unlocking it and setting the self.encrypted = false,
+    // permanantly removing the encryption
+    pub fn remove_encryption(&mut self, passwd: String) -> io::Result<()> {        
+        if !self.encrypted {
+            return Err(Error::new(ErrorKind::AlreadyExists, "Wallet is not encrypted"));
+        }
+
+        // Unlock the wallet if it's locked
+        if !self.unlocked {
+            self.unlock(passwd)?;
+        }
+        
+        // Permanantly remove the encryption
+        self.encrypted = false;
+        self.nonce = vec![];
+        self.enc_seed.copy_from_slice(&[0u8; 48]);
+
+        Ok(())
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        return self.encrypted;
+    }
+
+    pub fn is_unlocked_for_spending(&self) -> bool {
+        return self.unlocked;
     }
 
     pub fn zbalance(&self, addr: Option<String>) -> u64 {
@@ -1245,6 +1310,10 @@ impl LightWallet {
         output_params: &[u8],
         tos: Vec<(&str, u64, Option<String>)>
     ) -> Result<Box<[u8]>, String> {
+        if !self.unlocked {
+            return Err("Cannot spend while wallet is locked".to_string());
+        }
+
         let start_time = now();
 
         let total_value = tos.iter().map(|to| to.1).sum::<u64>();
@@ -3083,10 +3152,10 @@ pub mod tests {
 
         let seed = wallet.seed;
 
-        wallet.lock("somepassword".to_string()).unwrap();
+        wallet.encrypt("somepassword".to_string()).unwrap();
 
-        // Locking a locked wallet should fail
-        assert!(wallet.lock("somepassword".to_string()).is_err());
+        // Encrypting an already encrypted wallet should fail
+        assert!(wallet.encrypt("somepassword".to_string()).is_err());
 
         // Serialize a locked wallet
         let mut serialized_data = vec![];
@@ -3120,6 +3189,12 @@ pub mod tests {
         // Unlocking an already unlocked wallet should fail
         assert!(wallet.unlock("somepassword".to_string()).is_err());
 
+        // Trying to serialize a encrypted but unlocked wallet should fail
+        assert!(wallet.write(&mut vec![]).is_err());
+
+        // ...but if we lock it again, it should serialize
+        wallet.lock().unwrap();
+        wallet.write(&mut vec![]).expect("Serialize wallet");
 
         // Try from a deserialized, locked wallet
         let mut wallet2 = LightWallet::read(&serialized_data[..], &config).unwrap();
