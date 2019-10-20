@@ -789,7 +789,7 @@ impl LightClient {
         responses.join("\n")
     }
 
-    pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> String {
+    pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
         info!("Creating transaction");
 
         let rawtx = self.wallet.write().unwrap().send_to_address(
@@ -799,11 +799,8 @@ impl LightClient {
         );
         
         match rawtx {
-            Ok(txbytes)   => match broadcast_raw_tx(&self.get_server_uri(), self.config.no_cert_verification, txbytes) {
-                Ok(k)  => k,
-                Err(e) => e,
-            },
-            Err(e)        => format!("Error: No Tx to broadcast. Error was: {}", e)
+            Ok(txbytes)   => broadcast_raw_tx(&self.get_server_uri(), self.config.no_cert_verification, txbytes),
+            Err(e)        => Err(format!("Error: No Tx to broadcast. Error was: {}", e))
         }
     }
 }

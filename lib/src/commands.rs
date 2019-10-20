@@ -265,7 +265,10 @@ impl Command for SendCommand {
             };
 
             lightclient.do_sync(true);
-            return lightclient.do_send(send_args);
+            match lightclient.do_send(send_args) {
+                Ok(txid) => { object!{ "txid" => txid } },
+                Err(e)   => { object!{ "error" => e } }
+            }.pretty(2)
         } else if args.len() == 2 || args.len() == 3 {
             // Make sure we can parse the amount
             let value = match args[1].parse::<u64>() {
@@ -278,10 +281,13 @@ impl Command for SendCommand {
             let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
             
             lightclient.do_sync(true);
-            return lightclient.do_send(vec!((args[0], value, memo)));
+            match lightclient.do_send(vec!((args[0], value, memo))) {
+                Ok(txid) => { object!{ "txid" => txid } },
+                Err(e)   => { object!{ "error" => e } }
+            }.pretty(2)
+        } else {
+            self.help()
         }
-
-        self.help()
     }
 }
 
