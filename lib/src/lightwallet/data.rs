@@ -490,7 +490,8 @@ pub struct SpendableNote {
 impl SpendableNote {
     pub fn from(txid: TxId, nd: &SaplingNoteData, anchor_offset: usize, extsk: &ExtendedSpendingKey) -> Option<Self> {
         // Include only notes that haven't been spent, or haven't been included in an unconfirmed spend yet.
-        if nd.spent.is_none() && nd.unconfirmed_spent.is_none() {
+        if nd.spent.is_none() && nd.unconfirmed_spent.is_none() &&
+                nd.witnesses.len() >= (anchor_offset + 1) {
             let witness = nd.witnesses.get(nd.witnesses.len() - anchor_offset - 1);
 
             witness.map(|w| SpendableNote {
