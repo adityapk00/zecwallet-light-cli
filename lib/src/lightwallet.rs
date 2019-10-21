@@ -842,15 +842,11 @@ impl LightWallet {
         }
     }
 
-    // Scan the full Tx and update memos for incoming shielded transactions
+    // Scan the full Tx and update memos for incoming shielded transactions.
     pub fn scan_full_tx(&self, tx: &Transaction, height: i32, datetime: u64) {
-        // Scan all the inputs to see if we spent any transparent funds in this tx
-        
-        // TODO: Save this object
-        let secp = secp256k1::Secp256k1::new();
-
         let mut total_transparent_spend: u64 = 0;
 
+        // Scan all the inputs to see if we spent any transparent funds in this tx
         for vin in tx.vin.iter() {    
             // Find the txid in the list of utxos that we have.
             let txid = TxId {0: vin.prevout.hash};
@@ -890,19 +886,15 @@ impl LightWallet {
                 .total_transparent_value_spent = total_transparent_spend;
         }
 
-        // TODO: Iterate over all transparent addresses. This is currently looking only at
-        // the first one.
         // Scan for t outputs
-        let all_pubkeys = self.tkeys.read().unwrap().iter()
-                                .map(|sk| 
-                                    secp256k1::PublicKey::from_secret_key(&secp, sk).serialize()
-                                )
-                                .collect::<Vec<[u8; secp256k1::constants::PUBLIC_KEY_SIZE]>>();
-        for pubkey in all_pubkeys {
+        let all_taddresses = self.taddresses.read().unwrap().iter()
+                                .map(|a| a.clone())
+                                .collect::<Vec<_>>();
+        for address in all_taddresses {
             for (n, vout) in tx.vout.iter().enumerate() {
                 match vout.script_pubkey.address() {
                     Some(TransparentAddress::PublicKey(hash)) => {
-                        if hash[..] == ripemd160::Ripemd160::digest(&Sha256::digest(&pubkey))[..] {
+                        if address == hash.to_base58check(&self.config.base58_pubkey_address(), &[]) {
                             // This is our address. Add this as an output to the txid
                             self.add_toutput_to_wtx(height, datetime, &tx.txid(), &vout, n as u64);
                         }
@@ -1315,6 +1307,8 @@ impl LightWallet {
         let start_time = now();
 
         let total_value = tos.iter().map(|to| to.1).sum::<u64>();
+
+        // TODO: Check for duplicates in destination addresses
 
         println!(
             "0: Creating transaction sending {} ztoshis to {} addresses",
