@@ -594,8 +594,8 @@ impl LightWallet {
     pub fn encrypt(&mut self, passwd: String) -> io::Result<()> {
         use sodiumoxide::crypto::secretbox;
 
-        if self.encrypted && !self.unlocked {
-            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is already encrypted and locked"));
+        if self.encrypted {
+            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is already encrypted"));
         }
 
         // Get the doublesha256 of the password, which is the right length
@@ -615,6 +615,14 @@ impl LightWallet {
     }
 
     pub fn lock(&mut self) -> io::Result<()> {
+        if !self.encrypted {
+            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is not encrypted"));
+        }
+
+        if !self.unlocked {
+            return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is already locked"));
+        }
+
         // Empty the seed and the secret keys
         self.seed.copy_from_slice(&[0u8; 32]);
         self.tkeys = Arc::new(RwLock::new(vec![]));
@@ -3144,6 +3152,10 @@ pub mod tests {
 
         let seed = wallet.seed;
 
+        // Trying to lock a wallet that's not encrpyted is an error
+        assert!(wallet.lock().is_err());
+
+        // Encrypt the wallet
         wallet.encrypt("somepassword".to_string()).unwrap();
 
         // Encrypting an already encrypted wallet should fail
@@ -3187,6 +3199,9 @@ pub mod tests {
         // ...but if we lock it again, it should serialize
         wallet.lock().unwrap();
         wallet.write(&mut vec![]).expect("Serialize wallet");
+
+        // Locking an already locked wallet is an error
+        assert!(wallet.lock().is_err());
 
         // Try from a deserialized, locked wallet
         let mut wallet2 = LightWallet::read(&serialized_data[..], &config).unwrap();
