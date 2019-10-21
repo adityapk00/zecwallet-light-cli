@@ -25,8 +25,7 @@ ENV CC_armv7_unknown_linux_gnueabhihf="arm-linux-gnueabihf-gcc"
 # This is a bug fix for the windows cross compiler for Rust.
 RUN cp /usr/x86_64-w64-mingw32/lib/crt2.o /usr/local/rustup/toolchains/1.38.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-pc-windows-gnu/lib/crt2.o
 
-# For windows cross compilation, use a pre-build binary
+# For windows cross compilation, use a pre-build binary. Remember to set the
+# SODIUM_LIB_DIR for windows cross compilation
 RUN cd /opt && wget https://download.libsodium.org/libsodium/releases/libsodium-1.0.17-mingw.tar.gz && \
-    tar xvf libsodium-1.0.17-mingw.tar.gz 
-    
-ENV SODIUM_LIB_DIR="/opt/libsodium-win64/lib/"
+    tar xvf libsodium-1.0.17-mingw.tar.gz     
