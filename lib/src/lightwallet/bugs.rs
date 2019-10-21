@@ -73,13 +73,12 @@ impl BugBip39Derivation {
         println!("Sending funds to ourself.");
         let zaddr = client.do_address()["z_addresses"][0].as_str().unwrap().to_string();
         let balance_json = client.do_balance();
-        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
         let amount: u64 =  balance_json["zbalance"].as_u64().unwrap() 
-                         + balance_json["tbalance"].as_u64().unwrap()
-                         - fee;
+                         + balance_json["tbalance"].as_u64().unwrap();
 
         let txid = if amount > 0 {
-            match client.do_send(vec![(&zaddr, amount, None)]) {
+            let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+            match client.do_send(vec![(&zaddr, amount-fee, None)]) {
                 Ok(txid) => txid,
                 Err(e) => {
                     let r = object!{

@@ -235,7 +235,7 @@ impl Command for EncryptCommand {
         use crate::lightwallet::bugs::BugBip39Derivation;
         if BugBip39Derivation::has_bug(lightclient) {
             let mut h = vec![];
-            h.push("It looks like your wallet has the bop39bug. Please run 'fixbip39bug' to fix it");
+            h.push("It looks like your wallet has the bip39bug. Please run 'fixbip39bug' to fix it");
             h.push("before encrypting your wallet.");
             h.push("ERROR: Cannot encrypt while wallet has the bip39bug.");
             return h.join("\n");
