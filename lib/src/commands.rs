@@ -231,6 +231,16 @@ impl Command for EncryptCommand {
             return self.help();
         }
 
+        // Refuse to encrypt if the bip39 bug has not been fixed
+        use crate::lightwallet::bugs::BugBip39Derivation;
+        if BugBip39Derivation::has_bug(lightclient) {
+            let mut h = vec![];
+            h.push("It looks like your wallet has the bop39bug. Please run 'fixbip39bug' to fix it");
+            h.push("before encrypting your wallet.");
+            h.push("ERROR: Cannot encrypt while wallet has the bip39bug.");
+            return h.join("\n");
+        }
+
         let passwd = args[0].to_string();
 
         match lightclient.wallet.write().unwrap().encrypt(passwd) {

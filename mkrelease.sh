@@ -25,8 +25,14 @@ set -- "${POSITIONAL[@]}" # restore positional parameters
 
 if [ -z $APP_VERSION ]; then echo "APP_VERSION is not set"; exit 1; fi
 
-# Clean everything first
-cargo clean
+# First, do the tests
+cd lib && cargo test --release
+retVal=$?
+if [ $retVal -ne 0 ]; then
+    echo "Error"
+    exit $retVal
+fi
+cd ..
 
 # Compile for mac directly
 cargo build --release 
@@ -40,7 +46,7 @@ cp target/release/zecwallet-cli target/macOS-zecwallet-cli-v$APP_VERSION/
 docker run --rm -v $(pwd)/:/opt/zecwallet-light-cli rustbuild:latest bash -c "cd /opt/zecwallet-light-cli && cargo build --release && SODIUM_LIB_DIR='/opt/libsodium-win64/lib/' cargo build --release --target x86_64-pc-windows-gnu"
 
 # Now sign and zip the binaries
-#macOS
+# macOS
 gpg --batch --output target/macOS-zecwallet-cli-v$APP_VERSION/zecwallet-cli.sig --detach-sig target/macOS-zecwallet-cli-v$APP_VERSION/zecwallet-cli 
 cd target
 cd macOS-zecwallet-cli-v$APP_VERSION
