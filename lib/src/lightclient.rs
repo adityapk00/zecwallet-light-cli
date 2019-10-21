@@ -244,8 +244,32 @@ impl LightClient {
         Ok(l)
     }
 
+    /// Create a brand new wallet with a new seed phrase. Will fail if a wallet file 
+    /// already exists on disk
+    pub fn new(config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
+        if config.wallet_exists() {
+            return Err(Error::new(ErrorKind::AlreadyExists,
+                    "Cannot create a new wallet from seed, because a wallet already exists"));
+        }
+
+        let mut l = LightClient {
+                wallet          : Arc::new(RwLock::new(LightWallet::new(None, config, latest_block)?)),
+                config          : config.clone(),
+                sapling_output  : vec![], 
+                sapling_spend   : vec![]
+            };
+
+        l.set_wallet_initial_state();
+        l.read_sapling_params();
+
+        info!("Created new wallet with a new seed!");
+        info!("Created LightClient to {}", &config.server);
+
+        Ok(l)
+    }
+
     pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
-        if config.get_wallet_path().exists() {
+        if config.wallet_exists() {
             return Err(Error::new(ErrorKind::AlreadyExists,
                     "Cannot create a new wallet from seed, because a wallet already exists"));
         }
@@ -267,7 +291,7 @@ impl LightClient {
     }
 
     pub fn read_from_disk(config: &LightClientConfig) -> io::Result<Self> {
-        if !config.get_wallet_path().exists() {
+        if !config.wallet_exists() {
             return Err(Error::new(ErrorKind::AlreadyExists,
                     format!("Cannot read wallet. No file at {}", config.get_wallet_path().display())));
         }

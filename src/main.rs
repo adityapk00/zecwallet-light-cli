@@ -120,7 +120,7 @@ pub fn main() {
                 Some(13) => {
                     startup_helpers::report_permission_error();
                 },
-                _ => eprintln!("Something else!")
+                _ => {}
             }
             return;
         }
@@ -162,7 +162,14 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
 
     let lightclient = match seed {
         Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, latest_block_height)?),
-        None => Arc::new(LightClient::read_from_disk(&config)?)
+        None => {
+            if config.wallet_exists() {
+                Arc::new(LightClient::read_from_disk(&config)?)
+            } else {
+                println!("Creating a new wallet");
+                Arc::new(LightClient::new(&config, latest_block_height)?)
+            }
+        }
     };
 
     // Print startup Messages
