@@ -391,8 +391,7 @@ impl LightClient {
         }
     }
 
-    pub fn do_save(&self) -> Result<(), String> {
-        
+    pub fn do_save(&self) -> Result<(), String> {        
         // If the wallet is encrypted but unlocked, lock it again.
         {
             let mut wallet = self.wallet.write().unwrap();
@@ -921,4 +920,27 @@ pub mod tests {
         assert!(!lc.do_new_address("t").is_err());
         assert!(!lc.do_new_address("z").is_err());
     }
+
+    #[test]
+    pub fn test_addresses() {
+        let lc = super::LightClient::unconnected(TEST_SEED.to_string()).unwrap();
+
+        // Add new z and t addresses
+            
+        let taddr1 = lc.do_new_address("t").unwrap()[0].as_str().unwrap().to_string();
+        let taddr2 = lc.do_new_address("t").unwrap()[0].as_str().unwrap().to_string();        
+        let zaddr1 = lc.do_new_address("z").unwrap()[0].as_str().unwrap().to_string();
+        let zaddr2 = lc.do_new_address("z").unwrap()[0].as_str().unwrap().to_string();
+        
+        let addresses = lc.do_address();
+        assert_eq!(addresses["z_addresses"].len(), 3);
+        assert_eq!(addresses["z_addresses"][1], zaddr1);
+        assert_eq!(addresses["z_addresses"][2], zaddr2);
+
+        assert_eq!(addresses["t_addresses"].len(), 3);
+        assert_eq!(addresses["t_addresses"][1], taddr1);
+        assert_eq!(addresses["t_addresses"][2], taddr2);
+    }
+
+
 }
