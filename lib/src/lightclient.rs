@@ -224,6 +224,26 @@ impl LightClient {
 
     }
 
+    /// Method to create a test-only version of the LightClient
+    #[allow(dead_code)]
+    fn unconnected(seed_phrase: String) -> io::Result<Self> {
+        let config = LightClientConfig::create_unconnected("test".to_string());
+        let mut l = LightClient {
+                wallet          : Arc::new(RwLock::new(LightWallet::new(Some(seed_phrase), &config, 0)?)),
+                config          : config.clone(),
+                sapling_output  : vec![], 
+                sapling_spend   : vec![]
+            };
+
+        l.set_wallet_initial_state();
+        l.read_sapling_params();
+
+        info!("Created new wallet!");
+        info!("Created LightClient to {}", &config.server);
+
+        Ok(l)
+    }
+
     pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
         if config.get_wallet_path().exists() {
             return Err(Error::new(ErrorKind::AlreadyExists,
@@ -281,12 +301,10 @@ impl LightClient {
     }
 
     // Export private keys
-    pub fn do_export(&self, addr: Option<String>) -> JsonValue {
+    pub fn do_export(&self, addr: Option<String>) -> Result<JsonValue, &str> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
-            return object!{
-                "error" => "Wallet is locked"
-            };
+            return Err("Wallet is locked");
         }
 
         // Clone address so it can be moved into the closure
@@ -319,11 +337,12 @@ impl LightClient {
         all_keys.extend_from_slice(&z_keys);
         all_keys.extend_from_slice(&t_keys);
 
-        all_keys.into()
+        Ok(all_keys.into())
     }
 
     pub fn do_address(&self) -> JsonValue {
         let wallet = self.wallet.read().unwrap();
+
         // Collect z addresses
         let z_addresses = wallet.zaddress.read().unwrap().iter().map( |ad| {
             encode_payment_address(self.config.hrp_sapling_address(), &ad)
@@ -425,19 +444,17 @@ impl LightClient {
         }
     }
 
-    pub fn do_seed_phrase(&self) -> JsonValue {
+    pub fn do_seed_phrase(&self) -> Result<JsonValue, &str> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
-            return object!{
-                "error" => "Wallet is locked"
-            };
+            return Err("Wallet is locked");
         }
 
         let wallet = self.wallet.read().unwrap();
-        object!{
+        Ok(object!{
             "seed"     => wallet.get_seed_phrase(),
             "birthday" => wallet.get_birthday()
-        }
+        })
     }
 
     // Return a list of all notes, spent and unspent
@@ -612,12 +629,10 @@ impl LightClient {
     }
 
     /// Create a new address, deriving it from the seed.
-    pub fn do_new_address(&self, addr_type: &str) -> JsonValue {
+    pub fn do_new_address(&self, addr_type: &str) -> Result<JsonValue, String> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
-            return object!{
-                "error" => "Wallet is locked"
-            };
+            return Err("Wallet is locked".to_string());
         }
 
         let wallet = self.wallet.write().unwrap();
@@ -628,13 +643,11 @@ impl LightClient {
             _   => {
                 let e = format!("Unrecognized address type: {}", addr_type);
                 error!("{}", e);
-                return object!{
-                    "error" => e
-                };
+                return Err(e);
             }
         };
 
-        array![new_address]
+        Ok(array![new_address])
     }
 
     pub fn do_rescan(&self) -> String {
@@ -872,5 +885,40 @@ impl LightClient {
             Ok(txbytes)   => broadcast_raw_tx(&self.get_server_uri(), self.config.no_cert_verification, txbytes),
             Err(e)        => Err(format!("Error: No Tx to broadcast. Error was: {}", e))
         }
+    }
+}
+
+
+pub mod tests {
+    use lazy_static::lazy_static;
+    //use super::LightClient;
+
+    lazy_static!{
+        static ref TEST_SEED: String = "youth strong sweet gorilla hammer unhappy congress stamp left stereo riot salute road tag clean toilet artefact fork certain leopard entire civil degree wonder".to_string();
+    }
+
+    #[test]
+    pub fn test_encrypt_decrypt() {
+        let lc = super::LightClient::unconnected(TEST_SEED.to_string()).unwrap();
+
+        assert!(!lc.do_export(None).is_err());
+        assert!(!lc.do_new_address("z").is_err());
+        assert!(!lc.do_new_address("t").is_err());
+        assert_eq!(lc.do_seed_phrase().unwrap()["seed"], TEST_SEED.to_string());
+
+        // Encrypt and Lock the wallet
+        lc.wallet.write().unwrap().encrypt("password".to_string()).unwrap();
+        assert!(lc.do_export(None).is_err());
+        assert!(lc.do_seed_phrase().is_err());
+        assert!(lc.do_new_address("t").is_err());
+        assert!(lc.do_new_address("z").is_err());
+        assert!(lc.do_send(vec![("z", 0, None)]).is_err());
+
+        // Do a unlock, and make sure it all works now
+        lc.wallet.write().unwrap().unlock("password".to_string()).unwrap();
+        assert!(!lc.do_export(None).is_err());
+        assert!(!lc.do_seed_phrase().is_err());
+        assert!(!lc.do_new_address("t").is_err());
+        assert!(!lc.do_new_address("z").is_err());
     }
 }

@@ -196,8 +196,10 @@ impl Command for ExportCommand {
         }
 
         let address = if args.is_empty() { None } else { Some(args[0].to_string()) };
-
-        format!("{}", lightclient.do_export(address).pretty(2))
+        match lightclient.do_export(address) {
+            Ok(j)  => j,
+            Err(e) => object!{ "error" => e }
+        }.pretty(2)
     }
 }
 
@@ -462,7 +464,10 @@ impl Command for SeedCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        format!("{}", lightclient.do_seed_phrase().pretty(2))
+        match lightclient.do_seed_phrase() {
+            Ok(j)  => j,
+            Err(e) => object!{ "error" => e }
+        }.pretty(2)
     }
 }
 
@@ -537,7 +542,10 @@ impl Command for NewAddressCommand {
             return format!("No address type specified\n{}", self.help());
         }
 
-        format!("{}", lightclient.do_new_address(args[0]).pretty(2))
+        match lightclient.do_new_address(args[0]) {
+            Ok(j)  => j,
+            Err(e) => object!{ "error" => e }
+        }.pretty(2)
     }
 }
 
