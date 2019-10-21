@@ -26,10 +26,10 @@ set -- "${POSITIONAL[@]}" # restore positional parameters
 if [ -z $APP_VERSION ]; then echo "APP_VERSION is not set"; exit 1; fi
 
 # Clean everything first
-#cargo clean
+cargo clean
 
 # Compile for mac directly
-#cargo build --release 
+cargo build --release 
 
 # For Windows and Linux, build via docker
 docker run --rm -v $(pwd)/:/opt/zecwallet-light-cli rustbuild:latest bash -c "cd /opt/zecwallet-light-cli && cargo build --release && SODIUM_LIB_DIR='/opt/libsodium-win64/lib/' cargo build --release --target x86_64-pc-windows-gnu"
