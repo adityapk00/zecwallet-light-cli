@@ -39,7 +39,6 @@ use zcash_primitives::{
     primitives::{PaymentAddress},
 };
 
-
 use crate::lightclient::{LightClientConfig};
 
 mod data;
@@ -57,7 +56,6 @@ pub const MAX_REORG: usize = 100;
 fn now() -> f64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
 }
-
 
 /// Sha256(Sha256(value))
 pub fn double_sha256(payload: &[u8]) -> Vec<u8> {

@@ -54,7 +54,7 @@ pub fn main() {
     // Get command line arguments
     use clap::{Arg, App};
     let matches = App::new("Zecwallet CLI")
-                    .version("1.0.0")
+                    .version("1.1.0")
                     .arg(Arg::with_name("seed")
                         .short("s")
                         .long("seed")
