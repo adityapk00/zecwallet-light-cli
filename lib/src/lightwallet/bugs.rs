@@ -28,6 +28,10 @@ impl BugBip39Derivation {
             return false;
         }
 
+        if wallet.is_encrypted() {
+            return false;
+        }
+
         // The seed bytes is the raw entropy. To pass it to HD wallet generation, 
         // we need to get the 64 byte bip39 entropy
         let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&wallet.seed, Language::English).unwrap(), "");
