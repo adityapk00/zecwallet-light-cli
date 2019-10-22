@@ -356,7 +356,11 @@ impl Command for LockCommand {
 
     fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
         if args.len() != 0 {
-            return self.help();
+            let mut h = vec![];
+            h.push("Extra arguments to lock. Did you mean 'encrypt'?");
+            h.push("");
+            
+            return format!("{}\n{}", h.join("\n"), self.help());
         }
 
         match lightclient.wallet.write().unwrap().lock() {
