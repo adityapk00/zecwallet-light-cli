@@ -30,11 +30,19 @@ jobs:
         with:
           command: test
           args: --verbose --release --all
-      - name: Upload
+      - name: Upload ubuntu/macos
         uses: actions/upload-artifact@v1
+        if: contains(matrix.os, 'macos') || contains(matrix.os, 'ubuntu') 
         with:
           name: ${{ matrix.os }}-zecwallet-cli
           path: target/release/zecwallet-cli
+      - name: Upload windows
+        uses: actions/upload-artifact@v1
+        if: contains(matrix.os, 'windows')
+        with:
+          name: ${{ matrix.os }}-zecwallet-cli.exe
+          path: target/release/zecwallet-cli.exe
+
 
   linux_arm7:
       name: Linux ARMv7
