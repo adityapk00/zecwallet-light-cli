@@ -911,7 +911,7 @@ impl LightClient {
     }
 }
 
-
+#[cfg(test)]
 pub mod tests {
     use lazy_static::lazy_static;
     //use super::LightClient;
