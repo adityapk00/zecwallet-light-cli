@@ -771,6 +771,8 @@ impl LightClient {
                         return;
                     }
 
+                    // Parse the block and save it's time. We'll use this timestamp for 
+                    // transactions in this block that might belong to us.
                     let block: Result<zcash_client_backend::proto::compact_formats::CompactBlock, _>
                                         = parse_from_bytes(encoded_block);
                     match block {
