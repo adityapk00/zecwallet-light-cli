@@ -2232,7 +2232,7 @@ pub mod tests {
         let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
         let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-        let (ss, so) =get_sapling_params().unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
 
         // Create a tx and send to address
         let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
@@ -3270,4 +3270,221 @@ pub mod tests {
         let _ = add_blocks(&wallet, 3, 2, prev_hash).unwrap();
         assert_eq!(wallet.blocks.read().unwrap().len(), 5);
     }
+
+    #[test]
+    fn test_encrypted_zreceive() {
+        const AMOUNT1: u64 = 50000;
+        let password: String = "password".to_string();
+
+        let (mut wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
+
+        let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+        let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                            &fvk.default_address().unwrap().1);
+
+        const AMOUNT_SENT: u64 = 20;
+
+        let outgoing_memo = "Outgoing Memo".to_string();
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
+
+        // Create a tx and send to address
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
+
+        // Now that we have the transaction, we'll encrypt the wallet
+        wallet.encrypt(password.clone()).unwrap();
+
+        // Scan the tx and make sure it gets added
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+        // Now, full scan the Tx, which should populate the Outgoing Meta data
+        wallet.scan_full_tx(&sent_tx, 2, 0);
+
+        // Now this new Spent tx should be in, so the note should be marked confirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The sent tx should generate change
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+
+            // Outgoing Metadata
+            assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
+
+            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
+
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].address, ext_address);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+        }
+
+        // Trying to spend from a locked wallet is an error
+        assert!(wallet.send_to_address(branch_id, &ss, &so,
+                                vec![(&ext_address, AMOUNT_SENT, None)]).is_err());
+
+        // unlock the wallet so we can spend to the second z address
+        wallet.unlock(password.clone()).unwrap();
+
+        // Second z address
+        let zaddr2 = wallet.add_zaddr();
+        const ZAMOUNT2:u64 = 30;
+        let outgoing_memo2 = "Outgoing Memo2".to_string();
+
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                vec![(&zaddr2, ZAMOUNT2, Some(outgoing_memo2.clone()))]).unwrap();
+
+        // Now lock the wallet again
+        wallet.lock().unwrap();
+
+        let sent_tx2 = Transaction::read(&raw_tx[..]).unwrap();
+        let txid2 = sent_tx2.txid();
+
+        let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
+        cb4.add_tx(&sent_tx2);
+        wallet.scan_block(&cb4.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx2, 3, 0);
+
+        {
+            let txs = wallet.txs.read().unwrap();
+            let prev_change_value = AMOUNT1 - AMOUNT_SENT - fee;
+
+            // Change note from prev transaction is spent
+            assert_eq!(txs[&sent_txid].notes[0].note.value, prev_change_value);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, Some(txid2));
+
+            // New change note. So find it.
+            let change_note = txs[&txid2].notes.iter().find(|n| n.is_change).unwrap();
+
+            // New incoming tx is present
+            assert_eq!(change_note.note.value, prev_change_value - (ZAMOUNT2+fee));
+            assert_eq!(change_note.spent, None);
+            assert_eq!(change_note.unconfirmed_spent, None);
+
+            // Find zaddr2
+            let zaddr2_note = txs[&txid2].notes.iter().find(|n| n.note.value == ZAMOUNT2).unwrap();
+            assert_eq!(zaddr2_note.account, 1);
+            assert_eq!(zaddr2_note.is_change, false);
+            assert_eq!(zaddr2_note.spent, None);
+            assert_eq!(zaddr2_note.unconfirmed_spent, None);
+            assert_eq!(LightWallet::memo_str(&zaddr2_note.memo), Some(outgoing_memo2));
+        }
+    }
+
+
+    #[test]
+    fn test_encrypted_treceive() {
+        const AMOUNT1: u64 = 50000;
+        let password: String = "password".to_string();
+        let (mut wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
+
+        let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+        let (ss, so) = get_sapling_params().unwrap();
+
+        let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
+        const AMOUNT_SENT: u64 = 30;
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                            vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
+
+        // Now that we have the transaction, we'll encrypt the wallet
+        wallet.encrypt(password.clone()).unwrap();
+
+        let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+        let sent_txid = sent_tx.txid();
+        let mut cb3 = FakeCompactBlock::new(2, block_hash);
+        cb3.add_tx(&sent_tx);
+        wallet.scan_block(&cb3.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx, 2, 0);
+
+        // Now this new Spent tx should be in, so the note should be marked confirmed spent
+        {
+            let txs = wallet.txs.read().unwrap();
+            assert_eq!(txs[&txid1].notes.len(), 1);
+            assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+            assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+            assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+            // The sent tx should generate change
+            assert_eq!(txs[&sent_txid].notes.len(), 1);
+            assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - AMOUNT_SENT - fee);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, None);
+            assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+
+            // Outgoing Metadata
+            assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].address, taddr);
+            assert_eq!(txs[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
+            assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
+        }
+
+        // Trying to spend from a locked wallet is an error
+        assert!(wallet.send_to_address(branch_id, &ss, &so,
+                                vec![(&taddr, AMOUNT_SENT, None)]).is_err());
+
+        // unlock the wallet so we can spend to the second z address
+        wallet.unlock(password.clone()).unwrap();
+
+        // Second z address
+        let taddr2 = wallet.add_taddr();
+        const TAMOUNT2:u64 = 50;
+
+        let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                vec![(&taddr2, TAMOUNT2, None)]).unwrap();
+
+        // Now lock the wallet again
+        wallet.lock().unwrap();
+
+        let sent_tx2 = Transaction::read(&raw_tx[..]).unwrap();
+        let txid2 = sent_tx2.txid();
+
+        let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
+        cb4.add_tx(&sent_tx2);
+        wallet.scan_block(&cb4.as_bytes()).unwrap();
+        wallet.scan_full_tx(&sent_tx2, 3, 0);
+
+        {
+            let txs = wallet.txs.read().unwrap();
+            let prev_change_value = AMOUNT1 - AMOUNT_SENT - fee;
+
+            // Change note from prev transaction is spent
+            assert_eq!(txs[&sent_txid].notes[0].note.value, prev_change_value);
+            assert_eq!(txs[&sent_txid].notes[0].is_change, true);
+            assert_eq!(txs[&sent_txid].notes[0].spent, Some(txid2));
+
+            // New change note. So find it.
+            let change_note = txs[&txid2].notes.iter().find(|n| n.is_change).unwrap();
+
+            // New incoming tx is present
+            assert_eq!(change_note.note.value, prev_change_value - (TAMOUNT2+fee));
+            assert_eq!(change_note.spent, None);
+            assert_eq!(change_note.unconfirmed_spent, None);
+
+            // Find taddr2
+            let utxo2 = txs[&txid2].utxos.iter().find(|u| u.value == TAMOUNT2).unwrap();
+            assert_eq!(txs[&txid2].utxos.len(), 1);
+            assert_eq!(utxo2.address, taddr2);
+            assert_eq!(utxo2.txid, txid2);
+            assert_eq!(utxo2.spent, None);
+            assert_eq!(utxo2.unconfirmed_spent, None);
+        }
+    }
+
 }
