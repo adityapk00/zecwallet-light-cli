@@ -72,6 +72,3 @@ tower-grpc-build = { git = "https://github.com/tower-rs/tower-grpc",  features =
 
 [dev-dependencies]
 tempdir = "0.3.7"
-
-[profile.release]
-debug = false
