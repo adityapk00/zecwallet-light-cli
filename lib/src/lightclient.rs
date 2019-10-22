@@ -5,7 +5,7 @@ use rand::{rngs::OsRng, seq::SliceRandom};
 
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::collections::HashMap;
 use std::io;
@@ -38,12 +38,13 @@ pub struct LightClientConfig {
     pub consensus_branch_id         : String,
     pub anchor_offset               : u32,
     pub no_cert_verification        : bool,
+    pub data_dir                    : Option<String>
 }
 
 impl LightClientConfig {
 
     // Create an unconnected (to any server) config to test for local wallet etc...
-    pub fn create_unconnected(chain_name: String) -> LightClientConfig {
+    pub fn create_unconnected(chain_name: String, dir: Option<String>) -> LightClientConfig {
         LightClientConfig {
             server                      : http::Uri::default(),
             chain_name                  : chain_name,
@@ -51,6 +52,7 @@ impl LightClientConfig {
             consensus_branch_id         : "".to_string(),
             anchor_offset               : ANCHOR_OFFSET,
             no_cert_verification        : false,
+            data_dir                    : dir,
         }
     }
 
@@ -67,6 +69,7 @@ impl LightClientConfig {
             consensus_branch_id         : info.consensus_branch_id,
             anchor_offset               : ANCHOR_OFFSET,
             no_cert_verification        : dangerous,
+            data_dir                    : None,
         };
 
         Ok((config, info.block_height))
@@ -74,20 +77,24 @@ impl LightClientConfig {
 
     pub fn get_zcash_data_path(&self) -> Box<Path> {
         let mut zcash_data_location; 
-        if cfg!(target_os="macos") || cfg!(target_os="windows") {
-            zcash_data_location = dirs::data_dir().expect("Couldn't determine app data directory!");
-            zcash_data_location.push("Zcash");
+        if self.data_dir.is_some() {
+            zcash_data_location = PathBuf::from(&self.data_dir.as_ref().unwrap());
         } else {
-            zcash_data_location = dirs::home_dir().expect("Couldn't determine home directory!");
-            zcash_data_location.push(".zcash");
-        };
+            if cfg!(target_os="macos") || cfg!(target_os="windows") {
+                zcash_data_location = dirs::data_dir().expect("Couldn't determine app data directory!");
+                zcash_data_location.push("Zcash");
+            } else {
+                zcash_data_location = dirs::home_dir().expect("Couldn't determine home directory!");
+                zcash_data_location.push(".zcash");
+            };
 
-        match &self.chain_name[..] {
-            "main" => {},
-            "test" => zcash_data_location.push("testnet3"),
-            "regtest" => zcash_data_location.push("regtest"),
-            c         => panic!("Unknown chain {}", c),
-        };
+            match &self.chain_name[..] {
+                "main" => {},
+                "test" => zcash_data_location.push("testnet3"),
+                "regtest" => zcash_data_location.push("regtest"),
+                c         => panic!("Unknown chain {}", c),
+            };
+        }
 
         zcash_data_location.into_boxed_path()
     }
@@ -226,8 +233,8 @@ impl LightClient {
 
     /// Method to create a test-only version of the LightClient
     #[allow(dead_code)]
-    fn unconnected(seed_phrase: String) -> io::Result<Self> {
-        let config = LightClientConfig::create_unconnected("test".to_string());
+    fn unconnected(seed_phrase: String, dir: Option<String>) -> io::Result<Self> {
+        let config = LightClientConfig::create_unconnected("test".to_string(), dir);
         let mut l = LightClient {
                 wallet          : Arc::new(RwLock::new(LightWallet::new(Some(seed_phrase), &config, 0)?)),
                 config          : config.clone(),
@@ -914,7 +921,8 @@ impl LightClient {
 #[cfg(test)]
 pub mod tests {
     use lazy_static::lazy_static;
-    //use super::LightClient;
+    use tempdir::TempDir;
+    use super::{LightClient, LightClientConfig};
 
     lazy_static!{
         static ref TEST_SEED: String = "youth strong sweet gorilla hammer unhappy congress stamp left stereo riot salute road tag clean toilet artefact fork certain leopard entire civil degree wonder".to_string();
@@ -922,7 +930,7 @@ pub mod tests {
 
     #[test]
     pub fn test_encrypt_decrypt() {
-        let lc = super::LightClient::unconnected(TEST_SEED.to_string()).unwrap();
+        let lc = super::LightClient::unconnected(TEST_SEED.to_string(), None).unwrap();
 
         assert!(!lc.do_export(None).is_err());
         assert!(!lc.do_new_address("z").is_err());
@@ -947,7 +955,7 @@ pub mod tests {
 
     #[test]
     pub fn test_addresses() {
-        let lc = super::LightClient::unconnected(TEST_SEED.to_string()).unwrap();
+        let lc = super::LightClient::unconnected(TEST_SEED.to_string(), None).unwrap();
 
         // Add new z and t addresses
             
@@ -966,5 +974,49 @@ pub mod tests {
         assert_eq!(addresses["t_addresses"][2], taddr2);
     }
 
+    #[test]
+    pub fn test_wallet_creation() {
+        // Create a new tmp director
+        {
+            let tmp = TempDir::new("lctest").unwrap();
+            let dir_name = tmp.path().to_str().map(|s| s.to_string());
+
+            // A lightclient to a new, empty directory works.
+            let config = LightClientConfig::create_unconnected("test".to_string(), dir_name);
+            let lc = LightClient::new(&config, 0).unwrap();
+            let seed = lc.do_seed_phrase().unwrap()["seed"].as_str().unwrap().to_string();
+            lc.do_save().unwrap();
+
+            // Doing another new will fail, because the wallet file now already exists
+            assert!(LightClient::new(&config, 0).is_err());
+
+            // new_from_phrase will not work either, again, because wallet file exists
+            assert!(LightClient::new_from_phrase(TEST_SEED.to_string(), &config, 0).is_err());
+
+            // Creating a lightclient to the same dir without a seed should re-read the same wallet
+            // file and therefore the same seed phrase
+            let lc2 = LightClient::read_from_disk(&config).unwrap();
+            assert_eq!(seed, lc2.do_seed_phrase().unwrap()["seed"].as_str().unwrap().to_string());
+        }
+
+        // Now, get a new directory, and try to read from phrase
+        {
+            let tmp = TempDir::new("lctest").unwrap();
+            let dir_name = tmp.path().to_str().map(|s| s.to_string());
+
+            let config = LightClientConfig::create_unconnected("test".to_string(), dir_name);
+
+            // read_from_disk will fail, because the dir doesn't exist
+            assert!(LightClient::read_from_disk(&config).is_err());
+
+            // New from phrase should work becase a file doesn't exist already
+            let lc = LightClient::new_from_phrase(TEST_SEED.to_string(), &config, 0).unwrap();
+            assert_eq!(TEST_SEED.to_string(), lc.do_seed_phrase().unwrap()["seed"].as_str().unwrap().to_string());
+            lc.do_save().unwrap();
+
+            // Now a new will fail because wallet exists
+            assert!(LightClient::new(&config, 0).is_err());
+        }
+    }
 
 }

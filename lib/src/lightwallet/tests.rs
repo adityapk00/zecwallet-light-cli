@@ -657,6 +657,7 @@ fn get_test_config() -> LightClientConfig {
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
         no_cert_verification: false,
+        data_dir: None,
     }
 }
 
@@ -1580,6 +1581,7 @@ fn test_t_derivation() {
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 1,
         no_cert_verification: false,
+        data_dir: None,
     };
 
     let seed_phrase = Some("chimney better bulb horror rebuild whisper improve intact letter giraffe brave rib appear bulk aim burst snap salt hill sad merge tennis phrase raise".to_string());
