@@ -1407,6 +1407,17 @@ fn test_bad_send() {
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
                                         vec![(&ext_taddr, AMOUNT1 + 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Insufficient verified funds"));
+
+    // Duplicated addresses
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                                        vec![(&ext_taddr, AMOUNT1 + 10, None),
+                                             (&ext_taddr, AMOUNT1 + 10, None)]);
+    assert!(raw_tx.err().unwrap().contains("duplicate"));
+
+    // No addresses
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so, vec![]);
+    assert!(raw_tx.err().unwrap().contains("at least one"));
+
 }
 
 #[test]
@@ -1698,6 +1709,30 @@ fn test_lock_unlock() {
         assert_eq!(taddr1, wallet2.address_from_sk(&tkeys[1]));
         assert_eq!(taddr2, wallet2.address_from_sk(&tkeys[2]));
     }
+
+    // Remove encryption from a unlocked wallet should succeed
+    wallet2.remove_encryption("somepassword".to_string()).unwrap();
+    assert_eq!(seed, wallet2.seed);
+
+    // Now encrypt with a different password
+    wallet2.encrypt("newpassword".to_string()).unwrap();
+    assert_eq!([0u8; 32], wallet2.seed);    // Seed is cleared out
+
+    // Locking should fail because it is already locked
+    assert!(wallet2.lock().is_err());
+
+    // The old password shouldn't work
+    assert!(wallet2.remove_encryption("somepassword".to_string()).is_err());
+
+    // Remove encryption with the right password
+    wallet2.remove_encryption("newpassword".to_string()).unwrap();
+    assert_eq!(seed, wallet2.seed);
+
+    // Unlocking a wallet without encryption is an error
+    assert!(wallet2.remove_encryption("newpassword".to_string()).is_err());
+    // Can't lock/unlock a wallet that's not encrypted
+    assert!(wallet2.lock().is_err());
+    assert!(wallet2.unlock("newpassword".to_string()).is_err());
 }
 
 #[test]
