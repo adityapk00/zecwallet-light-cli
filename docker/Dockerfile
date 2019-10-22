@@ -29,3 +29,9 @@ RUN cp /usr/x86_64-w64-mingw32/lib/crt2.o /usr/local/rustup/toolchains/1.38.0-x8
 # SODIUM_LIB_DIR for windows cross compilation
 RUN cd /opt && wget https://download.libsodium.org/libsodium/releases/libsodium-1.0.17-mingw.tar.gz && \
     tar xvf libsodium-1.0.17-mingw.tar.gz     
+
+# Cargo fetch the dependencies so we don't download them over and over again
+RUN cd /tmp && git clone https://github.com/adityapk00/zecwallet-light-cli.git && \
+    cd zecwallet-light-cli && \
+    cargo fetch && \
+    cd /tmp && rm -rf zecwallet-light-cli

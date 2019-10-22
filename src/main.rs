@@ -317,6 +317,7 @@ fn attempt_recover_seed() {
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
         no_cert_verification: false,
+        data_dir: None,
     };
 
     let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());

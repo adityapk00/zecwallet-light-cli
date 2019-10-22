@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-tower-grpc = { git = "https://github.com/tower-rs/tower-grpc" }
+tower-grpc = "0.1.1"
 futures = "0.1"
 bytes = "0.4"
 base58 = "0.1.0"
@@ -14,7 +14,7 @@ dirs = "2.0.2"
 http = "0.1"
 prost = "0.5"
 tokio = "0.1"
-tower-request-modifier = { git = "https://github.com/tower-rs/tower-http" }
+tower-request-modifier = "0.1.0"
 tower-util = "0.1"
 hex = "0.3"
 protobuf = "2"
@@ -31,7 +31,7 @@ tokio-rustls = "0.10.0-alpha.3"
 rustls = { version = "0.15.2", features = ["dangerous_configuration"] }
 webpki = "0.19.1"
 webpki-roots = "0.16.0"
-tower-h2 = { git = "https://github.com/tower-rs/tower-h2" }
+tower-h2 = { git = "https://github.com/tower-rs/tower-h2", rev="0865040d699697bbaf1c3b77b3f256b72f98cdf4" } 
 rust-embed = { version = "5.1.0", features = ["debug-embed"] }
 rand = "0.7.2"
 sodiumoxide = "0.2.5"

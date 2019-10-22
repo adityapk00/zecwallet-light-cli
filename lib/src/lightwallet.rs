@@ -1399,9 +1399,9 @@ impl LightWallet {
         
         // Create a map from address -> sk for all taddrs, so we can spend from the 
         // right address
-        let address_to_sk: HashMap<_, _> = self.tkeys.read().unwrap().iter().map(|sk|
-                                                (self.address_from_sk(&sk), sk.clone())
-                                            ).collect();
+        let address_to_sk = self.tkeys.read().unwrap().iter()
+                                .map(|sk| (self.address_from_sk(&sk), sk.clone()))
+                                .collect::<HashMap<_,_>>();
 
         // Add all tinputs
         tinputs.iter()
