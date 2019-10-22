@@ -1,4 +1,4 @@
-use std::io::{Result, Error, ErrorKind};
+use std::io::{self, Error, ErrorKind};
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
 
@@ -20,7 +20,7 @@ use log4rs::append::rolling_file::policy::compound::{
 
 
 /// Build the Logging config
-fn get_log_config(config: &LightClientConfig) -> Result<Config> {
+fn get_log_config(config: &LightClientConfig) -> io::Result<Config> {
     let window_size = 3; // log0, log1, log2
     let fixed_window_roller =
         FixedWindowRoller::builder().build("zecwallet-light-wallet-log{}",window_size).unwrap();
@@ -91,7 +91,21 @@ pub fn main() {
                     .get_matches();
 
     if matches.is_present("recover") {
-        attempt_recover_seed();
+        // Create a Light Client Config in an attempt to recover the file.
+        let config = LightClientConfig {
+            server: "0.0.0.0:0".parse().unwrap(),
+            chain_name: "main".to_string(),
+            sapling_activation_height: 0,
+            consensus_branch_id: "000000".to_string(),
+            anchor_offset: 0,
+            no_cert_verification: false,
+            data_dir: None,
+        };
+
+        match LightClient::attempt_recover_seed(&config) {
+            Ok(seed) => println!("Recovered seed: '{}'", seed),
+            Err(e)   => eprintln!("Failed to recover seed. Error: {}", e)
+        };
         return;
     }
 
@@ -150,7 +164,7 @@ pub fn main() {
 }
 
 fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync: bool, print_updates: bool)
-        -> Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
+        -> io::Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
     let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
 
@@ -300,35 +314,4 @@ fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>
     });
 
     (command_tx, resp_rx)
-}
-
-fn attempt_recover_seed() {
-    use std::fs::File;
-    use std::io::prelude::*;
-    use std::io::{BufReader};
-    use byteorder::{LittleEndian, ReadBytesExt,};
-    use bip39::{Mnemonic, Language};
-
-    // Create a Light Client Config in an attempt to recover the file.
-    let config = LightClientConfig {
-        server: "0.0.0.0:0".parse().unwrap(),
-        chain_name: "main".to_string(),
-        sapling_activation_height: 0,
-        consensus_branch_id: "000000".to_string(),
-        anchor_offset: 0,
-        no_cert_verification: false,
-        data_dir: None,
-    };
-
-    let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());
-    let version = reader.read_u64::<LittleEndian>().unwrap();
-    println!("Reading wallet version {}", version);
-
-    // Seed
-    let mut seed_bytes = [0u8; 32];
-    reader.read_exact(&mut seed_bytes).unwrap();
-
-    let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
-
-    println!("Recovered seed phrase:\n{}", phrase);
 }

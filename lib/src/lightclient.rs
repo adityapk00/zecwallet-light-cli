@@ -327,6 +327,47 @@ impl LightClient {
         Ok(lc)
     }
 
+    pub fn attempt_recover_seed(config: &LightClientConfig) -> Result<String, String> {
+        use std::io::prelude::*;
+        use byteorder::{LittleEndian, ReadBytesExt,};
+        use bip39::{Mnemonic, Language};
+        use zcash_primitives::serialize::Vector;
+
+        let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());
+        let version = reader.read_u64::<LittleEndian>().unwrap();
+        println!("Reading wallet version {}", version);
+
+        let encrypted = if version >= 4 {
+            reader.read_u8().unwrap() > 0
+        } else {
+            false
+        };
+
+        if encrypted {
+            return Err("The wallet is encrypted!".to_string());
+        }
+
+        let mut enc_seed = [0u8; 48];
+        if version >= 4 {
+            reader.read_exact(&mut enc_seed).unwrap();
+        }
+
+        let _nonce = if version >= 4 {
+            Vector::read(&mut reader, |r| r.read_u8()).unwrap()
+        } else {
+            vec![]
+        };
+
+        // Seed
+        let mut seed_bytes = [0u8; 32];
+        reader.read_exact(&mut seed_bytes).unwrap();
+
+        let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
+
+        Ok(phrase)
+    }
+
+
     pub fn last_scanned_height(&self) -> u64 {
         self.wallet.read().unwrap().last_scanned_height() as u64
     }
@@ -1018,6 +1059,29 @@ pub mod tests {
 
             // Now a new will fail because wallet exists
             assert!(LightClient::new(&config, 0).is_err());
+        }
+    }
+
+    #[test]
+    pub fn test_recover_seed() {
+        // Create a new tmp director
+        {
+            let tmp = TempDir::new("lctest").unwrap();
+            let dir_name = tmp.path().to_str().map(|s| s.to_string());
+
+            // A lightclient to a new, empty directory works.
+            let config = LightClientConfig::create_unconnected("test".to_string(), dir_name);
+            let lc = LightClient::new(&config, 0).unwrap();
+            let seed = lc.do_seed_phrase().unwrap()["seed"].as_str().unwrap().to_string();
+            lc.do_save().unwrap();
+
+            assert_eq!(seed, LightClient::attempt_recover_seed(&config).unwrap());
+
+            // Now encrypt and save the file
+            lc.wallet.write().unwrap().encrypt("password".to_string()).unwrap();
+            lc.do_save().unwrap();
+
+            assert!(LightClient::attempt_recover_seed(&config).is_err());
         }
     }
 
