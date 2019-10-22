@@ -24,15 +24,12 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --verbose --release --all --tests
+          args: --verbose --release --all
       - name: Run tests
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --verbose --release --all
-      - run: pwd
-      - run: ls target/
-      - run: ls target/release/
       - name: Upload
         uses: actions/upload-artifact@v1
         with:
@@ -53,10 +50,7 @@ jobs:
           with:
             use-cross: true
             command: build
-            args: --target armv7-unknown-linux-gnueabihf
-        - run: pwd
-        - run: ls target/
-        - run: ls target/release/
+            args: --release --target armv7-unknown-linux-gnueabihf
         - name: Upload
           uses: actions/upload-artifact@v1
           with:
@@ -77,36 +71,10 @@ jobs:
           with:
             use-cross: true
             command: build
-            args: --target aarch64-unknown-linux-gnu
-        - run: pwd
-        - run: ls target/
-        - run: ls target/release/
+            args: --release --target aarch64-unknown-linux-gnu
         - name: Upload
           uses: actions/upload-artifact@v1
           with:
             name: linux_aarch64-zecwallet-cli
             path: target/aarch64-unknown-linux-gnu/release/zecwallet-cli            
 
-  linux_mingw:
-      name: Linux mingw
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@master
-        - uses: actions-rs/toolchain@v1
-          with:
-            toolchain: stable
-            target: x86_64-pc-windows-gnu
-            override: true
-        - uses: actions-rs/cargo@v1
-          with:
-            use-cross: true
-            command: build
-            args: --target x86_64-pc-windows-gnu
-        - run: pwd
-        - run: ls target/
-        - run: ls target/release/
-        - name: Upload
-          uses: actions/upload-artifact@v1
-          with:
-            name: linux_mingw-zecwallet-cli
-            path: target/x86_64-pc-windows-gnu/release/zecwallet-cli.exe
