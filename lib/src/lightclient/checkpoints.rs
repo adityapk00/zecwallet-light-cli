@@ -1,0 +1,85 @@
+pub fn get_closest_checkpoint(chain_name: &str, height: u64) ->  Option<(u64, &'static str, &'static str)> {
+    match chain_name {
+        "test" => get_test_checkpoint(height),
+        "main" => get_main_checkpoint(height),
+        _      => None
+    }
+}
+
+fn get_test_checkpoint(height: u64) ->  Option<(u64, &'static str, &'static str)> {
+    let checkpoints: Vec<(u64, &str, &str)> = vec![
+        (600000, "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
+                 "01690698411e3f8badea7da885e556d7aba365a797e9b20b44ac0946dced14b23c001001ab2a18a5a86aa5d77e43b69071b21770b6fe6b3c26304dcaf7f96c0bb3fed74d000186482712fa0f2e5aa2f2700c4ed49ef360820f323d34e2b447b78df5ec4dfa0401a332e89a21afb073cb1db7d6f07396b56a95e97454b9bca5a63d0ebc575d3a33000000000001c9d3564eff54ebc328eab2e4f1150c3637f4f47516f879a0cfebdf49fe7b1d5201c104705fac60a85596010e41260d07f3a64f38f37a112eaef41cd9d736edc5270145e3d4899fcd7f0f1236ae31eafb3f4b65ad6b11a17eae1729cec09bd3afa01a000000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39"
+        )
+    ];
+
+    find_checkpoint(height, checkpoints)
+}
+
+
+fn get_main_checkpoint(height: u64) ->  Option<(u64, &'static str, &'static str)> {
+    let checkpoints: Vec<(u64, &str, &str)> = vec![
+        (610000, "000000000218882f481e3b49ca3df819734b8d74aac91f69e848d7499b34b472",
+                 "0192943f1eca6525cea7ea8e26b37c792593ed50cfe2be7a1ff551a08dc64b812f001000000001deef7ae5162a9942b4b9aa797137c5bdf60750e9548664127df99d1981dda66901747ad24d5daf294ce2a27aba923e16e52e7348eea3048c5b5654b99ab0a371200149d8aff830305beb3887529f6deb150ab012916c3ce88a6b47b78228f8bfeb3f01ff84a89890cfae65e0852bc44d9aa82be2c5d204f5aebf681c9e966aa46f540e000001d58f1dfaa9db0996996129f8c474acb813bfed452d347fb17ebac2e775e209120000000001319312241b0031e3a255b0d708750b4cb3f3fe79e3503fe488cc8db1dd00753801754bb593ea42d231a7ddf367640f09bbf59dc00f2c1d2003cc340e0c016b5b13"
+        )
+    ];
+
+    find_checkpoint(height, checkpoints)
+}
+
+fn find_checkpoint(height: u64, chkpts: Vec<(u64, &'static str, &'static str)>) -> Option<(u64, &'static str, &'static str)> {
+    // Find the closest checkpoint
+    let mut heights = chkpts.iter().map(|(h, _, _)| *h as u64).collect::<Vec<_>>();
+    heights.sort();
+
+    match get_first_lower_than(height, heights) {
+        Some(closest_height) => {
+            chkpts.iter().find(|(h, _, _)| *h ==  closest_height).map(|t| *t)
+        },
+        None    => None
+    }
+}
+
+fn get_first_lower_than(height: u64, heights: Vec<u64>) -> Option<u64> {
+    // If it's before the first checkpoint, return None. 
+    if heights.len() == 0 || height < heights[0] {
+        return None;
+    }
+
+    for (i, h) in heights.iter().enumerate() {
+        if height < *h {
+            return Some(heights[i-1]);
+        }
+    }
+
+    return Some(*heights.last().unwrap());
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lower_than() {
+        assert_eq!(get_first_lower_than( 9, vec![10, 30, 40]), None);
+        assert_eq!(get_first_lower_than(10, vec![10, 30, 40]).unwrap(), 10);
+        assert_eq!(get_first_lower_than(11, vec![10, 30, 40]).unwrap(), 10);
+        assert_eq!(get_first_lower_than(29, vec![10, 30, 40]).unwrap(), 10);
+        assert_eq!(get_first_lower_than(30, vec![10, 30, 40]).unwrap(), 30);
+        assert_eq!(get_first_lower_than(40, vec![10, 30, 40]).unwrap(), 40);
+        assert_eq!(get_first_lower_than(41, vec![10, 30, 40]).unwrap(), 40);
+        assert_eq!(get_first_lower_than(99, vec![10, 30, 40]).unwrap(), 40);
+    }
+
+    #[test]
+    fn test_checkpoints() {
+        assert_eq!(get_test_checkpoint(500000), None);
+        assert_eq!(get_test_checkpoint(600000).unwrap().0, 600000);
+        assert_eq!(get_test_checkpoint(625000).unwrap().0, 600000);
+
+        assert_eq!(get_main_checkpoint(500000), None);
+        assert_eq!(get_main_checkpoint(610000).unwrap().0, 610000);
+        assert_eq!(get_main_checkpoint(625000).unwrap().0, 610000);
+    }
+
+}
