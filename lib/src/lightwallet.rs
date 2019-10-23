@@ -358,8 +358,8 @@ impl LightWallet {
                         })?;
         utils::write_string(&mut writer, &self.config.chain_name)?;
 
-        // While writing the birthday, be sure that we're right, and that we don't
-        // have a tx that is before the current birthday
+        // While writing the birthday, get it from the fn so we recalculate it properly
+        // in case of rescans etc...
         writer.write_u64::<LittleEndian>(self.get_birthday())?;
 
         Ok(())
@@ -373,7 +373,11 @@ impl LightWallet {
     }
 
     pub fn get_birthday(&self) -> u64 {
-        cmp::min(self.get_first_tx_block(), self.birthday)
+        if self.birthday == 0 {
+            self.get_first_tx_block()
+        } else {
+            cmp::min(self.get_first_tx_block(), self.birthday)
+        }
     }
 
     // Get the first block that this wallet has a tx in. This is often used as the wallet's "birthday"
@@ -386,7 +390,7 @@ impl LightWallet {
             .collect::<Vec<u64>>();
         blocks.sort();
 
-        *blocks.first() // Returns optional
+        *blocks.first() // Returns optional, so if there's no txns, it'll get the activation height
             .unwrap_or(&cmp::max(self.birthday, self.config.sapling_activation_height))
     }
 

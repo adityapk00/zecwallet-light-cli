@@ -3,7 +3,7 @@ use crate::lightwallet::LightWallet;
 use log::{info, warn, error};
 use rand::{rngs::OsRng, seq::SliceRandom};
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
 use std::sync::atomic::{AtomicU64, AtomicI32, AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
 use std::fs::File;
@@ -201,6 +201,8 @@ pub struct LightClient {
     // zcash-params
     pub sapling_output  : Vec<u8>,
     pub sapling_spend   : Vec<u8>,
+
+    sync_lock           : Mutex<()>,
 }
 
 impl LightClient {
@@ -231,7 +233,8 @@ impl LightClient {
                 wallet          : Arc::new(RwLock::new(LightWallet::new(Some(seed_phrase), &config, 0)?)),
                 config          : config.clone(),
                 sapling_output  : vec![], 
-                sapling_spend   : vec![]
+                sapling_spend   : vec![],
+                sync_lock       : Mutex::new(()),
             };
 
         l.set_wallet_initial_state(0);
@@ -255,7 +258,8 @@ impl LightClient {
                 wallet          : Arc::new(RwLock::new(LightWallet::new(None, config, latest_block)?)),
                 config          : config.clone(),
                 sapling_output  : vec![], 
-                sapling_spend   : vec![]
+                sapling_spend   : vec![],
+                sync_lock       : Mutex::new(()),
             };
 
         l.set_wallet_initial_state(latest_block);
@@ -267,20 +271,22 @@ impl LightClient {
         Ok(l)
     }
 
-    pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
+    pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, birthday: u64) -> io::Result<Self> {
         if config.wallet_exists() {
             return Err(Error::new(ErrorKind::AlreadyExists,
                     "Cannot create a new wallet from seed, because a wallet already exists"));
         }
 
         let mut l = LightClient {
-                wallet          : Arc::new(RwLock::new(LightWallet::new(Some(seed_phrase), config, latest_block)?)),
+                wallet          : Arc::new(RwLock::new(LightWallet::new(Some(seed_phrase), config, birthday)?)),
                 config          : config.clone(),
                 sapling_output  : vec![], 
-                sapling_spend   : vec![]
+                sapling_spend   : vec![],
+                sync_lock       : Mutex::new(()),
             };
 
-        l.set_wallet_initial_state(latest_block);
+        println!("Setting birthday to {}", birthday);
+        l.set_wallet_initial_state(birthday);
         l.read_sapling_params();
 
         info!("Created new wallet!");
@@ -302,7 +308,8 @@ impl LightClient {
             wallet          : Arc::new(RwLock::new(wallet)),
             config          : config.clone(),
             sapling_output  : vec![], 
-            sapling_spend   : vec![]
+            sapling_spend   : vec![],
+            sync_lock       : Mutex::new(()),
         };
 
         lc.read_sapling_params();
@@ -729,6 +736,10 @@ impl LightClient {
     }
 
     pub fn do_sync(&self, print_updates: bool) -> String {
+        // We can only do one sync at a time because we sync blocks in serial order
+        // If we allow multiple syncs, they'll all get jumbled up.
+        let _lock = self.sync_lock.lock().unwrap();
+
         // Sync is 3 parts
         // 1. Get the latest block
         // 2. Get all the blocks that we don't have

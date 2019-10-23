@@ -61,6 +61,11 @@ pub fn main() {
                         .value_name("seed_phrase")
                         .help("Create a new wallet with the given 24-word seed phrase. Will fail if wallet already exists")
                         .takes_value(true))
+                    .arg(Arg::with_name("birthday")
+                        .long("birthday")
+                        .value_name("birthday")
+                        .help("Specify wallet birthday when restoring from seed. This is the earlist block height where the wallet has a transaction.")
+                        .takes_value(true))
                     .arg(Arg::with_name("server")
                         .long("server")
                         .value_name("server")
@@ -112,8 +117,25 @@ pub fn main() {
     let command = matches.value_of("COMMAND");
     let params = matches.values_of("PARAMS").map(|v| v.collect()).or(Some(vec![])).unwrap();
 
-    let maybe_server  = matches.value_of("server").map(|s| s.to_string());
-    let seed          = matches.value_of("seed").map(|s| s.to_string());
+    let maybe_server   = matches.value_of("server").map(|s| s.to_string());
+
+    let seed           = matches.value_of("seed").map(|s| s.to_string());
+    let maybe_birthday = matches.value_of("birthday");
+    
+    if seed.is_some() && maybe_birthday.is_none() {
+        eprintln!("ERROR!");
+        eprintln!("Please specify the wallet birthday (eg. '--birthday 600000') to restore from seed.");
+        eprintln!("This should be the block height where the wallet was created. If you don't remember the block height, you can pass '--birthday 0' to scan from the start of the blockchain.");
+        return;
+    }
+
+    let birthday = match maybe_birthday.unwrap_or("0").parse::<u64>() {
+                        Ok(b) => b,
+                        Err(e) => {
+                            eprintln!("Couldn't parse birthday. This should be a block number. Error={}", e);
+                            return;
+                        }
+                    };
 
     let server = LightClientConfig::get_server_or_default(maybe_server);
 
@@ -125,7 +147,7 @@ pub fn main() {
 
     let dangerous = matches.is_present("dangerous");
     let nosync = matches.is_present("nosync");
-    let (command_tx, resp_rx) = match startup(server, dangerous, seed, !nosync, command.is_none()) {
+    let (command_tx, resp_rx) = match startup(server, dangerous, seed, birthday, !nosync, command.is_none()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error during startup: {}", e);
@@ -163,7 +185,7 @@ pub fn main() {
     }
 }
 
-fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync: bool, print_updates: bool)
+fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, birthday: u64, first_sync: bool, print_updates: bool)
         -> io::Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
     let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
@@ -175,7 +197,7 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
     })?;
 
     let lightclient = match seed {
-        Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, latest_block_height)?),
+        Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, birthday)?),
         None => {
             if config.wallet_exists() {
                 Arc::new(LightClient::read_from_disk(&config)?)
@@ -195,9 +217,6 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
         println!("Lightclient connecting to {}", config.server);
     }
 
-    // Start the command loop
-    let (command_tx, resp_rx) = command_loop(lightclient.clone());
-
     // At startup, run a sync.
     if first_sync {
         let update = lightclient.do_sync(true);
@@ -205,6 +224,9 @@ fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, first_sync:
             println!("{}", update);
         }
     }
+
+    // Start the command loop
+    let (command_tx, resp_rx) = command_loop(lightclient.clone());
 
     Ok((command_tx, resp_rx))
 }
