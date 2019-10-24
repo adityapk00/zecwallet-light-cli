@@ -171,8 +171,16 @@ impl LightWallet {
             let mut system_rng = OsRng;
             system_rng.fill(&mut seed_bytes);
         } else {
-            seed_bytes.copy_from_slice(&Mnemonic::from_phrase(seed_phrase.expect("should have a seed phrase"), 
-                    Language::English).unwrap().entropy());
+            let phrase = match Mnemonic::from_phrase(seed_phrase.unwrap(), Language::English) {
+                Ok(p) => p,
+                Err(e) => {
+                    let e = format!("Error parsing phrase: {}", e);
+                    error!("{}", e);
+                    return Err(io::Error::new(ErrorKind::InvalidData, e));
+                }
+            };
+            
+            seed_bytes.copy_from_slice(&phrase.entropy());
         }
 
         // The seed bytes is the raw entropy. To pass it to HD wallet generation, 
@@ -1296,7 +1304,7 @@ impl LightWallet {
         // Print info about the block every 10,000 blocks
         if height % 10_000 == 0 {
             match self.get_sapling_tree() {
-                Ok((h, hash, stree)) => info!("Sapling tree at height {}/{} - {}", h, hash, stree),
+                Ok((h, hash, stree)) => info!("Sapling tree at height\n({}, \"{}\",\"{}\"),", h, hash, stree),
                 Err(e) => error!("Couldn't determine sapling tree: {}", e)
             }
         }
