@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate rust_embed;
 
+pub mod checkpoints;
 pub mod lightclient;
 pub mod grpcconnector;
 pub mod lightwallet;

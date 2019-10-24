@@ -25,7 +25,7 @@ use crate::grpcconnector::{self, *};
 use crate::SaplingParams;
 use crate::ANCHOR_OFFSET;
 
-mod checkpoints;
+use crate::checkpoints;
 
 pub const DEFAULT_SERVER: &str = "https://lightd-main.zecwallet.co:443";
 pub const WALLET_NAME: &str    = "zecwallet-light-wallet.dat";
