@@ -741,7 +741,7 @@ impl LightClient {
         Ok(array![new_address])
     }
 
-    pub fn do_rescan(&self) -> String {
+    pub fn do_rescan(&self) -> Result<JsonValue, String> {
         info!("Rescan starting");
         // First, clear the state from the wallet
         self.wallet.read().unwrap().clear_blocks();
@@ -761,7 +761,7 @@ impl LightClient {
         self.sync_status.read().unwrap().clone()
     }
 
-    pub fn do_sync(&self, print_updates: bool) -> String {
+    pub fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
         // We can only do one sync at a time because we sync blocks in serial order
         // If we allow multiple syncs, they'll all get jumbled up.
         let _lock = self.sync_lock.lock().unwrap();
@@ -786,7 +786,7 @@ impl LightClient {
         if latest_block < last_scanned_height {
             let w = format!("Server's latest block({}) is behind ours({})", latest_block, last_scanned_height);
             warn!("{}", w);
-            return w;
+            return Err(w);
         }
 
         info!("Latest block is {}", latest_block);
@@ -797,7 +797,7 @@ impl LightClient {
         // If there's nothing to scan, just return
         if last_scanned_height == latest_block {
             info!("Nothing to sync, returning");
-            return "".to_string();
+            return Ok(object!{ "result" => "success" })
         }
 
         {
@@ -893,7 +893,7 @@ impl LightClient {
             // Make sure we're not re-orging too much!
             if total_reorg > (crate::lightwallet::MAX_REORG - 1) as u64 {
                 error!("Reorg has now exceeded {} blocks!", crate::lightwallet::MAX_REORG);
-                return format!("Reorg has exceeded {} blocks. Aborting.", crate::lightwallet::MAX_REORG);
+                return Err(format!("Reorg has exceeded {} blocks. Aborting.", crate::lightwallet::MAX_REORG));
             } 
             
             if invalid_height > 0 {
@@ -947,10 +947,7 @@ impl LightClient {
             println!(""); // New line to finish up the updates
         }
         
-        let mut responses = vec![];
-
         info!("Synced to {}, Downloaded {} kB", latest_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
-        responses.push(format!("Synced to {}, Downloaded {} kB", latest_block, bytes_downloaded.load(Ordering::SeqCst) / 1024));
         {
             let mut status = self.sync_status.write().unwrap();
             status.is_syncing = false;
@@ -988,7 +985,11 @@ impl LightClient {
             });
         };
 
-        responses.join("\n")
+        Ok(object!{
+            "result" => "success",
+            "latest_block" => latest_block,
+            "downloaded_bytes" => bytes_downloaded.load(Ordering::SeqCst)
+        })
     }
 
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {

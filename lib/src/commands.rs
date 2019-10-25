@@ -28,7 +28,10 @@ impl Command for SyncCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_sync(true)
+        match lightclient.do_sync(true) {
+            Ok(j) => j.pretty(2),
+            Err(e) => e
+        }
     }
 }
 
@@ -79,7 +82,10 @@ impl Command for RescanCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_rescan()
+        match lightclient.do_rescan() {
+            Ok(j) => j.pretty(2),
+            Err(e) => e
+        }
     }
 }
 
@@ -144,9 +150,7 @@ impl Command for InfoCommand {
         "Get the lightwalletd server's info".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_sync(true);
-        
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {        
         lightclient.do_info()
     }
 }
@@ -169,9 +173,10 @@ impl Command for BalanceCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_sync(true);
-        
-        format!("{}", lightclient.do_balance().pretty(2))
+        match lightclient.do_sync(true) {
+            Ok(_) => format!("{}", lightclient.do_balance().pretty(2)),
+            Err(e) => e
+        }
     }
 }
 
@@ -434,7 +439,7 @@ impl Command for SendCommand {
         }
 
         // Check for a single argument that can be parsed as JSON
-        if args.len() == 1 {
+        let send_args = if args.len() == 1 {
             // Sometimes on the command line, people use "'" for the quotes, which json::parse doesn't
             // understand. So replace it with double-quotes
             let arg_list = args[0].replace("'", "\"");
@@ -455,20 +460,14 @@ impl Command for SendCommand {
                 if !j.has_key("address") || !j.has_key("amount") {
                     Err(format!("Need 'address' and 'amount'\n"))
                 } else {
-                    Ok((j["address"].as_str().unwrap(), j["amount"].as_u64().unwrap(), j["memo"].as_str().map(|s| s.to_string())))
+                    Ok((j["address"].as_str().unwrap().to_string().clone(), j["amount"].as_u64().unwrap(), j["memo"].as_str().map(|s| s.to_string().clone())))
                 }
-            }).collect::<Result<Vec<(&str, u64, Option<String>)>, String>>();
+            }).collect::<Result<Vec<(String, u64, Option<String>)>, String>>();
 
-            let send_args = match maybe_send_args {
-                Ok(a) => a,
+            match maybe_send_args {
+                Ok(a) => a.clone(),
                 Err(s) => { return format!("Error: {}\n{}", s, self.help()); }
-            };
-
-            lightclient.do_sync(true);
-            match lightclient.do_send(send_args) {
-                Ok(txid) => { object!{ "txid" => txid } },
-                Err(e)   => { object!{ "error" => e } }
-            }.pretty(2)
+            }
         } else if args.len() == 2 || args.len() == 3 {
             // Make sure we can parse the amount
             let value = match args[1].parse::<u64>() {
@@ -480,13 +479,21 @@ impl Command for SendCommand {
 
             let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
             
-            lightclient.do_sync(true);
-            match lightclient.do_send(vec!((args[0], value, memo))) {
-                Ok(txid) => { object!{ "txid" => txid } },
-                Err(e)   => { object!{ "error" => e } }
-            }.pretty(2)
+            vec![(args[0].to_string(), value, memo)]
         } else {
-            self.help()
+            return self.help()
+        };
+
+        match lightclient.do_sync(true) {
+            Ok(_) => {
+                // Convert to the right format. String -> &str.
+                let tos = send_args.iter().map(|(a, v, m)| (a.as_str(), *v, m.clone()) ).collect::<Vec<_>>();
+                match lightclient.do_send(tos) {
+                    Ok(txid) => { object!{ "txid" => txid } },
+                    Err(e)   => { object!{ "error" => e } }
+                }.pretty(2)
+            },
+            Err(e) => e
         }
     }
 }
@@ -568,9 +575,12 @@ impl Command for TransactionsCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        lightclient.do_sync(true);
-
-        format!("{}", lightclient.do_list_transactions().pretty(2))
+        match lightclient.do_sync(true) {
+            Ok(_) => {
+                format!("{}", lightclient.do_list_transactions().pretty(2))
+            },
+            Err(e) => e
+        }
     }
 }
 
@@ -662,9 +672,12 @@ impl Command for NotesCommand {
             false
         };
 
-        lightclient.do_sync(true);
-        
-        format!("{}", lightclient.do_list_notes(all_notes).pretty(2))
+        match lightclient.do_sync(true) {
+            Ok(_) => {
+                format!("{}", lightclient.do_list_notes(all_notes).pretty(2))
+            },
+            Err(e) => e
+        }
     }
 }
 
