@@ -32,6 +32,34 @@ impl Command for SyncCommand {
     }
 }
 
+
+struct SyncStatusCommand {}
+impl Command for SyncStatusCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Get the sync status of the wallet");
+        h.push("Usage:");
+        h.push("syncstatus");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Get the sync status of the wallet".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        let status = lightclient.do_scan_status();
+        match status.is_syncing {
+            false => object!{ "syncing" => "false" },
+            true  => object!{ "syncing" => "true",
+                              "synced_blocks" => status.synced_blocks,
+                              "total_blocks" => status.total_blocks } 
+        }.pretty(2)
+    }
+}
+
 struct RescanCommand {}
 impl Command for RescanCommand {
     fn help(&self) -> String {
@@ -691,6 +719,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     let mut map: HashMap<String, Box<dyn Command>> = HashMap::new();
 
     map.insert("sync".to_string(),          Box::new(SyncCommand{}));
+    map.insert("syncstatus".to_string(),    Box::new(SyncStatusCommand{}));
     map.insert("rescan".to_string(),        Box::new(RescanCommand{}));
     map.insert("help".to_string(),          Box::new(HelpCommand{}));
     map.insert("balance".to_string(),       Box::new(BalanceCommand{}));
