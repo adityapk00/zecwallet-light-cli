@@ -91,7 +91,7 @@ impl ToBase58Check for [u8] {
 use std::fmt;
 use std::error;
 #[derive(Debug)]
-enum InvalidHeight {} 
+enum InvalidHeight { LikelyReorg(u32) } 
 impl error::Error for InvalidHeight {}
 impl fmt::Display for InvalidHeight {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1137,6 +1137,16 @@ impl LightWallet {
         num_invalidated as u64
     }
 
+    fn check_unchanged_height(&self, block: &CompactBlock, height: u32) -> Result<(), InvalidHeight> {
+            if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
+                if block.hash() != hash {
+                    warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
+                    return Err(InvalidHeight::LikelyReorg(height));
+                }
+            }
+            return Ok(());
+        
+    }
     // Scan a block. Will return an error with the block height that failed to scan
     pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
         let block: CompactBlock = match parse_from_bytes(block_bytes) {
@@ -1151,13 +1161,10 @@ impl LightWallet {
         let height = block.get_height() as i32;
         if height == self.last_scanned_height() {
             // If the last scanned block is rescanned, check it still matches.
-            if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
-                if block.hash() != hash {
-                    warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
-                    return Err(height);
-                }
+            match self.check_unchanged_height(&block, height as u32) {
+                Ok(()) => return Ok(vec![]),
+                Err(InvalidHeight::LikelyReorg(h)) => return Err(h as i32),
             }
-            return Ok(vec![]);
         } else if height != (self.last_scanned_height() + 1) {
             error!(
                 "Block is not height-sequential (expected {}, found {})",
