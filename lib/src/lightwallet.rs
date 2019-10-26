@@ -88,6 +88,16 @@ impl ToBase58Check for [u8] {
     }
 }
 
+use std::fmt;
+use std::error;
+#[derive(Debug)]
+enum InvalidHeight {} 
+impl error::Error for InvalidHeight {}
+impl fmt::Display for InvalidHeight {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self) 
+    }
+}
 pub struct LightWallet {
     // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
     // and the individual spending keys are not written    
