@@ -244,7 +244,7 @@ impl LightClient {
 
     /// Method to create a test-only version of the LightClient
     #[allow(dead_code)]
-    fn unconnected(seed_phrase: String, dir: Option<String>) -> io::Result<Self> {
+    pub fn unconnected(seed_phrase: String, dir: Option<String>) -> io::Result<Self> {
         let config = LightClientConfig::create_unconnected("test".to_string(), dir);
         let mut l = LightClient {
                 wallet          : Arc::new(RwLock::new(LightWallet::new(Some(seed_phrase), &config, 0)?)),

@@ -757,8 +757,37 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
 }
 
 pub fn do_user_command(cmd: &str, args: &Vec<&str>, lightclient: &LightClient) -> String {
-    match get_commands().get(cmd) {
+    match get_commands().get(&cmd.to_ascii_lowercase()) {
         Some(cmd) => cmd.exec(args, lightclient),
         None      => format!("Unknown command : {}. Type 'help' for a list of commands", cmd)
+    }
+}
+
+
+
+
+#[cfg(test)]
+pub mod tests {
+    use lazy_static::lazy_static;
+    use super::do_user_command;
+    use crate::lightclient::{LightClient};
+
+    lazy_static!{
+        static ref TEST_SEED: String = "youth strong sweet gorilla hammer unhappy congress stamp left stereo riot salute road tag clean toilet artefact fork certain leopard entire civil degree wonder".to_string();
+    }
+
+    #[test]
+    pub fn test_command_caseinsensitive() {
+        let lc = LightClient::unconnected(TEST_SEED.to_string(), None).unwrap();
+
+        assert_eq!(do_user_command("addresses", &vec![], &lc),
+                   do_user_command("AddReSSeS", &vec![], &lc));
+                assert_eq!(do_user_command("addresses", &vec![], &lc),
+                   do_user_command("Addresses", &vec![], &lc));
+    }
+
+    #[test]
+    pub fn test_nosync_commands() {
+        // The following commands should run 
     }
 }
