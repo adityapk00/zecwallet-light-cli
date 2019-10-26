@@ -1464,7 +1464,7 @@ fn test_bad_params() {
 }
 
 /// Test helper to add blocks
-fn add_blocks(wallet: &LightWallet, start: i32, num: i32, mut prev_hash: BlockHash) -> Result<BlockHash, i32>{
+fn add_fake_blocks(wallet: &LightWallet, start: i32, num: i32, mut prev_hash: BlockHash) -> Result<BlockHash, i32>{
     // Add it to a block
     let mut new_blk = FakeCompactBlock::new(start, prev_hash);
     for i in 0..num {
@@ -1531,31 +1531,31 @@ fn test_block_limit() {
     const AMOUNT: u64 = 500000;
     let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT);       
 
-    let prev_hash = add_blocks(&wallet, 2, 1, block_hash).unwrap();
+    let prev_hash = add_fake_blocks(&wallet, 2, 1, block_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 3);
     
-    let prev_hash = add_blocks(&wallet, 3, 47, prev_hash).unwrap();
+    let prev_hash = add_fake_blocks(&wallet, 3, 47, prev_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 50);
     
-    let prev_hash = add_blocks(&wallet, 50, 51, prev_hash).unwrap();
+    let prev_hash = add_fake_blocks(&wallet, 50, 51, prev_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 101);
     
     // Subsequent blocks should start to trim
-    let prev_hash = add_blocks(&wallet, 101, 1, prev_hash).unwrap();
+    let prev_hash = add_fake_blocks(&wallet, 101, 1, prev_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 101);
 
     // Add lots
-    let _ = add_blocks(&wallet, 102, 10, prev_hash).unwrap();
+    let _ = add_fake_blocks(&wallet, 102, 10, prev_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 101);
 
     // Now clear the blocks
     wallet.clear_blocks();
     assert_eq!(wallet.blocks.read().unwrap().len(), 0);
 
-    let prev_hash = add_blocks(&wallet, 0, 1, BlockHash([0;32])).unwrap();
+    let prev_hash = add_fake_blocks(&wallet, 0, 1, BlockHash([0;32])).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 1);
 
-    let _ = add_blocks(&wallet, 1, 10, prev_hash).unwrap();
+    let _ = add_fake_blocks(&wallet, 1, 10, prev_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 11);
 }
 
@@ -1565,7 +1565,7 @@ fn test_rollback() {
 
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);       
 
-    add_blocks(&wallet, 2, 5, block_hash).unwrap();
+    add_fake_blocks(&wallet, 2, 5, block_hash).unwrap();
 
     // Make sure the note exists with the witnesses
     {
@@ -1592,11 +1592,11 @@ fn test_rollback() {
     }
 
     // This should result in an exception, because the "prevhash" is wrong
-    assert!(add_blocks(&wallet, 5, 2, blk3_hash).is_err(), 
+    assert!(add_fake_blocks(&wallet, 5, 2, blk3_hash).is_err(), 
         "Shouldn't be able to add because of invalid prev hash");
 
     // Add with the proper prev hash
-    add_blocks(&wallet, 5, 2, blk4_hash).unwrap();
+    add_fake_blocks(&wallet, 5, 2, blk4_hash).unwrap();
 
     let blk6_hash;
     {
@@ -1831,10 +1831,10 @@ fn test_invalid_bip39_z() {
 
 #[test]
 fn test_invalid_scan_blocks() {
-    const AMOUNT: u64 = 500000;
+    const AMOUNT: u64 = 500_000;
     let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT);       
 
-    let prev_hash = add_blocks(&wallet, 2, 1, block_hash).unwrap();
+    let prev_hash = add_fake_blocks(&wallet, 2, 1, block_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 3);
     
     // Block fails to scan for bad encoding
@@ -1853,7 +1853,7 @@ fn test_invalid_scan_blocks() {
     assert_eq!(wallet.scan_block(&new_blk.as_bytes()), Err(2));
 
     // Then the rest add properly
-    let _ = add_blocks(&wallet, 3, 2, prev_hash).unwrap();
+    let _ = add_fake_blocks(&wallet, 3, 2, prev_hash).unwrap();
     assert_eq!(wallet.blocks.read().unwrap().len(), 5);
 }
 
