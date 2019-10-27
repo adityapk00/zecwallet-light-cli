@@ -89,13 +89,13 @@ impl ToBase58Check for [u8] {
 }
 
 #[derive(Debug)]
-enum BlockSequenceState { Valid, InvalidHeight }
+enum BlockSequenceState { Valid, InvalidBlockSequence }
 use std::fmt;
 use std::error;
 #[derive(Debug)]
-enum InvalidHeight { LikelyReorg(u32) } 
-impl error::Error for InvalidHeight {}
-impl fmt::Display for InvalidHeight {
+enum InvalidBlockSequence { LikelyReorg(u32) } 
+impl error::Error for InvalidBlockSequence {}
+impl fmt::Display for InvalidBlockSequence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self) 
     }
@@ -1139,11 +1139,11 @@ impl LightWallet {
         num_invalidated as u64
     }
 
-    fn check_unchanged_height(&self, block: &CompactBlock, height: u32) -> Result<(), InvalidHeight> {
+    fn check_unchanged_height(&self, block: &CompactBlock, height: u32) -> Result<(), InvalidBlockSequence> {
             if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
                 if block.hash() != hash {
                     warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
-                    return Err(InvalidHeight::LikelyReorg(height));
+                    return Err(InvalidBlockSequence::LikelyReorg(height));
                 }
             }
             return Ok(());
@@ -1168,7 +1168,7 @@ impl LightWallet {
             // If the last scanned block is rescanned, check it still matches.
             match self.check_unchanged_height(&block, height as u32) {
                 Ok(()) => return Ok(vec![]),
-                Err(InvalidHeight::LikelyReorg(h)) => return Err(h as i32),
+                Err(InvalidBlockSequence::LikelyReorg(h)) => return Err(h as i32),
             }
         } else if height != (self.last_scanned_height() + 1) {
             error!(
