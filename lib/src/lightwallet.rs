@@ -88,18 +88,17 @@ impl ToBase58Check for [u8] {
     }
 }
 
-#[derive(Debug)]
-enum BlockSequenceState { Valid, InvalidBlockSequence }
 use std::fmt;
 use std::error;
+
 #[derive(Debug)]
-enum InvalidBlockSequence { LikelyReorg(u32) } 
-impl error::Error for InvalidBlockSequence {}
-impl fmt::Display for InvalidBlockSequence {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self) 
-    }
-}
+enum BlockSequenceState { Valid(ValidBlock), Invalid(BlockSequence) }
+#[derive(Debug)]
+enum ValidBlock { Current, New }
+#[derive(Debug)]
+enum BlockSequence { LikelyReorg( ReorgIndicator ), NonSequential(i32) }
+#[derive(Debug)]
+enum ReorgIndicator { SameHeighMismatch(i32), PrevHeightMismatch(i32) }
 pub struct LightWallet {
     // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
     // and the individual spending keys are not written    
@@ -1139,18 +1138,47 @@ impl LightWallet {
         num_invalidated as u64
     }
 
-    fn check_unchanged_height(&self, block: &CompactBlock, height: u32) -> Result<(), InvalidBlockSequence> {
-            if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
-                if block.hash() != hash {
-                    warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
-                    return Err(InvalidBlockSequence::LikelyReorg(height));
-                }
-            }
-            return Ok(());
         
-    }
-    fn validate_correct_block_sequence(&self, block: &CompactBlock, height: u32) -> BlockSequenceState {
-        unimplemented!()
+    fn validate_correct_block_sequence(&self, block: &CompactBlock) -> BlockSequenceState {
+        // The block we are scanning might be in one of these states:
+        // 1. Invalid Because: it has the same height and a different digest to the tip
+        // 2. Valid Because:   is has the same height and same digest as the tip.
+        // 3. Invalid Because: its height is not at tip_height + 1
+        // 4. Invalid Because: the block is in sequence (not 3.) but the tip_digest, does not match the block's prev_hash
+        // 5. Valid Because: the block is in sequence and its prev_hash matches the tip_digest
+        let height = block.get_height() as i32;
+        let tip_digest = self.blocks.read().unwrap().last().map(|topblock| topblock.hash).expect("Expected a digest!"); 
+        if height == self.last_scanned_height() {
+            // If heights match then: 
+            if block.hash() != tip_digest {
+                // the blocks don't match, this could indicate a reorg.
+                warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), tip_digest);
+                return BlockSequenceState
+                         ::Invalid(BlockSequence
+                                     ::LikelyReorg(ReorgIndicator
+                                                     ::SameHeighMismatch(height))); // State 1
+            } else if block.hash() == tip_digest { // Written explicitly for clarity.
+                // or we have re-received the same block as the chain tip.
+                return BlockSequenceState::Valid(ValidBlock::Current); //State 2
+            };
+        }; 
+        if height != (self.last_scanned_height() +1) {
+          // Scanned blocks MUST be height-sequential.
+            error!(
+                "Block is not height-sequential (expected {}, found {})",
+                self.last_scanned_height() + 1,
+                height
+            );
+            return BlockSequenceState::Invalid(BlockSequence::NonSequential(self.last_scanned_height())); // State 3
+        }
+        // Check to see that the previous tip_digest matches
+        if block.prev_hash() != tip_digest {
+            warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), tip_digest);
+            return BlockSequenceState::Invalid(BlockSequence
+                                               ::LikelyReorg(ReorgIndicator
+                                                    ::PrevHeightMismatch(height-1))); // State 4
+        };
+        BlockSequenceState::Valid(ValidBlock::New) // State 5
     }
     // Scan a block. Will return an error with the block height that failed to scan
     pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
@@ -1162,31 +1190,19 @@ impl LightWallet {
             }
         };
 
-        // Scanned blocks MUST be height-sequential.
+        match self.validate_correct_block_sequence(&block) {
+            BlockSequenceState::Invalid(s) => match s {
+                BlockSequence::LikelyReorg(i) => match i {
+                    ReorgIndicator::SameHeighMismatch(v) => return Err(v as i32),
+                    ReorgIndicator::PrevHeightMismatch(v) => return Err(v as i32)
+                },
+                BlockSequence::NonSequential(v) => return Err(v as i32),
+            },
+            BlockSequenceState::Valid(s) => if let Current = s { return Ok(vec![]); },
+            BlockSequenceState::Valid(s) => if let New = s { println!("test");}
+        };
+
         let height = block.get_height() as i32;
-        if height == self.last_scanned_height() {
-            // If the last scanned block is rescanned, check it still matches.
-            match self.check_unchanged_height(&block, height as u32) {
-                Ok(()) => return Ok(vec![]),
-                Err(InvalidBlockSequence::LikelyReorg(h)) => return Err(h as i32),
-            }
-        } else if height != (self.last_scanned_height() + 1) {
-            error!(
-                "Block is not height-sequential (expected {}, found {})",
-                self.last_scanned_height() + 1,
-                height
-            );
-            return Err(self.last_scanned_height());
-        }
-
-        // Check to see that the previous block hash matches
-        if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
-            if block.prev_hash() != hash {
-                warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), hash);
-                return Err(height-1);
-            }
-        }
-
         // Get the most recent scanned data.
         let mut block_data = BlockData {
             height,
