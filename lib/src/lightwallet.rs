@@ -88,13 +88,10 @@ impl ToBase58Check for [u8] {
     }
 }
 
-use std::fmt;
-use std::error;
-
 #[derive(Debug)]
 enum BlockSequenceState { Valid(ValidBlock), Invalid(BlockSequence) }
 #[derive(Debug)]
-enum ValidBlock { Current, New }
+enum ValidBlock { Current, Discovered }
 #[derive(Debug)]
 enum BlockSequence { LikelyReorg( ReorgIndicator ), NonSequential(i32) }
 #[derive(Debug)]
@@ -1178,7 +1175,7 @@ impl LightWallet {
                                                ::LikelyReorg(ReorgIndicator
                                                     ::PrevHeightMismatch(height-1))); // State 4
         };
-        BlockSequenceState::Valid(ValidBlock::New) // State 5
+        BlockSequenceState::Valid(ValidBlock::Discovered) // State 5
     }
     // Scan a block. Will return an error with the block height that failed to scan
     pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
@@ -1198,8 +1195,10 @@ impl LightWallet {
                 },
                 BlockSequence::NonSequential(v) => return Err(v as i32),
             },
-            BlockSequenceState::Valid(s) => if let Current = s { return Ok(vec![]); },
-            BlockSequenceState::Valid(s) => if let New = s { println!("test");}
+            BlockSequenceState::Valid(s) => match s {
+                ValidBlock::Current => return Ok(vec![]),
+                ValidBlock::Discovered => {}
+            }
         };
 
         let height = block.get_height() as i32;
