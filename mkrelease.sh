@@ -43,7 +43,7 @@ mkdir -p target/macOS-zecwallet-cli-v$APP_VERSION
 cp target/release/zecwallet-cli target/macOS-zecwallet-cli-v$APP_VERSION/
 
 # For Windows and Linux, build via docker
-docker run --rm -v $(pwd)/:/opt/zecwallet-light-cli rustbuild:latest bash -c "cd /opt/zecwallet-light-cli && cargo build --release && SODIUM_LIB_DIR='/opt/libsodium-win64/lib/' cargo build --release --target x86_64-pc-windows-gnu"
+docker run --rm -v $(pwd)/:/opt/zecwallet-light-cli rustbuild:latest bash -c "cd /opt/zecwallet-light-cli && cargo build --release && cargo build --release --target armv7-unknown-linux-gnueabihf && cargo build --release --target aarch64-unknown-linux-gnu && SODIUM_LIB_DIR='/opt/libsodium-win64/lib/' cargo build --release --target x86_64-pc-windows-gnu"
 
 # Now sign and zip the binaries
 # macOS
@@ -82,4 +82,27 @@ zip -r Windows-zecwallet-cli-v$APP_VERSION.zip Windows-zecwallet-cli-v$APP_VERSI
 cd ..
 
 
+#Armv7
+rm -rf target/Armv7-zecwallet-cli-v$APP_VERSION
+mkdir -p target/Armv7-zecwallet-cli-v$APP_VERSION
+cp target/armv7-unknown-linux-gnueabihf/release/zecwallet-cli target/Armv7-zecwallet-cli-v$APP_VERSION/
+gpg --batch --output target/Armv7-zecwallet-cli-v$APP_VERSION/zecwallet-cli.sig --detach-sig target/Armv7-zecwallet-cli-v$APP_VERSION/zecwallet-cli
+cd target
+cd Armv7-zecwallet-cli-v$APP_VERSION
+gsha256sum zecwallet-cli > sha256sum.txt
+cd ..
+zip -r Armv7-zecwallet-cli-v$APP_VERSION.zip Armv7-zecwallet-cli-v$APP_VERSION 
+cd ..
 
+
+#AARCH64
+rm -rf target/aarch64-zecwallet-cli-v$APP_VERSION
+mkdir -p target/aarch64-zecwallet-cli-v$APP_VERSION
+cp target/aarch64-unknown-linux-gnu/release/zecwallet-cli target/aarch64-zecwallet-cli-v$APP_VERSION/
+gpg --batch --output target/aarch64-zecwallet-cli-v$APP_VERSION/zecwallet-cli.sig --detach-sig target/aarch64-zecwallet-cli-v$APP_VERSION/zecwallet-cli
+cd target
+cd aarch64-zecwallet-cli-v$APP_VERSION
+gsha256sum zecwallet-cli > sha256sum.txt
+cd ..
+zip -r aarch64-zecwallet-cli-v$APP_VERSION.zip aarch64-zecwallet-cli-v$APP_VERSION 
+cd ..
