@@ -88,6 +88,8 @@ impl ToBase58Check for [u8] {
     }
 }
 
+#[derive(Debug)]
+enum BlockSequenceState { Valid, InvalidHeight }
 use std::fmt;
 use std::error;
 #[derive(Debug)]
@@ -1146,6 +1148,9 @@ impl LightWallet {
             }
             return Ok(());
         
+    }
+    fn validate_correct_block_sequence(&self, block: &CompactBlock, height: u32) -> BlockSequenceState {
+        unimplemented!()
     }
     // Scan a block. Will return an error with the block height that failed to scan
     pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
