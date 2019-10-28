@@ -117,6 +117,10 @@ pub struct LightWallet {
     blocks: Arc<RwLock<Vec<BlockData>>>,
     pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
 
+    // Transactions that are only in the mempool, but haven't been confirmed yet. 
+    // This is not stored to disk. 
+    pub mempool_txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
+
     // The block at which this wallet was born. Rescans
     // will start from here.
     birthday: u64,
@@ -197,20 +201,21 @@ impl LightWallet {
             = LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed.as_bytes(), 0);
 
         Ok(LightWallet {
-            encrypted:  false,
-            unlocked:   true,
-            enc_seed:   [0u8; 48],
-            nonce:      vec![],
-            seed:       seed_bytes,
-            extsks:     Arc::new(RwLock::new(vec![extsk])),
-            extfvks:    Arc::new(RwLock::new(vec![extfvk])),
-            zaddress:   Arc::new(RwLock::new(vec![address])),
-            tkeys:      Arc::new(RwLock::new(vec![tpk])),
-            taddresses: Arc::new(RwLock::new(vec![taddr])),
-            blocks:     Arc::new(RwLock::new(vec![])),
-            txs:        Arc::new(RwLock::new(HashMap::new())),
-            config:     config.clone(),
-            birthday:   latest_block,
+            encrypted:   false,
+            unlocked:    true,
+            enc_seed:    [0u8; 48],
+            nonce:       vec![],
+            seed:        seed_bytes,
+            extsks:      Arc::new(RwLock::new(vec![extsk])),
+            extfvks:     Arc::new(RwLock::new(vec![extfvk])),
+            zaddress:    Arc::new(RwLock::new(vec![address])),
+            tkeys:       Arc::new(RwLock::new(vec![tpk])),
+            taddresses:  Arc::new(RwLock::new(vec![taddr])),
+            blocks:      Arc::new(RwLock::new(vec![])),
+            txs:         Arc::new(RwLock::new(HashMap::new())),
+            mempool_txs: Arc::new(RwLock::new(HashMap::new())),
+            config:      config.clone(),
+            birthday:    latest_block,
         })
     }
 
@@ -295,19 +300,20 @@ impl LightWallet {
         let birthday = reader.read_u64::<LittleEndian>()?;
 
         Ok(LightWallet{
-            encrypted:  encrypted,
-            unlocked:   !encrypted, // When reading from disk, if wallet is encrypted, it starts off locked. 
-            enc_seed:   enc_seed,
-            nonce:      nonce,
-            seed:       seed_bytes,
-            extsks:     Arc::new(RwLock::new(extsks)),
-            extfvks:    Arc::new(RwLock::new(extfvks)),
-            zaddress:   Arc::new(RwLock::new(addresses)),
-            tkeys:      Arc::new(RwLock::new(tkeys)),
-            taddresses: Arc::new(RwLock::new(taddresses)),
-            blocks:     Arc::new(RwLock::new(blocks)),
-            txs:        Arc::new(RwLock::new(txs)),
-            config:     config.clone(),
+            encrypted:   encrypted,
+            unlocked:    !encrypted, // When reading from disk, if wallet is encrypted, it starts off locked. 
+            enc_seed:    enc_seed,
+            nonce:       nonce,
+            seed:        seed_bytes,
+            extsks:      Arc::new(RwLock::new(extsks)),
+            extfvks:     Arc::new(RwLock::new(extfvks)),
+            zaddress:    Arc::new(RwLock::new(addresses)),
+            tkeys:       Arc::new(RwLock::new(tkeys)),
+            taddresses:  Arc::new(RwLock::new(taddresses)),
+            blocks:      Arc::new(RwLock::new(blocks)),
+            txs:         Arc::new(RwLock::new(txs)),
+            mempool_txs: Arc::new(RwLock::new(HashMap::new())),
+            config:      config.clone(),
             birthday,
         })
     }
@@ -468,6 +474,7 @@ impl LightWallet {
     pub fn clear_blocks(&self) {
         self.blocks.write().unwrap().clear();
         self.txs.write().unwrap().clear();
+        self.mempool_txs.write().unwrap().clear();
     }
 
     pub fn set_initial_block(&self, height: i32, hash: &str, sapling_tree: &str) -> bool {
@@ -1170,62 +1177,68 @@ impl LightWallet {
                 .map(|block| block.tree.clone())
                 .unwrap_or(CommitmentTree::new()),
         };
+        
+        // These are filled in inside the block
+        let new_txs;
+        let nfs: Vec<_>;
+        {
+            // Create a write lock 
+            let mut txs = self.txs.write().unwrap();
 
-        // Create a write lock that will last for the rest of the function.
-        let mut txs = self.txs.write().unwrap();
-
-        // Create a Vec containing all unspent nullifiers.
-        // Include only the confirmed spent nullifiers, since unconfirmed ones still need to be included
-        // during scan_block below.
-        let nfs: Vec<_> = txs
-            .iter()
-            .map(|(txid, tx)| {
-                let txid = *txid;
-                tx.notes.iter().filter_map(move |nd| {
-                    if nd.spent.is_none() {
-                        Some((nd.nullifier, nd.account, txid))
-                    } else {
-                        None
-                    }
+            // Create a Vec containing all unspent nullifiers.
+            // Include only the confirmed spent nullifiers, since unconfirmed ones still need to be included
+            // during scan_block below.
+            nfs = txs
+                .iter()
+                .map(|(txid, tx)| {
+                    let txid = *txid;
+                    tx.notes.iter().filter_map(move |nd| {
+                        if nd.spent.is_none() {
+                            Some((nd.nullifier, nd.account, txid))
+                        } else {
+                            None
+                        }
+                    })
                 })
-            })
-            .flatten()
-            .collect();
-
-        // Prepare the note witnesses for updating
-        for tx in txs.values_mut() {
-            for nd in tx.notes.iter_mut() {
-                // Duplicate the most recent witness
-                if let Some(witness) = nd.witnesses.last() {
-                    let clone = witness.clone();
-                    nd.witnesses.push(clone);
-                }
-                // Trim the oldest witnesses
-                nd.witnesses = nd
-                    .witnesses
-                    .split_off(nd.witnesses.len().saturating_sub(100));
-            }
-        }
-
-        let new_txs = {
-            let nf_refs: Vec<_> = nfs.iter().map(|(nf, acc, _)| (&nf[..], *acc)).collect();
-
-            // Create a single mutable slice of all the newly-added witnesses.
-            let mut witness_refs: Vec<_> = txs
-                .values_mut()
-                .map(|tx| tx.notes.iter_mut().filter_map(|nd| nd.witnesses.last_mut()))
                 .flatten()
                 .collect();
 
-            scan_block(
-                block.clone(),
-                &self.extfvks.read().unwrap(),
-                &nf_refs[..],
-                &mut block_data.tree,
-                &mut witness_refs[..],
-            )
-        };
+            // Prepare the note witnesses for updating
+            for tx in txs.values_mut() {
+                for nd in tx.notes.iter_mut() {
+                    // Duplicate the most recent witness
+                    if let Some(witness) = nd.witnesses.last() {
+                        let clone = witness.clone();
+                        nd.witnesses.push(clone);
+                    }
+                    // Trim the oldest witnesses
+                    nd.witnesses = nd
+                        .witnesses
+                        .split_off(nd.witnesses.len().saturating_sub(100));
+                }
+            }
 
+            new_txs = {
+                let nf_refs: Vec<_> = nfs.iter().map(|(nf, acc, _)| (&nf[..], *acc)).collect();
+
+                // Create a single mutable slice of all the newly-added witnesses.
+                let mut witness_refs: Vec<_> = txs
+                    .values_mut()
+                    .map(|tx| tx.notes.iter_mut().filter_map(|nd| nd.witnesses.last_mut()))
+                    .flatten()
+                    .collect();
+
+                scan_block(
+                    block.clone(),
+                    &self.extfvks.read().unwrap(),
+                    &nf_refs[..],
+                    &mut block_data.tree,
+                    &mut witness_refs[..],
+                )
+            };
+        }
+
+        
         // If this block had any new Txs, return the list of ALL txids in this block, 
         // so the wallet can fetch them all as a decoy.
         let all_txs = if !new_txs.is_empty() {
@@ -1239,6 +1252,9 @@ impl LightWallet {
         };
 
         for tx in new_txs {
+            // Create a write lock 
+            let mut txs = self.txs.write().unwrap();
+
             // Mark notes as spent.
             let mut total_shielded_value_spent: u64 = 0;
 
@@ -1301,6 +1317,11 @@ impl LightWallet {
             }
         }
         
+        {
+            // Cleanup mempool tx after adding a block, to remove all txns that got mined
+            self.cleanup_mempool();
+        }
+
         // Print info about the block every 10,000 blocks
         if height % 10_000 == 0 {
             match self.get_sapling_tree() {
@@ -1308,7 +1329,6 @@ impl LightWallet {
                 Err(e) => error!("Couldn't determine sapling tree: {}", e)
             }
         }
-
 
         Ok(all_txs)
     }
@@ -1347,7 +1367,7 @@ impl LightWallet {
         );
 
         // Convert address (str) to RecepientAddress and value to Amount
-        let tos = tos.iter().map(|to| {
+        let recepients = tos.iter().map(|to| {
             let ra = match address::RecipientAddress::from_str(to.0, 
                             self.config.hrp_sapling_address(), 
                             self.config.base58_pubkey_address(), 
@@ -1482,7 +1502,7 @@ impl LightWallet {
         // TODO: We're using the first ovk to encrypt outgoing Txns. Is that Ok?
         let ovk = self.extfvks.read().unwrap()[0].fvk.ovk;
 
-        for (to, value, memo) in tos {
+        for (to, value, memo) in recepients {
             // Compute memo if it exists
             let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap());
             
@@ -1539,10 +1559,65 @@ impl LightWallet {
             }
         }
 
+        // Add this Tx to the mempool structure
+        {
+            let mut mempool_txs = self.mempool_txs.write().unwrap();
+
+            match mempool_txs.get_mut(&tx.txid()) {
+                None => {
+                    // Collect the outgoing metadata
+                    let outgoing_metadata = tos.iter().map(|(addr, amt, maybe_memo)| {
+                        OutgoingTxMetadata {
+                            address: addr.to_string(),
+                            value: *amt,
+                            memo: match maybe_memo {
+                                None    => Memo::default(),
+                                Some(s) => Memo::from_str(&s).unwrap(),
+                            },
+                        }
+                    }).collect::<Vec<_>>();
+
+                    // Create a new WalletTx
+                    let mut wtx = WalletTx::new(height as i32, now() as u64, &tx.txid());
+                    wtx.outgoing_metadata = outgoing_metadata;
+
+                    // Add it into the mempool 
+                    mempool_txs.insert(tx.txid(), wtx);
+                },
+                Some(_) => {
+                    warn!("A newly created Tx was already in the mempool! How's that possible? Txid: {}", tx.txid());
+                }
+            }
+        }
+
         // Return the encoded transaction, so the caller can send it.
         let mut raw_tx = vec![];
         tx.write(&mut raw_tx).unwrap();
         Ok(raw_tx.into_boxed_slice())
+    }
+
+    // After some blocks have been mined, we need to remove the Txns from the mempool_tx structure
+    // if they :
+    // 1. Have expired
+    // 2. The Tx has been added to the wallet via a mined block
+    pub fn cleanup_mempool(&self) {
+        const DEFAULT_TX_EXPIRY_DELTA: i32 = 20;
+
+        let current_height = self.blocks.read().unwrap().last().map(|b| b.height).unwrap_or(0);
+
+        {
+            // Remove all expired Txns
+            self.mempool_txs.write().unwrap().retain( | _, wtx| {
+                current_height < (wtx.block + DEFAULT_TX_EXPIRY_DELTA)    
+            });
+        }
+
+        {
+            // Remove all txns where the txid is added to the wallet directly
+            self.mempool_txs.write().unwrap().retain ( |txid, _| {
+                self.txs.read().unwrap().get(txid).is_none()
+            });
+        }
     }
 }
 

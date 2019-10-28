@@ -690,7 +690,7 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
 }
 
 #[test]
-fn test_z_spend() {
+fn test_z_spend_to_z() {
     const AMOUNT1: u64 = 50000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
@@ -723,6 +723,19 @@ fn test_z_spend() {
         assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
     }
 
+    // It should also be in the mempool structure
+    {
+        let mem = wallet.mempool_txs.read().unwrap();
+
+        assert_eq!(mem[&sent_txid].block, 2);   // block number is next block
+        assert!   (mem[&sent_txid].datetime > 0);
+        assert_eq!(mem[&sent_txid].txid, sent_txid);
+        assert_eq!(mem[&sent_txid].outgoing_metadata.len(), 1);
+        assert_eq!(mem[&sent_txid].outgoing_metadata[0].address, ext_address);
+        assert_eq!(mem[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
+        assert_eq!(mem[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+    }
+
     let mut cb3 = FakeCompactBlock::new(2, block_hash);
     cb3.add_tx(&sent_tx);
     wallet.scan_block(&cb3.as_bytes()).unwrap();
@@ -741,6 +754,12 @@ fn test_z_spend() {
         assert_eq!(txs[&sent_txid].notes[0].is_change, true);
         assert_eq!(txs[&sent_txid].notes[0].spent, None);
         assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
+    }
+
+    {
+        // And the mempool tx should disappear
+        let mem = wallet.mempool_txs.read().unwrap();
+        assert!(mem.get(&sent_txid).is_none());
     }
 
     // Now, full scan the Tx, which should populate the Outgoing Meta data
@@ -1446,6 +1465,53 @@ fn add_blocks(wallet: &LightWallet, start: i32, num: i32, mut prev_hash: BlockHa
     }
 
     Ok(new_blk.hash())
+}
+
+#[test]
+fn test_z_mempool_expiry() {
+    const AMOUNT1: u64 = 50000;
+    let (wallet, _, block_hash) = get_test_wallet(AMOUNT1);
+
+    let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+    let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                        &fvk.default_address().unwrap().1);
+
+    const AMOUNT_SENT: u64 = 20;
+
+    let outgoing_memo = "Outgoing Memo".to_string();
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) = get_sapling_params().unwrap();
+
+    // Create a tx and send to address
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    // It should also be in the mempool structure
+    {
+        let mem = wallet.mempool_txs.read().unwrap();
+
+        assert_eq!(mem[&sent_txid].block, 2);   // block number is next block
+        assert!   (mem[&sent_txid].datetime > 0);
+        assert_eq!(mem[&sent_txid].txid, sent_txid);
+        assert_eq!(mem[&sent_txid].outgoing_metadata.len(), 1);
+        assert_eq!(mem[&sent_txid].outgoing_metadata[0].address, ext_address);
+        assert_eq!(mem[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
+        assert_eq!(mem[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+    }
+
+    // Don't mine the Tx, but just add several blocks
+    add_blocks(&wallet, 2, 21, block_hash).unwrap();
+
+    // After 21 blocks, it should disappear (expiry is 20 blocks) since it was not mined
+    {
+        let mem = wallet.mempool_txs.read().unwrap();
+
+        assert!(mem.get(&sent_txid).is_none());
+    }
 }
 
 #[test]
