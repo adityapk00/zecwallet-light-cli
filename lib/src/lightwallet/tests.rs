@@ -690,7 +690,7 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
 }
 
 #[test]
-fn test_validate_correct_block_sequence() {
+fn test_validate_block_sequence() {
     get_test_wallet(50_000);
 }
 
@@ -1521,7 +1521,7 @@ fn test_z_mempool_expiry() {
     }
 
     // Don't mine the Tx, but just add several blocks
-    add_blocks(&wallet, 2, 21, block_hash).unwrap();
+    add_fake_blocks(&wallet, 2, 21, block_hash).unwrap();
 
     // After 21 blocks, it should disappear (expiry is 20 blocks) since it was not mined
     {

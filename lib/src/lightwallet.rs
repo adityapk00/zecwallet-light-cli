@@ -93,7 +93,7 @@ enum BlockSequenceState { Valid(ValidBlock), Invalid(BlockSequence) }
 #[derive(Debug)]
 enum ValidBlock { Current, Discovered }
 #[derive(Debug)]
-enum BlockSequence { LikelyReorg( ReorgIndicator ), NonSequential(i32) }
+enum BlockSequence { LikelyReorg( ReorgIndicator ), NonSequential(i32), BlocksEmpty }
 #[derive(Debug)]
 enum ReorgIndicator { SameHeighMismatch(i32), PrevHeightMismatch(i32) }
 pub struct LightWallet {
@@ -1136,29 +1136,30 @@ impl LightWallet {
     }
 
         
-    fn validate_correct_block_sequence(&self, block: &CompactBlock) -> BlockSequenceState {
+    fn validate_block_sequence(&self, block: &CompactBlock) -> BlockSequenceState {
         // The block we are scanning might be in one of these states:
+        // 0. Invalid Because: self.blocks was empty, `set_initial_block` not called.
         // 1. Invalid Because: it has the same height and a different digest to the tip
         // 2. Valid Because:   is has the same height and same digest as the tip.
         // 3. Invalid Because: its height is not at tip_height + 1
         // 4. Invalid Because: the block is in sequence (not 3.) but the tip_digest, does not match the block's prev_hash
         // 5. Valid Because: the block is in sequence and its prev_hash matches the tip_digest
+        //if self.blocks.len() == 0 { return BlockSequenceState::Invalid(BlockSequence::BlocksEmpty)};
         let height = block.get_height() as i32;
-        let tip_digest = self.blocks.read().unwrap().last().map(|block| block.hash);
-        println!("tip_digest is: {}", tip_digest);
         if height == self.last_scanned_height() {
-            // If heights match then: 
-            if block.hash() != tip_digest {
-                // the blocks don't match, this could indicate a reorg.
-                warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), tip_digest);
-                return BlockSequenceState
-                         ::Invalid(BlockSequence
-                                     ::LikelyReorg(ReorgIndicator
-                                                     ::SameHeighMismatch(height))); // State 1
-            } else if block.hash() == tip_digest { // Written explicitly for clarity.
-                // or we have re-received the same block as the chain tip.
-                return BlockSequenceState::Valid(ValidBlock::Current); //State 2
-            };
+            // If the last scanned block is rescanned, check it still matches.
+            if let Some(tip_digest) = self.blocks.read().unwrap().last().map(|block| block.hash) {
+                if block.hash() != tip_digest {
+                    // the blocks don't match, this could indicate a reorg.
+                    warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), tip_digest);
+                    return BlockSequenceState
+                             ::Invalid(BlockSequence
+                                         ::LikelyReorg(ReorgIndicator
+                                                         ::SameHeighMismatch(height))); // State 1
+                }
+            }
+            // or we have re-received the same block as the chain tip.
+            return BlockSequenceState::Valid(ValidBlock::Current); //State 2
         }; 
         if height != (self.last_scanned_height() +1) {
           // Scanned blocks MUST be height-sequential.
@@ -1169,13 +1170,15 @@ impl LightWallet {
             );
             return BlockSequenceState::Invalid(BlockSequence::NonSequential(self.last_scanned_height())); // State 3
         }
-        // Check to see that the previous tip_digest matches
-        if block.prev_hash() != tip_digest {
-            warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), tip_digest);
-            return BlockSequenceState::Invalid(BlockSequence
-                                               ::LikelyReorg(ReorgIndicator
-                                                    ::PrevHeightMismatch(height-1))); // State 4
-        };
+        if let Some(tip_digest) = self.blocks.read().unwrap().last().map(|block| block.hash) {
+            // Check to see that the previous tip_digest matches
+            if block.prev_hash() != tip_digest {
+                warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), tip_digest);
+                return BlockSequenceState::Invalid(BlockSequence
+                                                   ::LikelyReorg(ReorgIndicator
+                                                        ::PrevHeightMismatch(height-1))); // State 4
+            };
+        }
         BlockSequenceState::Valid(ValidBlock::Discovered) // State 5
     }
 
@@ -1189,13 +1192,14 @@ impl LightWallet {
             }
         };
 
-        match self.validate_correct_block_sequence(&block) {
+        match self.validate_block_sequence(&block) {
             BlockSequenceState::Invalid(s) => match s {
                 BlockSequence::LikelyReorg(i) => match i {
                     ReorgIndicator::SameHeighMismatch(v) => return Err(v as i32),
                     ReorgIndicator::PrevHeightMismatch(v) => return Err(v as i32)
                 },
                 BlockSequence::NonSequential(v) => return Err(v as i32),
+                BlockSequence::BlocksEmpty => return Err(-2),
             },
             BlockSequenceState::Valid(s) => match s {
                 ValidBlock::Current => return Ok(vec![]),
