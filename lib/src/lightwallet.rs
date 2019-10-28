@@ -1144,7 +1144,8 @@ impl LightWallet {
         // 4. Invalid Because: the block is in sequence (not 3.) but the tip_digest, does not match the block's prev_hash
         // 5. Valid Because: the block is in sequence and its prev_hash matches the tip_digest
         let height = block.get_height() as i32;
-        let tip_digest = self.blocks.read().unwrap().last().map(|topblock| topblock.hash).expect("Expected a digest!"); 
+        let tip_digest = self.blocks.read().unwrap().last().map(|block| block.hash);
+        println!("tip_digest is: {}", tip_digest);
         if height == self.last_scanned_height() {
             // If heights match then: 
             if block.hash() != tip_digest {
@@ -1177,6 +1178,7 @@ impl LightWallet {
         };
         BlockSequenceState::Valid(ValidBlock::Discovered) // State 5
     }
+
     // Scan a block. Will return an error with the block height that failed to scan
     pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
         let block: CompactBlock = match parse_from_bytes(block_bytes) {

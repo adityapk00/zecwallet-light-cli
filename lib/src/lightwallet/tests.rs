@@ -690,6 +690,11 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
 }
 
 #[test]
+fn test_validate_correct_block_sequence() {
+    get_test_wallet(50_000);
+}
+
+#[test]
 fn test_z_spend_to_z() {
     const AMOUNT1: u64 = 50000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
