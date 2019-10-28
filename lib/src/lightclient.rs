@@ -712,7 +712,11 @@ impl LightClient {
 
         // Add in all mempool txns
         tx_list.extend(wallet.mempool_txs.read().unwrap().iter().map( |(_, wtx)| {
-            let amount = wtx.outgoing_metadata.iter().map(|om| om.value).sum::<u64>();
+            use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
+            use std::convert::TryInto;
+            
+            let amount: u64 = wtx.outgoing_metadata.iter().map(|om| om.value).sum::<u64>();
+            let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
             // Collect outgoing metadata
             let outgoing_json = wtx.outgoing_metadata.iter()
@@ -727,7 +731,8 @@ impl LightClient {
                 "block_height" => wtx.block,
                 "datetime"     => wtx.datetime,
                 "txid"         => format!("{}", wtx.txid),
-                "amount"       => -1 * amount as i64,
+                "amount"       => -1 * (fee + amount) as i64,
+                "unconfirmed"  => true,
                 "outgoing_metadata" => outgoing_json,
             }
         }));
