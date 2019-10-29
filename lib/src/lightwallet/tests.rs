@@ -706,6 +706,12 @@ fn test_z_spend_to_z() {
     let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
     let (ss, so) = get_sapling_params().unwrap();
 
+    // Make sure that the balance exists 
+    {
+        assert_eq!(wallet.zbalance(None), AMOUNT1);
+        assert_eq!(wallet.verified_zbalance(None), AMOUNT1);
+    }
+
     // Create a tx and send to address
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
                             vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
@@ -734,6 +740,12 @@ fn test_z_spend_to_z() {
         assert_eq!(mem[&sent_txid].outgoing_metadata[0].address, ext_address);
         assert_eq!(mem[&sent_txid].outgoing_metadata[0].value, AMOUNT_SENT);
         assert_eq!(mem[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+    }
+
+    {
+        // The wallet should deduct this from the balance and verified balance
+        assert_eq!(wallet.zbalance(None), 0);
+        assert_eq!(wallet.verified_zbalance(None), 0);
     }
 
     let mut cb3 = FakeCompactBlock::new(2, block_hash);
