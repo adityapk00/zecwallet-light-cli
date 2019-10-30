@@ -460,9 +460,7 @@ impl Command for SendCommand {
 
         // Check for a single argument that can be parsed as JSON
         let send_args = if args.len() == 1 {
-            // Sometimes on the command line, people use "'" for the quotes, which json::parse doesn't
-            // understand. So replace it with double-quotes
-            let arg_list = args[0].replace("'", "\"");
+            let arg_list = args[0];
 
             let json_args = match json::parse(&arg_list) {
                 Ok(j)  => j,
