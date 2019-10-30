@@ -45,6 +45,7 @@ fn get_sapling_params() -> Result<(Vec<u8>, Vec<u8>), Error> {
     Ok((sapling_spend, sapling_output))
 }
 
+#[derive(Debug)]
 struct FakeCompactBlock {
     block: CompactBlock,
 }
@@ -661,16 +662,46 @@ fn get_test_config() -> LightClientConfig {
     }
 }
 
+#[test]
+fn test_hex_encode_decode(){
+    let mut tbytes = [0u8; 1];
+    hex::decode_to_slice("01", &mut tbytes).expect("decode failed");
+    assert_eq!(2, 2);
+    assert_eq!(tbytes, [1]);
+    hex::decode_to_slice("ff", &mut tbytes).expect("decode failed");
+    assert_eq!(tbytes, [255]);
+    let mut morebytes = [0u8; 32];
+    hex::decode_to_slice("0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
+                         &mut morebytes).unwrap();
+    println!("{:?}", morebytes);
+}
 // Get a test wallet already setup with a single note
 fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
     let config = get_test_config();
 
     let wallet = LightWallet::new(None, &config, 0).unwrap();
 
-    let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
-    let (_, txid1) = cb1.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), amount);
-    wallet.scan_block(&cb1.as_bytes()).unwrap();
-
+    let mut digest_bytes = [0u8; 32];
+    hex::decode_to_slice(
+        "0107385846c7451480912c294b6ce1ee1feba6c2619079fd9104f6e71e4d8fe7",
+        &mut digest_bytes
+    ).expect("Unable to represent hex string from checkpoints as byte array!");
+    let mut reverse_buffer: Vec<u8> = vec![];
+    for i in digest_bytes.iter() {reverse_buffer.insert(0, *i);}
+    digest_bytes.copy_from_slice(&reverse_buffer);
+    let mut first_block_scanned_in =
+        FakeCompactBlock::new(600_001, BlockHash(digest_bytes));
+    println!("{:#?}", first_block_scanned_in);
+    let (_, txid1) = first_block_scanned_in.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), amount);
+    match config.get_initial_state(600_000) {
+        Some((height, hash, tree)) => {
+                wallet.set_initial_block(height.try_into().expect("Unable to fallibly convert u64 to i32!"), hash, tree);
+                println!("about to scan_block");
+                wallet.scan_block(&first_block_scanned_in.as_bytes()).unwrap();
+                println!("block scan complete!");
+        },
+        None                       => panic!("Couldn't get initial state from config!"),
+    }
     // We have one note
     {
         let txs = wallet.txs.read().unwrap();
@@ -683,14 +714,15 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
     assert_eq!(wallet.verified_zbalance(None), amount);
 
     // Create a new block so that the note is now verified to be spent
-    let cb2 = FakeCompactBlock::new(1, cb1.hash());
+    let cb2 = FakeCompactBlock::new(600_002, first_block_scanned_in.hash());
     wallet.scan_block(&cb2.as_bytes()).unwrap();
 
     (wallet, txid1, cb2.hash())
 }
 
 #[test]
-fn test_validate_block_sequence() {
+fn test_get_test_wallet() {
+    println!("test_get_test_wallet");
     get_test_wallet(50_000);
 }
 

@@ -1144,14 +1144,20 @@ impl LightWallet {
         // 3. Invalid Because: its height is not at tip_height + 1
         // 4. Invalid Because: the block is in sequence (not 3.) but the tip_digest, does not match the block's prev_hash
         // 5. Valid Because: the block is in sequence and its prev_hash matches the tip_digest
-        //if self.blocks.len() == 0 { return BlockSequenceState::Invalid(BlockSequence::BlocksEmpty)};
+        println!("validate_block_sequence");
         let height = block.get_height() as i32;
+        let blockchain = self.blocks.read().expect("Unable to read block chain!");
+        if blockchain.is_empty() { return BlockSequenceState::Invalid(BlockSequence::BlocksEmpty)};
+        println!("blockchain is not empty!");
         if height == self.last_scanned_height() {
+            println!("HEIGHT _IS_ SELF.LAST_SCANNED_HEIGHT!!!");
+            warn!("This is a warning message!");
             // If the last scanned block is rescanned, check it still matches.
-            if let Some(tip_digest) = self.blocks.read().unwrap().last().map(|block| block.hash) {
+            if let Some(tip_digest) = blockchain.last().map(|block| block.hash) {
                 if block.hash() != tip_digest {
                     // the blocks don't match, this could indicate a reorg.
                     warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), tip_digest);
+                    println!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), tip_digest);
                     return BlockSequenceState
                              ::Invalid(BlockSequence
                                          ::LikelyReorg(ReorgIndicator
@@ -1161,8 +1167,10 @@ impl LightWallet {
             // or we have re-received the same block as the chain tip.
             return BlockSequenceState::Valid(ValidBlock::Current); //State 2
         }; 
-        if height != (self.last_scanned_height() +1) {
-          // Scanned blocks MUST be height-sequential.
+        println!("height != self.last_scanned_height!");
+        if height != (self.last_scanned_height() + 1) {
+            println!("height: {} != self.last_scanned_height(): {} + 1!", height, self.last_scanned_height());
+            // Scanned blocks MUST be height-sequential.
             error!(
                 "Block is not height-sequential (expected {}, found {})",
                 self.last_scanned_height() + 1,
@@ -1170,15 +1178,19 @@ impl LightWallet {
             );
             return BlockSequenceState::Invalid(BlockSequence::NonSequential(self.last_scanned_height())); // State 3
         }
-        if let Some(tip_digest) = self.blocks.read().unwrap().last().map(|block| block.hash) {
+        if let Some(tip_digest) = blockchain.last().map(|block| block.hash) {
             // Check to see that the previous tip_digest matches
             if block.prev_hash() != tip_digest {
+                println!("block: {:#?}", block);
+                println!("blockchain.last().hash: {:#?}", blockchain.last().unwrap().hash);
                 warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), tip_digest);
+                println!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), tip_digest);
                 return BlockSequenceState::Invalid(BlockSequence
                                                    ::LikelyReorg(ReorgIndicator
                                                         ::PrevHeightMismatch(height-1))); // State 4
             };
         }
+        println!("Almost done with validate block sequence!");
         BlockSequenceState::Valid(ValidBlock::Discovered) // State 5
     }
 

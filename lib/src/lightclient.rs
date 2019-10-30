@@ -210,6 +210,7 @@ impl LightClientConfig {
 }
 
 pub struct LightClient {
+    /// Source of truth that the LightClient uses to initialize a wallet.
     pub wallet          : Arc<RwLock<LightWallet>>,
 
     pub config          : LightClientConfig,
