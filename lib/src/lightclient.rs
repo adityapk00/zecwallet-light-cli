@@ -639,6 +639,14 @@ impl LightClient {
         res
     }
 
+    pub fn do_encryption_status(&self) -> JsonValue {
+        let wallet = self.wallet.read().unwrap();
+        object!{
+            "encrypted" => wallet.is_encrypted(),
+            "locked"    => !wallet.is_unlocked_for_spending()
+        }
+    }
+
     pub fn do_list_transactions(&self) -> JsonValue {
         let wallet = self.wallet.read().unwrap();
 
