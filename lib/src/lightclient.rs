@@ -75,6 +75,13 @@ impl LightClientConfig {
     }
 
     pub fn create(server: http::Uri, dangerous: bool) -> io::Result<(LightClientConfig, u64)> {
+        use std::net::ToSocketAddrs;
+        // Test for a connection first
+        format!("{}:{}", server.host().unwrap(), server.port_part().unwrap())
+            .to_socket_addrs()?
+            .next()
+            .ok_or(std::io::Error::new(ErrorKind::ConnectionRefused, "Couldn't resolve server!"))?;
+
         // Do a getinfo first, before opening the wallet
         let info = grpcconnector::get_info(server.clone(), dangerous)
             .map_err(|e| std::io::Error::new(ErrorKind::ConnectionRefused, e))?;
