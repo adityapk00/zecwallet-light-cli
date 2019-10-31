@@ -743,8 +743,8 @@ fn test_z_spend_to_z() {
     }
 
     {
-        // The wallet should deduct this from the balance and verified balance
-        assert_eq!(wallet.zbalance(None), 0);
+        // The wallet should deduct this from the verified balance. The zbalance still includes it
+        assert_eq!(wallet.zbalance(None), AMOUNT1);
         assert_eq!(wallet.verified_zbalance(None), 0);
     }
 
@@ -763,6 +763,7 @@ fn test_z_spend_to_z() {
         // The sent tx should generate change
         assert_eq!(txs[&sent_txid].notes.len(), 1);
         assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - AMOUNT_SENT - fee);
+        assert_eq!(wallet.zbalance(None), AMOUNT1 - AMOUNT_SENT - fee);
         assert_eq!(txs[&sent_txid].notes[0].is_change, true);
         assert_eq!(txs[&sent_txid].notes[0].spent, None);
         assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
