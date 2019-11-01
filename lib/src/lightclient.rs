@@ -121,7 +121,14 @@ impl LightClientConfig {
             };
         }
 
-        zcash_data_location.into_boxed_path()
+        // Create directory if it doesn't exist
+        match std::fs::create_dir_all(zcash_data_location.clone()) {
+            Ok(_) => zcash_data_location.into_boxed_path(),
+            Err(e) => {
+                eprintln!("Couldn't create zcash directory!\n{}", e);
+                panic!("Couldn't create zcash directory!");
+            }
+        }
     }
 
     pub fn get_wallet_path(&self) -> Box<Path> {
