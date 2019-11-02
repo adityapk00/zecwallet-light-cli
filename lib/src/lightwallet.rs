@@ -88,6 +88,10 @@ impl ToBase58Check for [u8] {
     }
 }
 
+enum BlockSequenceState { Valid(ValidBlock), Invalid(BlockSequence) }
+enum ValidBlock { Current, Discovered, SaplingRoot }
+enum BlockSequence { LikelyReorg( ReorgIndicator ), NonSequential(i32) }
+enum ReorgIndicator { SameHeighMismatch(i32), PrevHeightMismatch(i32) }
 pub struct LightWallet {
     // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
     // and the individual spending keys are not written    
@@ -1137,6 +1141,55 @@ impl LightWallet {
         num_invalidated as u64
     }
 
+        
+    fn validate_block_sequence(&self, block: &CompactBlock) -> BlockSequenceState {
+        // The block we are scanning might be in one of these states:
+        // 0. Potentially Valid: It is height 0 the Sapling Genesis Block
+        // 1. Invalid: it has the same height and a different digest to the tip
+        // 2. Potentially Valid: is has the same height and same digest as the tip, it is the tip.
+        // 3. Invalid: its height is not at tip_height + 1
+        // 4. Invalid: the block is in sequence (not 3.) but the tip_digest, does not match the block's prev_hash
+        // 5. Potentially Valid: the block is in sequence and its prev_hash matches the tip_digest
+        let height = block.get_height() as i32;
+        let blockchain = self.blocks.read().expect("Unable to read block chain!");
+        if blockchain.is_empty() { return BlockSequenceState::Valid(ValidBlock::SaplingRoot)}; // State 0
+        if height == self.last_scanned_height() {
+            warn!("This is a warning message!");
+            // If the last scanned block is rescanned, check it still matches.
+            if let Some(tip_digest) = blockchain.last().map(|block| block.hash) {
+                if block.hash() != tip_digest {
+                    // the blocks don't match, this could indicate a reorg.
+                    warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), tip_digest);
+                    return BlockSequenceState
+                             ::Invalid(BlockSequence
+                                         ::LikelyReorg(ReorgIndicator
+                                                         ::SameHeighMismatch(height))); // State 1
+                }
+            }
+            // or we have re-received the same block as the chain tip.
+            return BlockSequenceState::Valid(ValidBlock::Current); //State 2
+        }; 
+        if height != (self.last_scanned_height() + 1) {
+            // Scanned blocks MUST be height-sequential.
+            error!(
+                "Block is not height-sequential (expected {}, found {})",
+                self.last_scanned_height() + 1,
+                height
+            );
+            return BlockSequenceState::Invalid(BlockSequence::NonSequential(self.last_scanned_height())); // State 3
+        }
+        if let Some(tip_digest) = blockchain.last().map(|block| block.hash) {
+            // Check to see that the previous tip_digest matches
+            if block.prev_hash() != tip_digest {
+                warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), tip_digest);
+                return BlockSequenceState::Invalid(BlockSequence
+                                                   ::LikelyReorg(ReorgIndicator
+                                                        ::PrevHeightMismatch(height-1))); // State 4
+            };
+        }
+        BlockSequenceState::Valid(ValidBlock::Discovered) // State 5
+    }
+
     // Scan a block. Will return an error with the block height that failed to scan
     pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
         let block: CompactBlock = match parse_from_bytes(block_bytes) {
@@ -1147,34 +1200,22 @@ impl LightWallet {
             }
         };
 
-        // Scanned blocks MUST be height-sequential.
+        match self.validate_block_sequence(&block) {
+            BlockSequenceState::Invalid(s) => match s {
+                BlockSequence::LikelyReorg(i) => match i {
+                    ReorgIndicator::SameHeighMismatch(v) => return Err(v as i32),
+                    ReorgIndicator::PrevHeightMismatch(v) => return Err(v as i32)
+                },
+                BlockSequence::NonSequential(v) => return Err(v as i32),
+            },
+            BlockSequenceState::Valid(s) => match s {
+                ValidBlock::Current => return Ok(vec![]),
+                ValidBlock::SaplingRoot => {},
+                ValidBlock::Discovered => {}
+            }
+        };
+
         let height = block.get_height() as i32;
-        if height == self.last_scanned_height() {
-            // If the last scanned block is rescanned, check it still matches.
-            if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
-                if block.hash() != hash {
-                    warn!("Likely reorg. Block hash does not match for block {}. {} vs {}", height, block.hash(), hash);
-                    return Err(height);
-                }
-            }
-            return Ok(vec![]);
-        } else if height != (self.last_scanned_height() + 1) {
-            error!(
-                "Block is not height-sequential (expected {}, found {})",
-                self.last_scanned_height() + 1,
-                height
-            );
-            return Err(self.last_scanned_height());
-        }
-
-        // Check to see that the previous block hash matches
-        if let Some(hash) = self.blocks.read().unwrap().last().map(|block| block.hash) {
-            if block.prev_hash() != hash {
-                warn!("Likely reorg. Prev block hash does not match for block {}. {} vs {}", height, block.prev_hash(), hash);
-                return Err(height-1);
-            }
-        }
-
         // Get the most recent scanned data.
         let mut block_data = BlockData {
             height,
@@ -1639,4 +1680,4 @@ impl LightWallet {
 }
 
 #[cfg(test)]
-pub mod tests;
+mod tests;
