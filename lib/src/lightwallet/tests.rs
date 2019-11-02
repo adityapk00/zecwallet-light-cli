@@ -689,6 +689,71 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
     (wallet, txid1, cb2.hash())
 }
 
+use crate::lightwallet::{BlockSequence, BlockSequenceState, ReorgIndicator, ValidBlock};
+
+#[test]
+fn test_valid_block_sequence_current_block() {
+    let config = get_test_config();
+    let wallet = LightWallet::new(None, &config, 0).unwrap();
+    
+    let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
+    let (_, _) = cb1.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), 1);
+    wallet.scan_block(&cb1.as_bytes()).unwrap();
+
+    let validation = wallet.validate_block_sequence(&protobuf::parse_from_bytes(&cb1.as_bytes()).unwrap());
+    assert_eq!(BlockSequenceState::Valid(ValidBlock::Current), validation);
+}
+
+#[test]
+fn test_valid_block_sequence_genesis_block() {
+    let config = get_test_config();
+    let wallet = LightWallet::new(None, &config, 0).unwrap();
+
+    let block_bytes = FakeCompactBlock::new(0, BlockHash([0; 32])).as_bytes();
+    let validation = wallet.validate_block_sequence(&protobuf::parse_from_bytes(&block_bytes).unwrap());
+    assert_eq!(BlockSequenceState::Valid(ValidBlock::SaplingRoot), validation);
+}
+
+#[test]
+fn test_valid_block_sequence_new_block_discovered() {
+    let (wallet, _, cb2_hash) = get_test_wallet(1);
+    let block_bytes = FakeCompactBlock::new(2, cb2_hash).as_bytes();
+    let validation = wallet.validate_block_sequence(&protobuf::parse_from_bytes(&block_bytes).unwrap());
+    assert_eq!(BlockSequenceState::Valid(ValidBlock::Discovered), validation);
+}
+
+#[test]
+fn test_invalid_block_sequence_different_blocks_at_height_1() {
+    let (wallet, _, _) = get_test_wallet(1);
+    let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
+    let (_, _) = cb1.add_tx_paying(wallet.extfvks.read().unwrap()[0].clone(), 1);
+    let block_bytes = FakeCompactBlock::new(1, cb1.hash()).as_bytes();
+    let validation = wallet.validate_block_sequence(&protobuf::parse_from_bytes(&block_bytes).unwrap());
+    assert_eq!(BlockSequenceState
+               ::Invalid(BlockSequence
+                         ::LikelyReorg(ReorgIndicator::SameHeightMismatch(1))), validation);
+}
+
+#[test]
+fn test_invalid_block_sequence_previous_height_mismatch() {
+    let (wallet, _, _) = get_test_wallet(1);
+    let block_bytes = FakeCompactBlock::new(2, BlockHash([0; 32])).as_bytes();
+    let validation = wallet.validate_block_sequence(&protobuf::parse_from_bytes(&block_bytes).unwrap());
+    assert_eq!(BlockSequenceState
+               ::Invalid(BlockSequence
+                         ::LikelyReorg(ReorgIndicator::PrevHeightMismatch(1))), validation);
+}
+
+#[test]
+fn test_invalid_block_sequence_block_not_next_in_sequence() {
+    let (wallet, _, _) = get_test_wallet(1);
+    let block_bytes = FakeCompactBlock::new(10, BlockHash([0; 32])).as_bytes();
+    let validation = wallet.validate_block_sequence(&protobuf::parse_from_bytes(&block_bytes).unwrap());
+    assert_eq!(BlockSequenceState
+               ::Invalid(BlockSequence
+                         ::NonSequential(1)), validation);
+}
+
 #[test]
 fn test_z_spend_to_z() {
     const AMOUNT1: u64 = 50000;

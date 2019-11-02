@@ -88,10 +88,14 @@ impl ToBase58Check for [u8] {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum BlockSequenceState { Valid(ValidBlock), Invalid(BlockSequence) }
+#[derive(Debug, PartialEq)]
 enum ValidBlock { Current, Discovered, SaplingRoot }
+#[derive(Debug, PartialEq)]
 enum BlockSequence { LikelyReorg( ReorgIndicator ), NonSequential(i32) }
-enum ReorgIndicator { SameHeighMismatch(i32), PrevHeightMismatch(i32) }
+#[derive(Debug, PartialEq)]
+enum ReorgIndicator { SameHeightMismatch(i32), PrevHeightMismatch(i32) }
 pub struct LightWallet {
     // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
     // and the individual spending keys are not written    
@@ -1163,7 +1167,7 @@ impl LightWallet {
                     return BlockSequenceState
                              ::Invalid(BlockSequence
                                          ::LikelyReorg(ReorgIndicator
-                                                         ::SameHeighMismatch(height))); // State 1
+                                                         ::SameHeightMismatch(height))); // State 1
                 }
             }
             // or we have re-received the same block as the chain tip.
@@ -1203,7 +1207,7 @@ impl LightWallet {
         match self.validate_block_sequence(&block) {
             BlockSequenceState::Invalid(s) => match s {
                 BlockSequence::LikelyReorg(i) => match i {
-                    ReorgIndicator::SameHeighMismatch(v) => return Err(v as i32),
+                    ReorgIndicator::SameHeightMismatch(v) => return Err(v as i32),
                     ReorgIndicator::PrevHeightMismatch(v) => return Err(v as i32)
                 },
                 BlockSequence::NonSequential(v) => return Err(v as i32),
