@@ -689,9 +689,18 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
     (wallet, txid1, cb2.hash())
 }
 
+/// This suite of 6 tests exercise all possible states the validate_block_sequence
+/// helper function can return.
+/// The argument ot validate_block_sequence is referred to as the "argument block bytes".
+/// Valid States:   New Block, Current Block (tip), Genesis Block
+///
+/// NOTE: "valid" in this context is
+/// narrowly defined relative to the state of wallet.blocks (self.blocks).
+/// Invalid States: SameHeightMismatch, PrevHeightMismatch, and Nonsequential 
+/// NOTE: "invalid" in this context indicates a probably reorg in the case of mismatches.
 use crate::lightwallet::{BlockSequence, BlockSequenceState, ReorgIndicator, ValidBlock};
-
 #[test]
+// The tip of wallet.blocks is the same as the argument block bytes.
 fn test_valid_block_sequence_current_block() {
     let config = get_test_config();
     let wallet = LightWallet::new(None, &config, 0).unwrap();
@@ -705,6 +714,8 @@ fn test_valid_block_sequence_current_block() {
 }
 
 #[test]
+// The self.blocks member is empty, therefore the argument block bytes are assumed to be the 
+// Sapling Genesis block.
 fn test_valid_block_sequence_genesis_block() {
     let config = get_test_config();
     let wallet = LightWallet::new(None, &config, 0).unwrap();
@@ -715,6 +726,8 @@ fn test_valid_block_sequence_genesis_block() {
 }
 
 #[test]
+// The argument block_bytes are 1 at height tip_height + 1 and generate a valid prev_hash
+// therefore they represent a valid new block with respect to self.blocks.
 fn test_valid_block_sequence_new_block_discovered() {
     let (wallet, _, cb2_hash) = get_test_wallet(1);
     let block_bytes = FakeCompactBlock::new(2, cb2_hash).as_bytes();
@@ -723,6 +736,7 @@ fn test_valid_block_sequence_new_block_discovered() {
 }
 
 #[test]
+// The argument block_bytes, conflict with the block at the same height in self.blocks.
 fn test_invalid_block_sequence_different_blocks_at_height_1() {
     let (wallet, _, _) = get_test_wallet(1);
     let mut cb1 = FakeCompactBlock::new(0, BlockHash([0; 32]));
@@ -735,6 +749,7 @@ fn test_invalid_block_sequence_different_blocks_at_height_1() {
 }
 
 #[test]
+// The argument block bytes, are at tip-height +1 but do not correspond to the tip prev_hash
 fn test_invalid_block_sequence_previous_height_mismatch() {
     let (wallet, _, _) = get_test_wallet(1);
     let block_bytes = FakeCompactBlock::new(2, BlockHash([0; 32])).as_bytes();
@@ -745,6 +760,7 @@ fn test_invalid_block_sequence_previous_height_mismatch() {
 }
 
 #[test]
+// The argument block bytes don't correspond to tip-height plus one.
 fn test_invalid_block_sequence_block_not_next_in_sequence() {
     let (wallet, _, _) = get_test_wallet(1);
     let block_bytes = FakeCompactBlock::new(10, BlockHash([0; 32])).as_bytes();
