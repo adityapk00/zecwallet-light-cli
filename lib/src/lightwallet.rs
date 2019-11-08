@@ -1235,21 +1235,21 @@ impl LightWallet {
         
         // These are filled in inside the block
         let new_txs;
-        let nfs: Vec<_>;
+        let nullifiers: Vec<_>;
         {
             // Create a write lock 
             let mut txs = self.txs.write().unwrap();
 
             // Create a Vec containing all unspent nullifiers.
             // Include only the confirmed spent nullifiers, since unconfirmed ones still need to be included
-            // during scan_block below.
-            nfs = txs
+            // during scan_block below.   XXX  MAYBE THIS COMMENT IS FROM AN EARLIER VERSION?
+            nullifiers = txs
                 .iter()
                 .map(|(txid, tx)| {
                     let txid = *txid;
-                    tx.notes.iter().filter_map(move |nd| {
-                        if nd.spent.is_none() {
-                            Some((nd.nullifier, nd.account, txid))
+                    tx.notes.iter().filter_map(move |sap_note_data| {
+                        if sap_note_data.spent.is_none() {
+                            Some((sap_note_data.nullifier, sap_note_data.account, txid))
                         } else {
                             None
                         }
@@ -1260,26 +1260,26 @@ impl LightWallet {
 
             // Prepare the note witnesses for updating
             for tx in txs.values_mut() {
-                for nd in tx.notes.iter_mut() {
+                for sap_note_data in tx.notes.iter_mut() {
                     // Duplicate the most recent witness
-                    if let Some(witness) = nd.witnesses.last() {
+                    if let Some(witness) = sap_note_data.witnesses.last() {
                         let clone = witness.clone();
-                        nd.witnesses.push(clone);
+                        sap_note_data.witnesses.push(clone);
                     }
                     // Trim the oldest witnesses
-                    nd.witnesses = nd
+                    sap_note_data.witnesses = sap_note_data
                         .witnesses
-                        .split_off(nd.witnesses.len().saturating_sub(100));
+                        .split_off(sap_note_data.witnesses.len().saturating_sub(100));
                 }
             }
 
             new_txs = {
-                let nf_refs: Vec<_> = nfs.iter().map(|(nf, acc, _)| (&nf[..], *acc)).collect();
+                let nf_refs: Vec<_> = nullifiers.iter().map(|(nf, acc, _)| (&nf[..], *acc)).collect();
 
                 // Create a single mutable slice of all the newly-added witnesses.
                 let mut witness_refs: Vec<_> = txs
                     .values_mut()
-                    .map(|tx| tx.notes.iter_mut().filter_map(|nd| nd.witnesses.last_mut()))
+                    .map(|tx| tx.notes.iter_mut().filter_map(|sap_note_data| sap_note_data.witnesses.last_mut()))
                     .flatten()
                     .collect();
 
@@ -1316,7 +1316,7 @@ impl LightWallet {
             info!("Txid {} belongs to wallet", tx.txid);
 
             for spend in &tx.shielded_spends {                
-                let txid = nfs
+                let txid = nullifiers
                     .iter()
                     .find(|(nf, _, _)| &nf[..] == &spend.nf[..])
                     .unwrap()
