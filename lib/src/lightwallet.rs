@@ -166,6 +166,16 @@ impl LightWallet {
         (extsk, extfvk, address)
     }
 
+    pub fn is_shielded_address(addr: &String, config: &LightClientConfig) -> bool {
+        match address::RecipientAddress::from_str(addr,
+                config.hrp_sapling_address(), 
+                config.base58_pubkey_address(), 
+                config.base58_script_address()) {
+            Some(address::RecipientAddress::Shielded(_)) => true,
+            _ => false,
+        }                                    
+    }
+
     pub fn new(seed_phrase: Option<String>, config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
         // This is the source entropy that corresponds to the 24-word seed phrase
         let mut seed_bytes = [0u8; 32];
@@ -1572,7 +1582,14 @@ impl LightWallet {
                             value: *amt,
                             memo: match maybe_memo {
                                 None    => Memo::default(),
-                                Some(s) => Memo::from_str(&s).unwrap(),
+                                Some(s) => {
+                                    // If the address is not a z-address, then drop the memo
+                                    if LightWallet::is_shielded_address(&addr.to_string(), &self.config) {
+                                            Memo::from_str(s).unwrap()
+                                    } else {
+                                        Memo::default()
+                                    }                                        
+                                }
                             },
                         }
                     }).collect::<Vec<_>>();

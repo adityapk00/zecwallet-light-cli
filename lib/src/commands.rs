@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use json::{object};
 
 use crate::lightclient::LightClient;
+use crate::lightwallet::LightWallet;
 
 pub trait Command {
     fn help(&self) -> String;
@@ -487,6 +488,8 @@ impl Command for SendCommand {
                 Err(s) => { return format!("Error: {}\n{}", s, self.help()); }
             }
         } else if args.len() == 2 || args.len() == 3 {
+            let address = args[0].to_string();
+
             // Make sure we can parse the amount
             let value = match args[1].parse::<u64>() {
                 Ok(amt) => amt,
@@ -495,7 +498,12 @@ impl Command for SendCommand {
                 }
             };
 
-            let memo = if args.len() == 3 { Some(args[2].to_string()) } else {None};
+            let memo = if args.len() == 3 { Some(args[2].to_string()) } else { None };
+
+            // Memo has to be None if not sending to a shileded address
+            if memo.is_some() && !LightWallet::is_shielded_address(&address, &lightclient.config) {
+                return format!("Can't send a memo to the non-shielded address {}", address);
+            }
             
             vec![(args[0].to_string(), value, memo)]
         } else {
