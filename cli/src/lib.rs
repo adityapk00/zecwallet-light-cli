@@ -1,18 +1,8 @@
-use std::io::{self, Error, ErrorKind};
+use std::io::{self};
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
 
-use log::{info, error, LevelFilter};
-use log4rs::append::rolling_file::RollingFileAppender;
-use log4rs::encode::pattern::PatternEncoder;
-use log4rs::config::{Appender, Config, Root};
-use log4rs::filter::threshold::ThresholdFilter;
-use log4rs::append::rolling_file::policy::compound::{
-    CompoundPolicy,
-    trigger::size::SizeTrigger,
-    roll::fixed_window::FixedWindowRoller,
-};
-
+use log::{info, error};
 
 use zecwalletlitelib::{commands,
     lightclient::{LightClient, LightClientConfig},
@@ -85,47 +75,10 @@ pub fn report_permission_error() {
     }
 }
 
-/// Build the Logging config
-pub fn get_log_config(config: &LightClientConfig) -> io::Result<Config> {
-    let window_size = 3; // log0, log1, log2
-    let fixed_window_roller =
-        FixedWindowRoller::builder().build("zecwallet-light-wallet-log{}",window_size).unwrap();
-    let size_limit = 5 * 1024 * 1024; // 5MB as max log file size to roll
-    let size_trigger = SizeTrigger::new(size_limit);
-    let compound_policy = CompoundPolicy::new(Box::new(size_trigger),Box::new(fixed_window_roller));
-
-    Config::builder()
-        .appender(
-            Appender::builder()
-                .filter(Box::new(ThresholdFilter::new(LevelFilter::Info)))
-                .build(
-                    "logfile",
-                    Box::new(
-                        RollingFileAppender::builder()
-                            .encoder(Box::new(PatternEncoder::new("{d} {l}::{m}{n}")))
-                            .build(config.get_log_path(), Box::new(compound_policy))?,
-                    ),
-                ),
-        )
-        .build(
-            Root::builder()
-                .appender("logfile")
-                .build(LevelFilter::Debug),
-        )
-        .map_err(|e|Error::new(ErrorKind::Other, format!("{}", e)))
-}
-
-
 pub fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, birthday: u64, first_sync: bool, print_updates: bool)
         -> io::Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
     let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
-
-    // Configure logging first.
-    let log_config = get_log_config(&config)?;
-    log4rs::init_config(log_config).map_err(|e| {
-        std::io::Error::new(ErrorKind::Other, e)
-    })?;
 
     let lightclient = match seed {
         Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, birthday)?),
@@ -138,6 +91,9 @@ pub fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, birthda
             }
         }
     };
+
+    // Initialize logging
+    lightclient.init_logging()?;
 
     // Print startup Messages
     info!(""); // Blank line

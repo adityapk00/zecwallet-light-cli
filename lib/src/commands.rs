@@ -628,10 +628,7 @@ impl Command for HeightCommand {
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         match lightclient.do_sync(true) {
-            Ok(_) => format!("{}",
-                        object! {
-                            "height" => lightclient.last_scanned_height()
-                        }.pretty(2)),
+            Ok(_) => format!("{}", object! { "height" => lightclient.last_scanned_height()}.pretty(2)),
             Err(e) => e
         }
     }
