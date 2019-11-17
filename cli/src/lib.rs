@@ -147,7 +147,7 @@ pub fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Rec
 
     loop {
         // Read the height first
-        let height = json::parse(&send_command("height".to_string(), vec![])).unwrap()["height"].as_i64().unwrap();
+        let height = json::parse(&send_command("height".to_string(), vec!["false".to_string()])).unwrap()["height"].as_i64().unwrap();
 
         let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
                                                     chain_name, height));

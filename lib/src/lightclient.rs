@@ -842,14 +842,20 @@ impl LightClient {
         Ok(array![new_address])
     }
 
-    pub fn do_rescan(&self) -> Result<JsonValue, String> {
-        info!("Rescan starting");
+    pub fn clear_state(&self) {
         // First, clear the state from the wallet
         self.wallet.read().unwrap().clear_blocks();
 
         // Then set the initial block
         self.set_wallet_initial_state(self.wallet.read().unwrap().get_birthday());
+        info!("Cleared wallet state");        
+    }
+
+    pub fn do_rescan(&self) -> Result<JsonValue, String> {
+        info!("Rescan starting");
         
+        self.clear_state();
+
         // Then, do a sync, which will force a full rescan from the initial state
         let response = self.do_sync(true);
         info!("Rescan finished");
