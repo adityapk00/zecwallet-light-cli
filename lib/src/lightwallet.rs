@@ -879,6 +879,32 @@ impl LightWallet {
         }
     }
 
+    // If the last taddress was used, ensure we add the next HD taddress to the wallet. 
+    pub fn ensure_hd_taddresses(&self, address: &String) {
+        let last_address = {
+            self.taddresses.read().unwrap().last().unwrap().clone()
+        };
+        
+        if *last_address == *address {
+            // If the wallet is locked, this is a no-op. That is fine, since we really
+            // need to only add new addresses when restoring a new wallet, when it will not be locked.
+            // Also, if it is locked, the user can't create new addresses anyway. 
+            self.add_taddr();
+        }
+    }
+
+    // If the last zaddress was used, ensure we add the next HD zaddress to the wallet
+    pub fn ensure_hd_zaddresses(&self, address: &String) {
+        let last_address = encode_payment_address(self.config.hrp_sapling_address(), self.zaddress.read().unwrap().last().unwrap());
+        
+        if last_address == *address {
+            // If the wallet is locked, this is a no-op. That is fine, since we really
+            // need to only add new addresses when restoring a new wallet, when it will not be locked.
+            // Also, if it is locked, the user can't create new addresses anyway. 
+            self.add_zaddr();
+        }
+    }
+
     // Scan the full Tx and update memos for incoming shielded transactions.
     pub fn scan_full_tx(&self, tx: &Transaction, height: i32, datetime: u64) {
         let mut total_transparent_spend: u64 = 0;
@@ -934,6 +960,9 @@ impl LightWallet {
                         if address == hash.to_base58check(&self.config.base58_pubkey_address(), &[]) {
                             // This is our address. Add this as an output to the txid
                             self.add_toutput_to_wtx(height, datetime, &tx.txid(), &vout, n as u64);
+
+                            // Ensure that we add any new HD addresses
+                            self.ensure_hd_taddresses(&address);
                         }
                     },
                     _ => {}
@@ -1303,9 +1332,15 @@ impl LightWallet {
             // Save notes.
             for output in tx.shielded_outputs
             {
-                info!("Received sapling output");
-
                 let new_note = SaplingNoteData::new(&self.extfvks.read().unwrap()[output.account], output);
+                match LightWallet::note_address(self.config.hrp_sapling_address(), &new_note) {
+                    Some(a) => {
+                        info!("Received sapling output to {}", a);
+                        self.ensure_hd_zaddresses(&a);
+                    },
+                    None => {}
+                }
+
                 match tx_entry.notes.iter().find(|nd| nd.nullifier == new_note.nullifier) {
                     None => tx_entry.notes.push(new_note),
                     Some(_) => warn!("Tried to insert duplicate note for Tx {}", tx.txid)

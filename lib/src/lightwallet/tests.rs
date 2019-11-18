@@ -845,7 +845,7 @@ fn test_multi_z() {
         assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[change_note_number].memo), None);
 
         assert_eq!(txs[&sent_txid].notes[ext_note_number].note.value, AMOUNT_SENT);
-        assert_eq!(txs[&sent_txid].notes[ext_note_number].account, 1);
+        assert_eq!(txs[&sent_txid].notes[ext_note_number].account, 2);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].is_change, false);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].spent, None);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].unconfirmed_spent, None);
@@ -1085,7 +1085,7 @@ fn test_t_spend_to_z() {
     }
 }
 
-    #[test]
+#[test]
 fn test_z_incoming_memo() {
     const AMOUNT1: u64 = 50000;
     let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT1);
@@ -1125,7 +1125,51 @@ fn test_z_incoming_memo() {
     }
 }
 
-    #[test]
+#[test]
+fn test_add_new_zt_hd_after_incoming() {
+    // When an address recieves funds, a new, unused address should automatically get added 
+    const AMOUNT1: u64 = 50000;
+    let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT1);
+
+    // Get the last address
+    let my_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                        &wallet.extfvks.read().unwrap().last().unwrap().default_address().unwrap().1);
+
+    let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) = get_sapling_params().unwrap();
+
+    assert_eq!(wallet.zaddress.read().unwrap().len(), 2);   // Starts with 2 addresses
+
+    // Create a tx and send to address
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                            vec![(&my_address, AMOUNT1 - fee, None)]).unwrap();
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+
+    // Add it to a block
+    let mut cb3 = FakeCompactBlock::new(2, block_hash);
+    cb3.add_tx(&sent_tx);
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+    assert_eq!(wallet.zaddress.read().unwrap().len(), 3);   // Now has a new address
+    
+
+    let mut rng = OsRng;
+    let secp = Secp256k1::new();
+    // Send a fake transaction to the last taddr
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap().last().unwrap());
+
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 1); // Start with 1 taddr
+
+    let mut tx = FakeTransaction::new(&mut rng);
+    tx.add_t_output(&pk, AMOUNT1);
+
+    wallet.scan_full_tx(&tx.get_tx(), 3, 0);  
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 2); // Now there should be 2 addrs
+}
+
+#[test]
 fn test_z_to_t_withinwallet() {
     const AMOUNT: u64 = 500000;
     const AMOUNT_SENT: u64 = 20000;
@@ -1182,7 +1226,7 @@ fn test_z_to_t_withinwallet() {
     }
 }
 
-    #[test]
+#[test]
 fn test_multi_t() {
     const AMOUNT: u64 = 5000000;
     const AMOUNT_SENT1: u64 = 20000;
@@ -1368,7 +1412,7 @@ fn test_multi_spends() {
 
         // Find zaddr2
         let zaddr2_note = txs[&sent_txid].notes.iter().find(|n| n.note.value == ZAMOUNT2).unwrap();
-        assert_eq!(zaddr2_note.account, 2-1);
+        assert_eq!(zaddr2_note.account, 2);
         assert_eq!(zaddr2_note.is_change, false);
         assert_eq!(zaddr2_note.spent, None);
         assert_eq!(zaddr2_note.unconfirmed_spent, None);
@@ -1376,7 +1420,7 @@ fn test_multi_spends() {
 
         // Find zaddr3
         let zaddr3_note = txs[&sent_txid].notes.iter().find(|n| n.note.value == ZAMOUNT3).unwrap();
-        assert_eq!(zaddr3_note.account, 3-1);
+        assert_eq!(zaddr3_note.account, 3);
         assert_eq!(zaddr3_note.is_change, false);
         assert_eq!(zaddr3_note.spent, None);
         assert_eq!(zaddr3_note.unconfirmed_spent, None);
@@ -1737,8 +1781,8 @@ fn test_lock_unlock() {
     // Add some addresses
     let zaddr0 = encode_payment_address(config.hrp_sapling_address(), 
                                         &wallet.extfvks.read().unwrap()[0].default_address().unwrap().1);
-    let zaddr1 = wallet.add_zaddr();
-    let zaddr2 = wallet.add_zaddr();
+    let zaddr1 = wallet.add_zaddr(); // This is actually address at index 2
+    let zaddr2 = wallet.add_zaddr(); // This is actually address at index 3
 
     let taddr0 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
     let taddr1 = wallet.add_taddr();
@@ -1769,15 +1813,15 @@ fn test_lock_unlock() {
     {
         let extsks = wallet.extsks.read().unwrap();
         let tkeys = wallet.tkeys.read().unwrap();
-        assert_eq!(extsks.len(), 3);
+        assert_eq!(extsks.len(), 4); // 3 zaddrs + 1 added originally in get_test_wallet()
         assert_eq!(tkeys.len(), 3);
 
         assert_eq!(zaddr0, encode_payment_address(config.hrp_sapling_address(), 
                                 &ExtendedFullViewingKey::from(&extsks[0]).default_address().unwrap().1));
         assert_eq!(zaddr1, encode_payment_address(config.hrp_sapling_address(), 
-                                &ExtendedFullViewingKey::from(&extsks[1]).default_address().unwrap().1));
-        assert_eq!(zaddr2, encode_payment_address(config.hrp_sapling_address(), 
                                 &ExtendedFullViewingKey::from(&extsks[2]).default_address().unwrap().1));
+        assert_eq!(zaddr2, encode_payment_address(config.hrp_sapling_address(), 
+                                &ExtendedFullViewingKey::from(&extsks[3]).default_address().unwrap().1));
 
         assert_eq!(taddr0, wallet.address_from_sk(&tkeys[0]));
         assert_eq!(taddr1, wallet.address_from_sk(&tkeys[1]));
@@ -1805,15 +1849,15 @@ fn test_lock_unlock() {
     {
         let extsks = wallet2.extsks.read().unwrap();
         let tkeys = wallet2.tkeys.read().unwrap();
-        assert_eq!(extsks.len(), 3);
+        assert_eq!(extsks.len(), 4);
         assert_eq!(tkeys.len(), 3);
 
         assert_eq!(zaddr0, encode_payment_address(wallet2.config.hrp_sapling_address(), 
                                 &ExtendedFullViewingKey::from(&extsks[0]).default_address().unwrap().1));
         assert_eq!(zaddr1, encode_payment_address(wallet2.config.hrp_sapling_address(), 
-                                &ExtendedFullViewingKey::from(&extsks[1]).default_address().unwrap().1));
-        assert_eq!(zaddr2, encode_payment_address(wallet2.config.hrp_sapling_address(), 
                                 &ExtendedFullViewingKey::from(&extsks[2]).default_address().unwrap().1));
+        assert_eq!(zaddr2, encode_payment_address(wallet2.config.hrp_sapling_address(), 
+                                &ExtendedFullViewingKey::from(&extsks[3]).default_address().unwrap().1));
 
         assert_eq!(taddr0, wallet2.address_from_sk(&tkeys[0]));
         assert_eq!(taddr1, wallet2.address_from_sk(&tkeys[1]));
@@ -1996,7 +2040,7 @@ fn test_encrypted_zreceive() {
 
         // Find zaddr2
         let zaddr2_note = txs[&txid2].notes.iter().find(|n| n.note.value == ZAMOUNT2).unwrap();
-        assert_eq!(zaddr2_note.account, 1);
+        assert_eq!(zaddr2_note.account, 2);
         assert_eq!(zaddr2_note.is_change, false);
         assert_eq!(zaddr2_note.spent, None);
         assert_eq!(zaddr2_note.unconfirmed_spent, None);

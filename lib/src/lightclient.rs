@@ -852,6 +852,10 @@ impl LightClient {
     }
 
     pub fn do_rescan(&self) -> Result<JsonValue, String> {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            warn!("Wallet is locked, new HD addresses won't be added!");
+        }
+        
         info!("Rescan starting");
         
         self.clear_state();
