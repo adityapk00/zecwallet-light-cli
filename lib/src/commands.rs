@@ -658,7 +658,7 @@ impl Command for HeightCommand {
             return format!("Didn't understand arguments\n{}", self.help());
         }
 
-        if args.len() == 1 && args[0].trim() == "true" {
+        if args.len() == 0 || (args.len() == 1 && args[0].trim() == "true") {
             match lightclient.do_sync(true) {
                 Ok(_) => format!("{}", object! { "height" => lightclient.last_scanned_height()}.pretty(2)),
                 Err(e) => e
