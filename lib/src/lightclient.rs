@@ -720,7 +720,7 @@ impl LightClient {
             .flat_map(| (_k, v) | {
                 let mut txns: Vec<JsonValue> = vec![];
 
-                if v.total_shielded_value_spent > 0 {
+                if v.total_shielded_value_spent + v.total_transparent_value_spent > 0 {
                     // If money was spent, create a transaction. For this, we'll subtract
                     // all the change notes. TODO: Add transparent change here to subtract it also
                     let total_change: u64 = v.notes.iter()
