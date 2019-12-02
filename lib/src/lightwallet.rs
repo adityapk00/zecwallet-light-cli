@@ -887,8 +887,11 @@ impl LightWallet {
         };
         
         match last_addresses.iter().position(|s| *s == *address) {
-            None => return,
+            None => {                
+                return;
+            },
             Some(pos) => {
+                info!("Adding {} new zaddrs", (GAP_RULE_UNUSED_ADDRESSES - pos));
                 // If it in the last unused, addresses, create that many more
                 for _ in 0..(GAP_RULE_UNUSED_ADDRESSES - pos) {
                     // If the wallet is locked, this is a no-op. That is fine, since we really
@@ -909,8 +912,11 @@ impl LightWallet {
         };
         
         match last_addresses.iter().position(|s| *s == *address) {
-            None => return,
+            None => {
+                return;
+            },
             Some(pos) => {
+                info!("Adding {} new zaddrs", (GAP_RULE_UNUSED_ADDRESSES - pos));
                 // If it in the last unused, addresses, create that many more
                 for _ in 0..(GAP_RULE_UNUSED_ADDRESSES - pos) {
                     // If the wallet is locked, this is a no-op. That is fine, since we really
