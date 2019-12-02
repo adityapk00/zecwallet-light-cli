@@ -52,6 +52,7 @@ use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTx
 use extended_key::{KeyIndex, ExtendedPrivKey};
 
 pub const MAX_REORG: usize = 100;
+pub const GAP_RULE_UNUSED_ADDRESSES: usize = 5;
 
 fn now() -> f64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
@@ -879,29 +880,45 @@ impl LightWallet {
         }
     }
 
-    // If the last taddress was used, ensure we add the next HD taddress to the wallet. 
-    pub fn ensure_hd_taddresses(&self, address: &String) {
-        let last_address = {
-            self.taddresses.read().unwrap().last().unwrap().clone()
+    // If one of the last 'n' taddress was used, ensure we add the next HD taddress to the wallet. 
+    pub fn ensure_hd_taddresses(&self, address: &String) {        
+        let last_addresses = {
+            self.taddresses.read().unwrap().iter().rev().take(GAP_RULE_UNUSED_ADDRESSES).map(|s| s.clone()).collect::<Vec<String>>()
         };
         
-        if *last_address == *address {
-            // If the wallet is locked, this is a no-op. That is fine, since we really
-            // need to only add new addresses when restoring a new wallet, when it will not be locked.
-            // Also, if it is locked, the user can't create new addresses anyway. 
-            self.add_taddr();
+        match last_addresses.iter().position(|s| *s == *address) {
+            None => return,
+            Some(pos) => {
+                // If it in the last unused, addresses, create that many more
+                for _ in 0..(GAP_RULE_UNUSED_ADDRESSES - pos) {
+                    // If the wallet is locked, this is a no-op. That is fine, since we really
+                    // need to only add new addresses when restoring a new wallet, when it will not be locked.
+                    // Also, if it is locked, the user can't create new addresses anyway. 
+                    self.add_taddr();
+                }
+            }
         }
     }
 
-    // If the last zaddress was used, ensure we add the next HD zaddress to the wallet
+    // If one of the last 'n' zaddress was used, ensure we add the next HD zaddress to the wallet
     pub fn ensure_hd_zaddresses(&self, address: &String) {
-        let last_address = encode_payment_address(self.config.hrp_sapling_address(), self.zaddress.read().unwrap().last().unwrap());
+        let last_addresses = {
+            self.zaddress.read().unwrap().iter().rev().take(GAP_RULE_UNUSED_ADDRESSES)
+                .map(|s| encode_payment_address(self.config.hrp_sapling_address(), s))
+                .collect::<Vec<String>>()
+        };
         
-        if last_address == *address {
-            // If the wallet is locked, this is a no-op. That is fine, since we really
-            // need to only add new addresses when restoring a new wallet, when it will not be locked.
-            // Also, if it is locked, the user can't create new addresses anyway. 
-            self.add_zaddr();
+        match last_addresses.iter().position(|s| *s == *address) {
+            None => return,
+            Some(pos) => {
+                // If it in the last unused, addresses, create that many more
+                for _ in 0..(GAP_RULE_UNUSED_ADDRESSES - pos) {
+                    // If the wallet is locked, this is a no-op. That is fine, since we really
+                    // need to only add new addresses when restoring a new wallet, when it will not be locked.
+                    // Also, if it is locked, the user can't create new addresses anyway. 
+                    self.add_zaddr();
+                }
+            }
         }
     }
 
