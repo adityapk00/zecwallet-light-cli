@@ -839,6 +839,8 @@ impl LightClient {
             }
         };
 
+        self.do_save()?;
+
         Ok(array![new_address])
     }
 
