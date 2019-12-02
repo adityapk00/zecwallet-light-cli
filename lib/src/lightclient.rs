@@ -827,15 +827,17 @@ impl LightClient {
             return Err("Wallet is locked".to_string());
         }
 
-        let wallet = self.wallet.write().unwrap();
+        let new_address = {
+            let wallet = self.wallet.write().unwrap();
 
-        let new_address = match addr_type {
-            "z" => wallet.add_zaddr(),
-            "t" => wallet.add_taddr(),
-            _   => {
-                let e = format!("Unrecognized address type: {}", addr_type);
-                error!("{}", e);
-                return Err(e);
+            match addr_type {
+                "z" => wallet.add_zaddr(),
+                "t" => wallet.add_taddr(),
+                _   => {
+                    let e = format!("Unrecognized address type: {}", addr_type);
+                    error!("{}", e);
+                    return Err(e);
+                }
             }
         };
 
