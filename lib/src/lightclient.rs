@@ -862,6 +862,8 @@ impl LightClient {
 
         // Then, do a sync, which will force a full rescan from the initial state
         let response = self.do_sync(true);
+
+        self.do_save()?;
         info!("Rescan finished");
 
         response
