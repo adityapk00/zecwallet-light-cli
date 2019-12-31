@@ -87,13 +87,13 @@ impl LightClientConfig {
     pub fn create(server: http::Uri, dangerous: bool) -> io::Result<(LightClientConfig, u64)> {
         use std::net::ToSocketAddrs;
         // Test for a connection first
-        format!("{}:{}", server.host().unwrap(), server.port_part().unwrap())
+        format!("{}:{}", server.host().unwrap(), server.port().unwrap())
             .to_socket_addrs()?
             .next()
             .ok_or(std::io::Error::new(ErrorKind::ConnectionRefused, "Couldn't resolve server!"))?;
 
         // Do a getinfo first, before opening the wallet
-        let info = grpcconnector::get_info(server.clone(), dangerous)
+        let info = grpcconnector::get_info(&server, dangerous)
             .map_err(|e| std::io::Error::new(ErrorKind::ConnectionRefused, e))?;
 
         // Create a Light Client Config
@@ -199,7 +199,7 @@ impl LightClientConfig {
             Some(s) => {
                 let mut s = if s.starts_with("http") {s} else { "http://".to_string() + &s};
                 let uri: http::Uri = s.parse().unwrap();
-                if uri.port_part().is_none() {
+                if uri.port().is_none() {
                     s = s + ":443";
                 }
                 s
@@ -583,7 +583,7 @@ impl LightClient {
     }
 
     pub fn do_info(&self) -> String {
-        match get_info(self.get_server_uri(), self.config.no_cert_verification) {
+        match get_info(&self.get_server_uri(), self.config.no_cert_verification) {
             Ok(i) => {
                 let o = object!{
                     "version" => i.version,
