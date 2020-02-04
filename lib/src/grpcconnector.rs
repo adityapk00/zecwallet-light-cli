@@ -1,5 +1,5 @@
 use log::{error};
-use std::{io, fs};
+use std::sync::Arc;
 use zcash_primitives::transaction::{TxId};
 
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
@@ -8,9 +8,27 @@ use tonic::transport::{Channel, ClientTlsConfig};
 use tokio_rustls::{rustls::ClientConfig};
 use tonic::{Request};
 
+use crate::PubCertificate;
 use crate::grpc_client::compact_tx_streamer_client::CompactTxStreamerClient;
 
-async fn get_client(uri: &http::Uri) -> Result<CompactTxStreamerClient<Channel>, Box<dyn std::error::Error>> {
+mod danger {
+    use tokio_rustls::rustls;
+    use webpki;
+
+    pub struct NoCertificateVerification {}
+
+    impl rustls::ServerCertVerifier for NoCertificateVerification {
+        fn verify_server_cert(&self,
+                              _roots: &rustls::RootCertStore,
+                              _presented_certs: &[rustls::Certificate],
+                              _dns_name: webpki::DNSNameRef<'_>,
+                              _ocsp: &[u8]) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
+            Ok(rustls::ServerCertVerified::assertion())
+        }
+    }
+}
+
+async fn get_client(uri: &http::Uri, no_cert: bool) -> Result<CompactTxStreamerClient<Channel>, Box<dyn std::error::Error>> {
     let channel = if uri.scheme_str() == Some("http") {
         //println!("http");
         Channel::builder(uri.clone()).connect().await?
@@ -20,16 +38,13 @@ async fn get_client(uri: &http::Uri) -> Result<CompactTxStreamerClient<Channel>,
 
         config.alpn_protocols.push(b"h2".to_vec());
         config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        config.root_store.add_pem_file(
+                &mut PubCertificate::get("lightwalletd-zecwallet-co-chain.pem").unwrap().as_ref()).unwrap();
         
-        let certfile = fs::File::open("lightwalletd-zecwallet-co-chain.pem").unwrap();
-        let mut reader = io::BufReader::new(certfile);
-        //let crt = tokio_rustls::rustls::internal::pemfile::certs(&mut reader).expect("Read certs");
-        //println!("length {}", crt.len());
-        //config.root_store.add(crt.get(0).unwrap()).unwrap();
-        config.root_store.add_pem_file(&mut reader).unwrap();
-        //println!("{:?}", config.root_store.add_pem_file(&mut reader).unwrap());
-        //println!("{:?}", config.root_store.len()); // 0
-
+        if no_cert {
+            config.dangerous()
+                .set_certificate_verifier(Arc::new(danger::NoCertificateVerification {}));
+        }
 
         let tls = ClientTlsConfig::new()
             .rustls_client_config(config)
@@ -47,8 +62,8 @@ async fn get_client(uri: &http::Uri) -> Result<CompactTxStreamerClient<Channel>,
 // ==============
 // GRPC code
 // ==============
-async fn get_lightd_info(uri: &http::Uri) -> Result<LightdInfo, Box<dyn std::error::Error>> {
-    let mut client = get_client(uri).await?;
+async fn get_lightd_info(uri: &http::Uri, no_cert: bool) -> Result<LightdInfo, Box<dyn std::error::Error>> {
+    let mut client = get_client(uri, no_cert).await?;
 
     let request = Request::new(Empty {});
 
@@ -60,14 +75,14 @@ async fn get_lightd_info(uri: &http::Uri) -> Result<LightdInfo, Box<dyn std::err
 pub fn get_info(uri: &http::Uri, no_cert: bool) -> Result<LightdInfo, String> {
     let mut rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
 
-    rt.block_on(get_lightd_info(uri)).map_err( |e| e.to_string())
+    rt.block_on(get_lightd_info(uri, no_cert)).map_err( |e| e.to_string())
 }
 
 
 async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, no_cert: bool, mut c: F) 
     -> Result<(), Box<dyn std::error::Error>> 
 where F : FnMut(&[u8], u64) {
-    let mut client = get_client(uri).await?;
+    let mut client = get_client(uri, no_cert).await?;
 
     let bs = BlockId{ height: start_height, hash: vec!()};
     let be = BlockId{ height: end_height,   hash: vec!()};
@@ -87,7 +102,7 @@ where F : FnMut(&[u8], u64) {
     Ok(())
 }
 
-pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, no_cert: bool, mut c: F)
+pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, no_cert: bool, c: F)
     where F : FnMut(&[u8], u64) {
     
     let mut rt = match tokio::runtime::Runtime::new() {
@@ -108,7 +123,7 @@ async fn get_address_txids<F : 'static + std::marker::Send>(uri: &http::Uri, add
         start_height: u64, end_height: u64, no_cert: bool, c: F) -> Result<(), Box<dyn std::error::Error>>
     where F : Fn(&[u8], u64) {
 
-    let mut client = get_client(uri).await?;
+    let mut client = get_client(uri, no_cert).await?;
     let start = Some(BlockId{ height: start_height, hash: vec!()});
     let end   = Some(BlockId{ height: end_height,   hash: vec!()});
 
@@ -145,7 +160,7 @@ pub fn fetch_transparent_txids<F : 'static + std::marker::Send>(uri: &http::Uri,
 // get_transaction GRPC call
 async fn get_transaction(uri: &http::Uri, txid: TxId, no_cert: bool) 
     -> Result<RawTransaction, Box<dyn std::error::Error>> {
-    let mut client = get_client(uri).await?;
+    let mut client = get_client(uri, no_cert).await?;
     let request = Request::new(TxFilter { block: None, index: 0, hash: txid.0.to_vec() });
 
     let response = client.get_transaction(request).await?;
@@ -177,7 +192,7 @@ pub fn fetch_full_tx<F : 'static + std::marker::Send>(uri: &http::Uri, txid: TxI
 
 // send_transaction GRPC call
 async fn send_transaction(uri: &http::Uri, no_cert: bool, tx_bytes: Box<[u8]>) -> Result<String, Box<dyn std::error::Error>> {
-    let mut client = get_client(uri).await?;
+    let mut client = get_client(uri, no_cert).await?;
 
     let request = Request::new(RawTransaction {data: tx_bytes.to_vec(), height: 0});
 
@@ -203,8 +218,8 @@ pub fn broadcast_raw_tx(uri: &http::Uri, no_cert: bool, tx_bytes: Box<[u8]>) -> 
 }
 
 // get_latest_block GRPC call
-async fn get_latest_block(uri: &http::Uri) -> Result<BlockId, Box<dyn std::error::Error>> {
-    let mut client = get_client(uri).await?;
+async fn get_latest_block(uri: &http::Uri, no_cert: bool) -> Result<BlockId, Box<dyn std::error::Error>> {
+    let mut client = get_client(uri, no_cert).await?;
 
     let request = Request::new(ChainSpec {});
 
@@ -224,7 +239,7 @@ pub fn fetch_latest_block<F : 'static + std::marker::Send>(uri: &http::Uri, no_c
         }
     };
 
-    match rt.block_on(get_latest_block(uri)) {
+    match rt.block_on(get_latest_block(uri, no_cert)) {
         Ok(b) => c(b),
         Err(e) => {
             error!("Error getting latest block {}", e.to_string());

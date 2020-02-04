@@ -11,6 +11,11 @@ pub mod commands;
 #[folder = "zcash-params/"]
 pub struct SaplingParams;
 
+#[derive(RustEmbed)]
+#[folder = "res/"]
+pub struct PubCertificate;
+
+
 pub const ANCHOR_OFFSET: u32 = 4;
 
 pub mod grpc_client {

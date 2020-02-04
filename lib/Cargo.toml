@@ -28,7 +28,7 @@ bytes = "0.4"
 prost = "0.5"
 prost-types = "0.5"
 tokio = { version = "0.2", features = ["rt-threaded", "time", "stream", "fs", "macros", "uds", "full"] }
-tokio-rustls = "0.12.1"
+tokio-rustls = { version = "0.12.1", features = ["dangerous_configuration"] }
 webpki = "0.21.0"
 webpki-roots = "0.18.0"
 
