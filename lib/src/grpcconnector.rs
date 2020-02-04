@@ -1,5 +1,5 @@
 use log::{error};
-
+use std::{io, fs};
 use zcash_primitives::transaction::{TxId};
 
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
@@ -12,15 +12,25 @@ use crate::grpc_client::compact_tx_streamer_client::CompactTxStreamerClient;
 
 async fn get_client(uri: &http::Uri) -> Result<CompactTxStreamerClient<Channel>, Box<dyn std::error::Error>> {
     let channel = if uri.scheme_str() == Some("http") {
-        println!("http");
+        //println!("http");
         Channel::builder(uri.clone()).connect().await?
     } else {
-        println!("https");
+        //println!("https");
         let mut config = ClientConfig::new();
 
         config.alpn_protocols.push(b"h2".to_vec());
         config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
         
+        let certfile = fs::File::open("lightwalletd-zecwallet-co-chain.pem").unwrap();
+        let mut reader = io::BufReader::new(certfile);
+        //let crt = tokio_rustls::rustls::internal::pemfile::certs(&mut reader).expect("Read certs");
+        //println!("length {}", crt.len());
+        //config.root_store.add(crt.get(0).unwrap()).unwrap();
+        config.root_store.add_pem_file(&mut reader).unwrap();
+        //println!("{:?}", config.root_store.add_pem_file(&mut reader).unwrap());
+        //println!("{:?}", config.root_store.len()); // 0
+
+
         let tls = ClientTlsConfig::new()
             .rustls_client_config(config)
             .domain_name(uri.host().unwrap());
@@ -65,7 +75,7 @@ where F : FnMut(&[u8], u64) {
     let request = Request::new(BlockRange{ start: Some(bs), end: Some(be) });
 
     let mut response = client.get_block_range(request).await?.into_inner();
-    println!("{:?}", response);
+    //println!("{:?}", response);
     while let Some(block) = response.message().await? {
         use prost::Message;
         let mut encoded_buf = vec![];
