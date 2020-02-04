@@ -23,10 +23,10 @@ rand = "0.7.2"
 sodiumoxide = "0.2.5"
 ring = "0.16.9"
 
-tonic = { version = "0.1.0-beta.1", features = ["tls", "tls-roots"] }
+tonic = { version = "0.1.1", features = ["tls", "tls-roots"] }
 bytes = "0.4"
-prost = "0.5"
-prost-types = "0.5"
+prost = "0.6"
+prost-types = "0.6"
 tokio = { version = "0.2", features = ["rt-threaded", "time", "stream", "fs", "macros", "uds", "full"] }
 tokio-rustls = { version = "0.12.1", features = ["dangerous_configuration"] }
 webpki = "0.21.0"
@@ -64,7 +64,7 @@ rev = "188537ea025fcb7fbdfc11266f307a084a5451e4"
 features = ["ff_derive"]
 
 [build-dependencies]
-tonic-build = "0.1.0-beta.1"
+tonic-build = "0.1.1"
 
 [dev-dependencies]
 tempdir = "0.3.7"
