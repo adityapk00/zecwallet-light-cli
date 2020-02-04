@@ -44,7 +44,7 @@ pub fn main() {
     let server = LightClientConfig::get_server_or_default(maybe_server);
 
     // Test to make sure the server has all of scheme, host and port
-    if server.scheme_str().is_none() || server.host().is_none() || server.port_part().is_none() {
+    if server.scheme_str().is_none() || server.host().is_none() || server.port().is_none() {
         eprintln!("Please provide the --server parameter as [scheme]://[host]:[port].\nYou provided: {}", server);
         return;
     }
