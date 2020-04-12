@@ -754,10 +754,12 @@ impl LightClient {
                 // For each sapling note that is not a change, add a Tx.
                 txns.extend(v.notes.iter()
                     .filter( |nd| !nd.is_change )
-                    .map ( |nd| 
+                    .enumerate()
+                    .map ( |(i, nd)| 
                         object! {
                             "block_height" => v.block,
                             "datetime"     => v.datetime,
+                            "position"     => i,
                             "txid"         => format!("{}", v.txid),
                             "amount"       => nd.note.value as i64,
                             "address"      => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
