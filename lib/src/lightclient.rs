@@ -414,13 +414,21 @@ impl LightClient {
 
     pub fn attempt_recover_seed(config: &LightClientConfig) -> Result<String, String> {
         use std::io::prelude::*;
-        use byteorder::{LittleEndian, ReadBytesExt,};
+        use byteorder::{LittleEndian, ReadBytesExt};
+        use libflate::gzip::Decoder;
         use bip39::{Mnemonic, Language};
         use zcash_primitives::serialize::Vector;
 
-        let mut reader = BufReader::new(File::open(config.get_wallet_path()).unwrap());
-        let version = reader.read_u64::<LittleEndian>().unwrap();
+        let mut inp = BufReader::new(File::open(config.get_wallet_path()).unwrap());
+        let version = inp.read_u64::<LittleEndian>().unwrap();
         println!("Reading wallet version {}", version);
+
+        // After version 5, we're writing the rest of the file as a compressed stream (gzip)
+        let mut reader: Box<dyn Read> = if version <= 4 {
+            Box::new(inp)
+        } else {
+            Box::new(Decoder::new(inp).unwrap())
+        };
 
         let encrypted = if version >= 4 {
             reader.read_u8().unwrap() > 0
