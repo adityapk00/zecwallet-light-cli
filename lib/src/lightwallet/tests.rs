@@ -1518,16 +1518,31 @@ fn test_bad_send() {
                                         vec![(&ext_taddr, AMOUNT1 + 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Insufficient verified funds"));
 
-    // Duplicated addresses are fine
-    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                        vec![(&ext_taddr, AMOUNT1 + 10, None),
-                                             (&ext_taddr, AMOUNT1 + 10, None)]);
-    assert!(raw_tx.is_ok());
 
     // No addresses
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so, vec![]);
     assert!(raw_tx.err().unwrap().contains("at least one"));
 
+}
+
+#[test]
+fn test_duplicate_outputs() {
+    // Test all the ways in which a send should fail
+    const AMOUNT1: u64 = 50000;
+    let _fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+    let (wallet, _txid1, _block_hash) = get_test_wallet(AMOUNT1);
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) = get_sapling_params().unwrap();
+    let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());  
+     
+    // Duplicated addresses with memos are fine too
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+        vec![(&ext_taddr, 100, Some("First memo".to_string())),
+             (&ext_taddr, 0, Some("Second memo".to_string())),
+             (&ext_taddr, 0, Some("Third memo".to_string()))]);
+    assert!(raw_tx.is_ok());
 }
 
 #[test]
