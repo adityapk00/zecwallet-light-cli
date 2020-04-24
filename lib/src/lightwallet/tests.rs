@@ -1518,11 +1518,11 @@ fn test_bad_send() {
                                         vec![(&ext_taddr, AMOUNT1 + 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Insufficient verified funds"));
 
-    // Duplicated addresses
+    // Duplicated addresses are fine
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
                                         vec![(&ext_taddr, AMOUNT1 + 10, None),
                                              (&ext_taddr, AMOUNT1 + 10, None)]);
-    assert!(raw_tx.err().unwrap().contains("duplicate"));
+    assert!(raw_tx.is_ok());
 
     // No addresses
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so, vec![]);

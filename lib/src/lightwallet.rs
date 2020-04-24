@@ -253,7 +253,7 @@ impl LightWallet {
         } else {
             false
         };
-
+        
         let mut enc_seed = [0u8; 48];
         if version >= 4 {
             reader.read_exact(&mut enc_seed)?;
@@ -264,14 +264,15 @@ impl LightWallet {
         } else {
             vec![]
         };
-
+        
         // Seed
         let mut seed_bytes = [0u8; 32];
         reader.read_exact(&mut seed_bytes)?;
-
+        
         // Read the spending keys
         let extsks = Vector::read(&mut reader, |r| ExtendedSpendingKey::read(r))?;
-
+        println!("reading version {}", version);
+        
         let extfvks = if version >= 4 {
             // Read the viewing keys
             Vector::read(&mut reader, |r| ExtendedFullViewingKey::read(r))?
@@ -362,7 +363,7 @@ impl LightWallet {
         writer.write_all(&self.seed)?;
 
         // Flush after writing the seed, so in case of a disaster, we can still recover the seed.
-        writer.flush()?;
+        //writer.flush()?;
 
         // Write all the spending keys
         Vector::write(&mut writer, &self.extsks.read().unwrap(),
@@ -1424,17 +1425,6 @@ impl LightWallet {
         let start_time = now();
         if tos.len() == 0 {
             return Err("Need at least one destination address".to_string());
-        }
-
-        // Check for duplicates in the to list
-        if tos.len() > 1 {
-            let mut to_addresses = tos.iter().map(|t| t.0.to_string()).collect::<Vec<_>>();
-            to_addresses.sort();
-            for i in 0..to_addresses.len()-1 {
-                if to_addresses[i] == to_addresses[i+1] {
-                    return Err(format!("To address {} is duplicated", to_addresses[i]));
-                }
-            }
         }
 
         let total_value = tos.iter().map(|to| to.1).sum::<u64>();
