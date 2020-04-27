@@ -1111,7 +1111,7 @@ impl LightWallet {
 
                                 let mut txs = self.txs.write().unwrap();
                                 if txs.get(&tx.txid()).unwrap().outgoing_metadata.iter()
-                                        .find(|om| om.address == address && om.value == note.value)
+                                        .find(|om| om.address == address && om.value == note.value && om.memo == memo)
                                         .is_some() {
                                     warn!("Duplicate outgoing metadata");
                                     continue;
