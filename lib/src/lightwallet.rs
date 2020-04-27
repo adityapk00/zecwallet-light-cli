@@ -1571,7 +1571,17 @@ impl LightWallet {
 
         for (to, value, memo) in recepients {
             // Compute memo if it exists
-            let encoded_memo = memo.map(|s| Memo::from_str(&s).unwrap());
+            let encoded_memo = match memo {
+                None => None,
+                Some(s) => match Memo::from_str(&s) {
+                    None => {
+                        let e = format!("Error creating output. Memo {:?} is too long", s);
+                        error!("{}", e);
+                        return Err(e);
+                    },
+                    Some(m) => Some(m)
+                }
+            };
             
             println!("{}: Adding output", now() - start_time);
 
