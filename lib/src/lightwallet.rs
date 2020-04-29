@@ -1062,14 +1062,21 @@ impl LightWallet {
                 };
 
                 {
-                    info!("A sapling note was spent in {}", tx.txid());
-                    // Update the WalletTx 
-                    // Do it in a short scope because of the write lock.
+                    info!("A sapling note was sent in {}, getting memo", tx.txid());
+                    
+                    // Do it in a short scope because of the write lock.   
                     let mut txs = self.txs.write().unwrap();
-                    txs.get_mut(&tx.txid()).unwrap()
-                        .notes.iter_mut()
-                        .find(|nd| nd.note == note).unwrap()
-                        .memo = Some(memo);
+
+                    // Update memo if we have this Tx. 
+                    match txs.get_mut(&tx.txid())
+                        .and_then(|t| {
+                            t.notes.iter_mut().find(|nd| nd.note == note)
+                        }) {
+                            None => (),
+                            Some(nd) => {
+                                nd.memo = Some(memo)
+                            }
+                        }
                 }
             }
 

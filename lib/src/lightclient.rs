@@ -342,6 +342,9 @@ impl LightClient {
         info!("Created new wallet with a new seed!");
         info!("Created LightClient to {}", &config.server);
 
+        // Save
+        l.do_save().map_err(|s| io::Error::new(ErrorKind::PermissionDenied, s))?;
+
         Ok(l)
     }
 
@@ -366,6 +369,9 @@ impl LightClient {
 
         info!("Created new wallet!");
         info!("Created LightClient to {}", &config.server);
+
+        // Save
+        l.do_save().map_err(|s| io::Error::new(ErrorKind::PermissionDenied, s))?;
 
         Ok(l)
     }
@@ -576,14 +582,18 @@ impl LightClient {
             1_000_000, // 1 MB write buffer
             File::create(self.config.get_wallet_path()).unwrap());
         
-        match self.wallet.write().unwrap().write(&mut file_buffer) {
+        let r = match self.wallet.write().unwrap().write(&mut file_buffer) {
             Ok(_) => Ok(()),
             Err(e) => {
                 let err = format!("ERR: {}", e);
                 error!("{}", err);
                 Err(e.to_string())
             }
-        }
+        };
+
+        file_buffer.flush().map_err(|e| format!("{}", e))?;
+
+        r
     }
 
     pub fn get_server_uri(&self) -> http::Uri {
