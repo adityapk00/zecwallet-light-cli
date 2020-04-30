@@ -107,7 +107,7 @@ pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
 
 impl SaplingNoteData {
     fn serialized_version() -> u64 {
-        1
+        2
     }
 
     pub fn new(
@@ -144,7 +144,10 @@ impl SaplingNoteData {
         let version = reader.read_u64::<LittleEndian>()?;
         assert_eq!(version, SaplingNoteData::serialized_version());
 
-        let account = reader.read_u64::<LittleEndian>()? as usize;
+        // We don't use the account field from v1 now
+        if version <= 1 {
+            let _account = reader.read_u64::<LittleEndian>()? as usize;
+        }
 
         let extfvk = ExtendedFullViewingKey::read(&mut reader)?;
 
@@ -205,8 +208,6 @@ impl SaplingNoteData {
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         // Write a version number first, so we can later upgrade this if needed.
         writer.write_u64::<LittleEndian>(SaplingNoteData::serialized_version())?;
-
-        writer.write_u64::<LittleEndian>(0 as u64)?; // TODO: We shouldn't write this anymore
 
         self.extfvk.write(&mut writer)?;
 

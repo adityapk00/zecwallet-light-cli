@@ -97,7 +97,7 @@ pub enum WalletZKeyType {
 }
 
 // A struct that holds z-address private keys or view keys
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WalletZKey {
     keytype: WalletZKeyType,
     locked: bool,
@@ -219,7 +219,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 5;
+        return 6;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
