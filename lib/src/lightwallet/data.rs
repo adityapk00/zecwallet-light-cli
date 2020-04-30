@@ -62,7 +62,7 @@ impl BlockData {
 }
 
 pub struct SaplingNoteData {
-    pub(super) account: usize,
+    //pub(super) account: usize,
     pub(super) extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here.
     pub diversifier: Diversifier,
     pub note: Note<Bls12>,
@@ -126,7 +126,7 @@ impl SaplingNoteData {
         };
 
         SaplingNoteData {
-            account: output.account,
+            //account: output.account,
             extfvk: extfvk.clone(),
             diversifier: output.to.diversifier,
             note: output.note,
@@ -189,7 +189,7 @@ impl SaplingNoteData {
         let is_change: bool = reader.read_u8()? > 0;
 
         Ok(SaplingNoteData {
-            account,
+            // account,
             extfvk,
             diversifier,
             note,
@@ -206,7 +206,7 @@ impl SaplingNoteData {
         // Write a version number first, so we can later upgrade this if needed.
         writer.write_u64::<LittleEndian>(SaplingNoteData::serialized_version())?;
 
-        writer.write_u64::<LittleEndian>(self.account as u64)?;
+        writer.write_u64::<LittleEndian>(0 as u64)?; // TODO: We shouldn't write this anymore
 
         self.extfvk.write(&mut writer)?;
 
@@ -488,9 +488,9 @@ pub struct SpendableNote {
 }
 
 impl SpendableNote {
-    pub fn from(txid: TxId, nd: &SaplingNoteData, anchor_offset: usize, extsk: &ExtendedSpendingKey) -> Option<Self> {
+    pub fn from(txid: TxId, nd: &SaplingNoteData, anchor_offset: usize, extsk: &Option<ExtendedSpendingKey>) -> Option<Self> {
         // Include only notes that haven't been spent, or haven't been included in an unconfirmed spend yet.
-        if nd.spent.is_none() && nd.unconfirmed_spent.is_none() &&
+        if nd.spent.is_none() && nd.unconfirmed_spent.is_none() && extsk.is_some() &&
                 nd.witnesses.len() >= (anchor_offset + 1) {
             let witness = nd.witnesses.get(nd.witnesses.len() - anchor_offset - 1);
 
@@ -500,7 +500,7 @@ impl SpendableNote {
                 diversifier: nd.diversifier,
                 note: nd.note.clone(),
                 witness: w.clone(),
-                extsk: extsk.clone(),
+                extsk: extsk.clone().unwrap(),
             })
         } else {
             None

@@ -308,16 +308,6 @@ impl Command for EncryptCommand {
             return self.help();
         }
 
-        // Refuse to encrypt if the bip39 bug has not been fixed
-        use crate::lightwallet::bugs::BugBip39Derivation;
-        if BugBip39Derivation::has_bug(lightclient) {
-            let mut h = vec![];
-            h.push("It looks like your wallet has the bip39bug. Please run 'fixbip39bug' to fix it");
-            h.push("before encrypting your wallet.");
-            h.push("ERROR: Cannot encrypt while wallet has the bip39bug.");
-            return h.join("\n");
-        }
-
         let passwd = args[0].to_string();
 
         match lightclient.wallet.write().unwrap().encrypt(passwd) {
@@ -723,29 +713,6 @@ impl Command for NotesCommand {
     }
 }
 
-struct FixBip39BugCommand {}
-impl Command for FixBip39BugCommand {
-    fn help(&self)  -> String {
-        let mut h = vec![];
-        h.push("Detect if the wallet has the Bip39 derivation bug, and fix it automatically");
-        h.push("Usage:");
-        h.push("fixbip39bug");
-        h.push("");
-
-        h.join("\n")
-    }
-
-    fn short_help(&self) -> String {
-        "Detect if the wallet has the Bip39 derivation bug, and fix it automatically".to_string()
-    }
-
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        use crate::lightwallet::bugs::BugBip39Derivation;
-
-        BugBip39Derivation::fix_bug(lightclient)
-    }
-}
-
 struct QuitCommand {}
 impl Command for QuitCommand {
     fn help(&self)  -> String {
@@ -795,7 +762,6 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("decrypt".to_string(),           Box::new(DecryptCommand{}));
     map.insert("unlock".to_string(),            Box::new(UnlockCommand{}));
     map.insert("lock".to_string(),              Box::new(LockCommand{}));
-    map.insert("fixbip39bug".to_string(),       Box::new(FixBip39BugCommand{}));
 
     Box::new(map)
 }

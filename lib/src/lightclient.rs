@@ -15,9 +15,7 @@ use protobuf::parse_from_bytes;
 
 use json::{object, array, JsonValue};
 use zcash_primitives::transaction::{TxId, Transaction};
-use zcash_client_backend::{
-    constants::testnet, constants::mainnet, constants::regtest, encoding::encode_payment_address,
-};
+use zcash_client_backend::{constants::testnet, constants::mainnet, constants::regtest,};
 
 use log::{info, warn, error, LevelFilter};
 use log4rs::append::rolling_file::RollingFileAppender;
@@ -399,12 +397,6 @@ impl LightClient {
         info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
 
-        if crate::lightwallet::bugs::BugBip39Derivation::has_bug(&lc) {
-            let m = format!("WARNING!!!\nYour wallet has a bip39derivation bug that's showing incorrect addresses.\nPlease run 'fixbip39bug' to automatically fix the address derivation in your wallet!\nPlease see: https://github.com/adityapk00/zecwallet-light-cli/blob/master/bip39bug.md");
-             info!("{}", m);
-             println!("{}", m);
-        }
-
         Ok(lc)
     }
 
@@ -515,9 +507,7 @@ impl LightClient {
         let wallet = self.wallet.read().unwrap();
 
         // Collect z addresses
-        let z_addresses = wallet.zaddress.read().unwrap().iter().map( |ad| {
-            encode_payment_address(self.config.hrp_sapling_address(), &ad)
-        }).collect::<Vec<String>>();
+        let z_addresses = wallet.get_all_zaddresses();
 
         // Collect t addresses
         let t_addresses = wallet.taddresses.read().unwrap().iter().map( |a| a.clone() )
@@ -533,12 +523,11 @@ impl LightClient {
         let wallet = self.wallet.read().unwrap();
 
         // Collect z addresses
-        let z_addresses = wallet.zaddress.read().unwrap().iter().map( |ad| {
-            let address = encode_payment_address(self.config.hrp_sapling_address(), &ad);
+        let z_addresses = wallet.get_all_zaddresses().iter().map(|zaddress| {
             object!{
-                "address" => address.clone(),
-                "zbalance" => wallet.zbalance(Some(address.clone())),
-                "verified_zbalance" => wallet.verified_zbalance(Some(address)),
+                "address" => zaddress.clone(),
+                "zbalance" => wallet.zbalance(Some(zaddress.clone())),
+                "verified_zbalance" => wallet.verified_zbalance(Some(zaddress.clone())),
             }
         }).collect::<Vec<JsonValue>>();
 
