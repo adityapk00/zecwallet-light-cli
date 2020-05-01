@@ -190,11 +190,8 @@ pub struct LightWallet {
 
     seed: [u8; 32],    // Seed phrase for this wallet. If wallet is locked, this is 0
 
-    // List of keys, actually in this wallet. If the wallet is locked, the `extsks` will be
-    // encrypted (but the fvks are not encrpyted)
-    // extsks:  Arc<RwLock<Vec<ExtendedSpendingKey>>>,
-    // extfvks: Arc<RwLock<Vec<ExtendedFullViewingKey>>>,
-    // pub zaddress: Arc<RwLock<Vec<PaymentAddress<Bls12>>>>,
+    // List of keys, actually in this wallet. This is a combination of HD keys derived from the seed,
+    // viewing keys and imported spending keys. 
     zkeys: Arc<RwLock<Vec<WalletZKey>>>,
 
     // Transparent keys. If the wallet is locked, then the secret keys will be encrypted,
@@ -306,9 +303,6 @@ impl LightWallet {
             nonce:       vec![],
             seed:        seed_bytes,
             zkeys:       Arc::new(RwLock::new(vec![WalletZKey::new_hdkey(hdkey_num, extsk)])),
-            //extsks:      Arc::new(RwLock::new(vec![extsk])),
-            //extfvks:     Arc::new(RwLock::new(vec![extfvk])),
-            //zaddress:    Arc::new(RwLock::new(vec![address])),
             tkeys:       Arc::new(RwLock::new(vec![tpk])),
             taddresses:  Arc::new(RwLock::new(vec![taddr])),
             blocks:      Arc::new(RwLock::new(vec![])),
@@ -377,6 +371,7 @@ impl LightWallet {
 
           // If extsks is of len 0, then this wallet is locked
           let zkeys_result = if extsks.len() == 0 {
+            // Wallet is locked, so read only the viewing keys.
             extfvks.iter().zip(addresses.iter()).enumerate().map(|(i, (extfvk, payment_address))| {
               let zk = WalletZKey::new_locked_hdkey(i as u32, extfvk.clone());
               if zk.zaddress != *payment_address {
@@ -386,6 +381,7 @@ impl LightWallet {
               }
             }).collect::<Vec<io::Result<WalletZKey>>>()
           } else {
+            // Wallet is unlocked, read the spending keys as well
             extsks.iter().zip(extfvks.iter().zip(addresses.iter())).enumerate()
               .map(|(i, (extsk, (extfvk, payment_address)))| {
                 let zk = WalletZKey::new_hdkey(i as u32, extsk.clone());
@@ -447,9 +443,6 @@ impl LightWallet {
             enc_seed:    enc_seed,
             nonce:       nonce,
             seed:        seed_bytes,
-            // extsks:      Arc::new(RwLock::new(extsks)),
-            // extfvks:     Arc::new(RwLock::new(extfvks)),
-            // zaddress:    Arc::new(RwLock::new(addresses)),
             zkeys:       Arc::new(RwLock::new(zkeys)),
             tkeys:       Arc::new(RwLock::new(tkeys)),
             taddresses:  Arc::new(RwLock::new(taddresses)),
