@@ -143,6 +143,7 @@ impl SaplingNoteData {
 
         // We don't use the account field from v1 now
         if version <= 1 {
+            // But we still have to read it so that we can move consume the bytes from the input stream
             let _account = reader.read_u64::<LittleEndian>()? as usize;
         }
 
