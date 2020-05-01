@@ -62,7 +62,6 @@ impl BlockData {
 }
 
 pub struct SaplingNoteData {
-    //pub(super) account: usize,
     pub(super) extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here.
     pub diversifier: Diversifier,
     pub note: Note<Bls12>,
@@ -126,7 +125,6 @@ impl SaplingNoteData {
         };
 
         SaplingNoteData {
-            //account: output.account,
             extfvk: extfvk.clone(),
             diversifier: output.to.diversifier,
             note: output.note,
@@ -142,7 +140,6 @@ impl SaplingNoteData {
     // Reading a note also needs the corresponding address to read from.
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        assert_eq!(version, SaplingNoteData::serialized_version());
 
         // We don't use the account field from v1 now
         if version <= 1 {

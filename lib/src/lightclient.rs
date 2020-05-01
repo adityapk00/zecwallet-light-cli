@@ -170,6 +170,24 @@ impl LightClientConfig {
         }
     }
 
+    pub fn get_zcash_params_path(&self) -> io::Result<Box<Path>> {
+        let mut zcash_params = self.get_zcash_data_path().into_path_buf();
+        zcash_params.push("..");
+        if cfg!(target_os="macos") || cfg!(target_os="windows") {
+            zcash_params.push("ZcashParams");
+        } else {
+            zcash_params.push(".zcash-params");
+        }
+
+        match std::fs::create_dir_all(zcash_params.clone()) {
+            Ok(_) => Ok(zcash_params.into_boxed_path()),
+            Err(e) => {
+                eprintln!("Couldn't create zcash params directory\n{}", e);
+                Err(e)
+            }
+        }
+    }
+
     pub fn get_wallet_path(&self) -> Box<Path> {
         let mut wallet_location = self.get_zcash_data_path().into_path_buf();
         wallet_location.push(WALLET_NAME);
@@ -288,11 +306,40 @@ impl LightClient {
         };
     }
 
+    fn write_file_if_not_exists(dir: &Box<Path>, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let mut file_path = dir.to_path_buf();
+        file_path.push(name);
+        if !file_path.exists() {
+            let mut file = File::create(&file_path)?;
+            file.write_all(bytes)?;
+        }
+
+        Ok(())
+    }
+
     fn read_sapling_params(&mut self) {
         // Read Sapling Params
         self.sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
         self.sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
 
+        // Ensure that the sapling params are stored on disk properly as well. 
+        match self.config.get_zcash_params_path() {
+            Ok(zcash_params_dir) => {
+                // Create the sapling output and spend params files
+                match LightClient::write_file_if_not_exists(&zcash_params_dir, "sapling-output.params", &self.sapling_output) {
+                    Ok(_) => {},
+                    Err(e) => eprintln!("Warning: Couldn't write the output params!\n{}", e)
+                };
+                
+                match LightClient::write_file_if_not_exists(&zcash_params_dir, "sapling-spend.params", &self.sapling_spend) {
+                    Ok(_) => {},
+                    Err(e) => eprintln!("Warning: Couldn't write the output params!\n{}", e)
+                }
+            },
+            Err(e) => {
+                eprintln!("{}", e);
+            }
+        };
     }
 
     /// Method to create a test-only version of the LightClient
