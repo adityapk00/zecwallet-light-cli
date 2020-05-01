@@ -25,6 +25,9 @@ set -- "${POSITIONAL[@]}" # restore positional parameters
 
 if [ -z $APP_VERSION ]; then echo "APP_VERSION is not set"; exit 1; fi
 
+# Write the version file
+echo "pub const VERSION:&str = \"$APP_VERSION\";" > cli/src/version.rs
+
 # First, do the tests
 cd lib && cargo test --release
 retVal=$?

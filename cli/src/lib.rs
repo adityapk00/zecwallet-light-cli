@@ -8,10 +8,12 @@ use zecwalletlitelib::{commands,
     lightclient::{LightClient, LightClientConfig},
 };
 
+pub mod version;
+
 #[macro_export]
 macro_rules! configure_clapapp {
     ( $freshapp: expr ) => {
-    $freshapp.version("1.0.0")
+    $freshapp.version(VERSION)
             .arg(Arg::with_name("dangerous")
                 .long("dangerous")
                 .help("Disable server TLS certificate verification. Use this if you're running a local lightwalletd with a self-signed certificate. WARNING: This is dangerous, don't use it with a server that is not your own.")
