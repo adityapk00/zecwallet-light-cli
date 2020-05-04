@@ -19,6 +19,8 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
 use sha2::{Sha256, Digest};
 
+use sodiumoxide::crypto::secretbox;
+
 use zcash_client_backend::{
     encoding::{encode_payment_address, encode_extended_spending_key},
     proto::compact_formats::CompactBlock, welding_rig::scan_block,
@@ -107,6 +109,10 @@ pub struct WalletZKey {
 
     // If this is a HD key, what is the key number
     hdkey_num: Option<u32>,
+
+    // If locked, the encrypted private key is stored here
+    enc_key: Option<Vec<u8>>,
+    nonce: Option<Vec<u8>>,
 }
 
 impl WalletZKey {
@@ -120,7 +126,9 @@ impl WalletZKey {
         extsk: Some(extsk),
         extfvk,
         zaddress,
-        hdkey_num: Some(hdkey_num)
+        hdkey_num: Some(hdkey_num),
+        enc_key: None,
+        nonce: None,
     }
   }
 
@@ -133,11 +141,35 @@ impl WalletZKey {
       extsk: None,
       extfvk,
       zaddress,
-      hdkey_num: Some(hdkey_num)
+      hdkey_num: Some(hdkey_num),
+      enc_key: None,
+      nonce: None
     }
   }
 
+  pub fn new_imported_sk(isk: ExtendedSpendingKey) -> Self {
+      let extfvk = ExtendedFullViewingKey::from(&isk);
+      let zaddress = extfvk.default_address().unwrap().1;
+
+      WalletZKey {
+          keytype: WalletZKeyType::IMPORTED_KEY,
+          locked: false,
+          extsk: Some(isk),
+          extfvk,
+          zaddress,
+          hdkey_num: None,
+          enc_key: None,
+          nonce: None,
+      }
+  }
+
+  fn serialized_version() -> u8 {
+      return 1;
+  }
+
   pub fn read<R: Read>(mut inp: R) -> io::Result<Self> {
+    let _version = inp.read_u8()?;
+
     let keytype: WalletZKeyType = match inp.read_u32::<LittleEndian>()? {
       0 => Ok(WalletZKeyType::HD_KEY),
       1 => Ok(WalletZKeyType::IMPORTED_KEY),
@@ -153,17 +185,26 @@ impl WalletZKey {
 
     let hdkey_num = Optional::read(&mut inp, |r| r.read_u32::<LittleEndian>())?;
 
+    let enc_key = Optional::read(&mut inp, |r| 
+        Vector::read(r, |r| r.read_u8()))?;
+    let nonce = Optional::read(&mut inp, |r| 
+        Vector::read(r, |r| r.read_u8()))?;
+
     Ok(WalletZKey {
       keytype,
       locked,
       extsk,
       extfvk,
       zaddress,
-      hdkey_num
+      hdkey_num,
+      enc_key,
+      nonce,
     })
   }
 
   pub fn write<W: Write>(&self, mut out: W) -> io::Result<()> {
+    out.write_u8(Self::serialized_version())?;
+
     out.write_u32::<LittleEndian>(self.keytype.clone() as u32)?;
 
     out.write_u8(self.locked as u8)?;
@@ -172,7 +213,119 @@ impl WalletZKey {
 
     ExtendedFullViewingKey::write(&self.extfvk, &mut out)?;
 
-    Optional::write(&mut out, &self.hdkey_num, |o, n| o.write_u32::<LittleEndian>(*n))
+    Optional::write(&mut out, &self.hdkey_num, |o, n| o.write_u32::<LittleEndian>(*n))?;
+    
+    // Write enc_key
+    Optional::write(&mut out, &self.enc_key, |o, v| 
+        Vector::write(o, v, |o,n| o.write_u8(*n)))?;
+
+    // Write nonce
+    Optional::write(&mut out, &self.nonce, |o, v| 
+        Vector::write(o, v, |o,n| o.write_u8(*n)))
+  }
+
+  pub fn lock(&mut self) {
+    match self.keytype {
+        WalletZKeyType::HD_KEY => {
+            // For HD keys, just empty out the keys, since they will be reconstructed from the hdkey_num
+            self.extsk = None;
+            self.locked = true;
+        },
+        WalletZKeyType::IMPORTED_KEY => {
+            // For imported keys, encrypt the key into enckey
+            // assert that we have the encrypted key. 
+            if self.enc_key.is_none() {
+                panic!("Can't lock when imported key is not encrypted")
+            }
+            self.extsk = None;
+            self.locked = true;
+        },
+        WalletZKeyType::VIEWKEY => {
+            panic!("Not implemented");
+        }
+    }
+  }
+
+  pub fn unlock(&mut self, config: &LightClientConfig, bip39_seed: &[u8], key: &secretbox::Key) -> io::Result<()> {
+    match self.keytype {
+      WalletZKeyType::HD_KEY => {
+        let (extsk, extfvk, address) =
+            LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed, self.hdkey_num.unwrap());
+
+        if address != self.zaddress {
+            return Err(io::Error::new(ErrorKind::InvalidData, 
+                    format!("zaddress mismatch at {}. {:?} vs {:?}", self.hdkey_num.unwrap(), address, self.zaddress)));
+        }
+
+        if extfvk != self.extfvk {
+            return Err(io::Error::new(ErrorKind::InvalidData, 
+                        format!("fvk mismatch at {}. {:?} vs {:?}", self.hdkey_num.unwrap(), extfvk, self.extfvk)));
+        }
+
+        self.extsk = Some(extsk);
+      },
+      WalletZKeyType::IMPORTED_KEY => {
+        // For imported keys, we need to decrypt from the encrypted key
+        let nonce = secretbox::Nonce::from_slice(&self.nonce.as_ref().unwrap()).unwrap();
+        let extsk_bytes = match secretbox::open(&self.enc_key.as_ref().unwrap(), &nonce, &key) {
+            Ok(s) => s,
+            Err(_) => {return Err(io::Error::new(ErrorKind::InvalidData, "Decryption failed. Is your password correct?"));}
+        };
+
+        self.extsk = Some(ExtendedSpendingKey::read(&extsk_bytes[..])?);
+      },
+      WalletZKeyType::VIEWKEY => {
+        panic!("Not implemented");
+      }
+    };
+
+    self.locked = false;
+    Ok(())
+  }
+
+  pub fn encrypt(&mut self, key: &secretbox::Key) {
+    match self.keytype {
+        WalletZKeyType::HD_KEY => {
+            // For HD keys, we don't need to do anything, since the hdnum has all the info to recreate this key
+        },
+        WalletZKeyType::IMPORTED_KEY => {
+            // For imported keys, encrypt the key into enckey
+            let nonce = secretbox::gen_nonce();
+
+            let mut sk_bytes = vec![];
+            self.extsk.as_ref().unwrap().write(&mut sk_bytes);
+
+            self.enc_key = Some(secretbox::seal(&sk_bytes, &nonce, &key));
+            self.nonce = Some(nonce.as_ref().to_vec());
+        },
+        WalletZKeyType::VIEWKEY => {
+            panic!("Not implemented");
+        }
+    }
+
+    // Also lock after encrypt
+    self.lock();
+  }
+
+  pub fn remove_encryption(&mut self) -> io::Result<()> {
+    if self.locked {
+      return Err(Error::new(ErrorKind::InvalidInput, "Can't remove encryption while locked"));
+    }
+
+    match self.keytype {
+      WalletZKeyType::HD_KEY => {
+          // For HD keys, we don't need to do anything, since the hdnum has all the info to recreate this key
+          Ok(())
+      },
+      WalletZKeyType::IMPORTED_KEY => {
+          self.enc_key = None;
+          self.nonce = None;
+          Ok(())
+      },
+      WalletZKeyType::VIEWKEY => {
+          panic!("Not implemented");
+      }
+    }
   }
 }
 
@@ -382,14 +535,14 @@ impl LightWallet {
             }).collect::<Vec<io::Result<WalletZKey>>>()
           } else {
             // Wallet is unlocked, read the spending keys as well
-            extsks.iter().zip(extfvks.iter().zip(addresses.iter())).enumerate()
+            extsks.into_iter().zip(extfvks.into_iter().zip(addresses.iter())).enumerate()
               .map(|(i, (extsk, (extfvk, payment_address)))| {
-                let zk = WalletZKey::new_hdkey(i as u32, extsk.clone());
+                let zk = WalletZKey::new_hdkey(i as u32, extsk);
                 if zk.zaddress != *payment_address {
                   return Err(io::Error::new(ErrorKind::InvalidData, "Payment address didn't match"));
                 } 
                 
-                if zk.extfvk != *extfvk {
+                if zk.extfvk != extfvk {
                   return Err(io::Error::new(ErrorKind::InvalidData, "Full View key didn't match"));
                 }
 
@@ -756,8 +909,6 @@ impl LightWallet {
     }
 
     pub fn encrypt(&mut self, passwd: String) -> io::Result<()> {
-        use sodiumoxide::crypto::secretbox;
-
         if self.encrypted {
             return Err(io::Error::new(ErrorKind::AlreadyExists, "Wallet is already encrypted"));
         }
@@ -769,8 +920,10 @@ impl LightWallet {
         let cipher = secretbox::seal(&self.seed, &nonce, &key);
         
         self.enc_seed.copy_from_slice(&cipher);
-        self.nonce = vec![];
-        self.nonce.extend_from_slice(nonce.as_ref());
+        self.nonce = nonce.as_ref().to_vec();
+
+        // Encrypt the individual keys
+        self.zkeys.write().unwrap().iter_mut().for_each(|k| k.encrypt(&key));
 
         self.encrypted = true;
         self.lock()?;
@@ -793,8 +946,7 @@ impl LightWallet {
 
         // Remove all the private key from the zkeys
         self.zkeys.write().unwrap().iter_mut().for_each(|zk| {
-            zk.extsk = None;
-            zk.locked = true;
+            zk.lock();
         });
         
 
@@ -804,8 +956,6 @@ impl LightWallet {
     }
 
     pub fn unlock(&mut self, passwd: String) -> io::Result<()> {
-        use sodiumoxide::crypto::secretbox;
-
         if !self.encrypted {
             return Err(Error::new(ErrorKind::AlreadyExists, "Wallet is not encrypted"));
         }
@@ -846,27 +996,7 @@ impl LightWallet {
 
         // Go over the zkeys, and add the spending keys again
         self.zkeys.write().unwrap().iter_mut().map(|zk| {
-            // If this is a viewkey only, then just pass
-            if zk.keytype != WalletZKeyType::HD_KEY {
-                return Ok(());
-            }
-
-            // Create the the extsk again
-            let (extsk, extfvk, address) =
-                LightWallet::get_zaddr_from_bip39seed(&self.config, &bip39_seed.as_bytes(), zk.hdkey_num.unwrap());
-
-            if address != zk.zaddress {
-                return Err(io::Error::new(ErrorKind::InvalidData, 
-                        format!("zaddress mismatch at {}. {:?} vs {:?}", zk.hdkey_num.unwrap(), address, zk.zaddress)));
-            }
-
-            if extfvk != zk.extfvk {
-                return Err(io::Error::new(ErrorKind::InvalidData, 
-                            format!("fvk mismatch at {}. {:?} vs {:?}", zk.hdkey_num.unwrap(), extfvk, zk.extfvk)));
-            }
-
-            zk.extsk = Some(extsk);
-            Ok(())
+            zk.unlock(&self.config, bip39_seed.as_bytes(), &key)
         }).collect::<io::Result<Vec<()>>>()?;
         
         // Everything checks out, so we'll update our wallet with the decrypted values
@@ -890,7 +1020,12 @@ impl LightWallet {
         if !self.unlocked {
             self.unlock(passwd)?;
         }
-        
+
+        // Remove encryption from individual zkeys
+        self.zkeys.write().unwrap().iter_mut().map(|zk| {
+            zk.remove_encryption()
+        }).collect::<io::Result<Vec<()>>>()?;
+          
         // Permanantly remove the encryption
         self.encrypted = false;
         self.nonce = vec![];
