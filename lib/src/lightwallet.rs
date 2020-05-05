@@ -29,7 +29,7 @@ use zcash_client_backend::{
 use zcash_primitives::{
     block::BlockHash,
     merkle_tree::{CommitmentTree},
-    serialize::{Vector, Optional},
+    serialize::{Vector},
     transaction::{
         builder::{Builder},
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
@@ -49,9 +49,11 @@ mod extended_key;
 mod utils;
 mod address;
 mod prover;
+mod walletzkey;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 use extended_key::{KeyIndex, ExtendedPrivKey};
+use walletzkey::{WalletZKey};
 
 pub const MAX_REORG: usize = 100;
 pub const GAP_RULE_UNUSED_ADDRESSES: usize = 5;
@@ -89,247 +91,6 @@ impl ToBase58Check for [u8] {
         payload.append(&mut checksum[..4].to_vec());
         payload.to_base58()
     }
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub enum WalletZKeyType {
-    HdKey = 0,
-    ImportedKey = 1,
-    ViewKey = 2
-}
-
-// A struct that holds z-address private keys or view keys
-#[derive(Clone, Debug, PartialEq)]
-pub struct WalletZKey {
-    keytype: WalletZKeyType,
-    locked: bool,
-    extsk: Option<ExtendedSpendingKey>,
-    extfvk: ExtendedFullViewingKey,
-    zaddress: PaymentAddress<Bls12>,
-
-    // If this is a HD key, what is the key number
-    hdkey_num: Option<u32>,
-
-    // If locked, the encrypted private key is stored here
-    enc_key: Option<Vec<u8>>,
-    nonce: Option<Vec<u8>>,
-}
-
-impl WalletZKey {
-  pub fn new_hdkey(hdkey_num: u32, extsk: ExtendedSpendingKey) -> Self {
-    let extfvk = ExtendedFullViewingKey::from(&extsk);
-    let zaddress = extfvk.default_address().unwrap().1;
-
-    WalletZKey {
-        keytype: WalletZKeyType::HdKey,
-        locked: false,
-        extsk: Some(extsk),
-        extfvk,
-        zaddress,
-        hdkey_num: Some(hdkey_num),
-        enc_key: None,
-        nonce: None,
-    }
-  }
-
-  pub fn new_locked_hdkey(hdkey_num: u32, extfvk: ExtendedFullViewingKey) -> Self {
-    let zaddress = extfvk.default_address().unwrap().1;
-
-    WalletZKey {
-      keytype: WalletZKeyType::HdKey,
-      locked: true,
-      extsk: None,
-      extfvk,
-      zaddress,
-      hdkey_num: Some(hdkey_num),
-      enc_key: None,
-      nonce: None
-    }
-  }
-
-  pub fn new_imported_sk(isk: ExtendedSpendingKey) -> Self {
-      let extfvk = ExtendedFullViewingKey::from(&isk);
-      let zaddress = extfvk.default_address().unwrap().1;
-
-      WalletZKey {
-          keytype: WalletZKeyType::ImportedKey,
-          locked: false,
-          extsk: Some(isk),
-          extfvk,
-          zaddress,
-          hdkey_num: None,
-          enc_key: None,
-          nonce: None,
-      }
-  }
-
-  fn serialized_version() -> u8 {
-      return 1;
-  }
-
-  pub fn read<R: Read>(mut inp: R) -> io::Result<Self> {
-    let version = inp.read_u8()?;
-    assert!(version <= Self::serialized_version());
-
-    let keytype: WalletZKeyType = match inp.read_u32::<LittleEndian>()? {
-      0 => Ok(WalletZKeyType::HdKey),
-      1 => Ok(WalletZKeyType::ImportedKey),
-      2 => Ok(WalletZKeyType::ViewKey),
-      n => Err(io::Error::new(ErrorKind::InvalidInput, format!("Unknown zkey type {}", n)))
-    }?;
-
-    let locked = inp.read_u8()? > 0;
-
-    let extsk = Optional::read(&mut inp, |r| ExtendedSpendingKey::read(r))?;
-    let extfvk = ExtendedFullViewingKey::read(&mut inp)?;
-    let zaddress = extfvk.default_address().unwrap().1;
-
-    let hdkey_num = Optional::read(&mut inp, |r| r.read_u32::<LittleEndian>())?;
-
-    let enc_key = Optional::read(&mut inp, |r| 
-        Vector::read(r, |r| r.read_u8()))?;
-    let nonce = Optional::read(&mut inp, |r| 
-        Vector::read(r, |r| r.read_u8()))?;
-
-    Ok(WalletZKey {
-      keytype,
-      locked,
-      extsk,
-      extfvk,
-      zaddress,
-      hdkey_num,
-      enc_key,
-      nonce,
-    })
-  }
-
-  pub fn write<W: Write>(&self, mut out: W) -> io::Result<()> {
-    out.write_u8(Self::serialized_version())?;
-
-    out.write_u32::<LittleEndian>(self.keytype.clone() as u32)?;
-
-    out.write_u8(self.locked as u8)?;
-
-    Optional::write(&mut out, &self.extsk, |w, sk| ExtendedSpendingKey::write(sk, w))?;
-
-    ExtendedFullViewingKey::write(&self.extfvk, &mut out)?;
-
-    Optional::write(&mut out, &self.hdkey_num, |o, n| o.write_u32::<LittleEndian>(*n))?;
-    
-    // Write enc_key
-    Optional::write(&mut out, &self.enc_key, |o, v| 
-        Vector::write(o, v, |o,n| o.write_u8(*n)))?;
-
-    // Write nonce
-    Optional::write(&mut out, &self.nonce, |o, v| 
-        Vector::write(o, v, |o,n| o.write_u8(*n)))
-  }
-
-  pub fn lock(&mut self) {
-    match self.keytype {
-        WalletZKeyType::HdKey => {
-            // For HD keys, just empty out the keys, since they will be reconstructed from the hdkey_num
-            self.extsk = None;
-            self.locked = true;
-        },
-        WalletZKeyType::ImportedKey => {
-            // For imported keys, encrypt the key into enckey
-            // assert that we have the encrypted key. 
-            if self.enc_key.is_none() {
-                panic!("Can't lock when imported key is not encrypted")
-            }
-            self.extsk = None;
-            self.locked = true;
-        },
-        WalletZKeyType::ViewKey => {
-            panic!("Not implemented");
-        }
-    }
-  }
-
-  pub fn unlock(&mut self, config: &LightClientConfig, bip39_seed: &[u8], key: &secretbox::Key) -> io::Result<()> {
-    match self.keytype {
-      WalletZKeyType::HdKey => {
-        let (extsk, extfvk, address) =
-            LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed, self.hdkey_num.unwrap());
-
-        if address != self.zaddress {
-            return Err(io::Error::new(ErrorKind::InvalidData, 
-                    format!("zaddress mismatch at {}. {:?} vs {:?}", self.hdkey_num.unwrap(), address, self.zaddress)));
-        }
-
-        if extfvk != self.extfvk {
-            return Err(io::Error::new(ErrorKind::InvalidData, 
-                        format!("fvk mismatch at {}. {:?} vs {:?}", self.hdkey_num.unwrap(), extfvk, self.extfvk)));
-        }
-
-        self.extsk = Some(extsk);
-      },
-      WalletZKeyType::ImportedKey => {
-        // For imported keys, we need to decrypt from the encrypted key
-        let nonce = secretbox::Nonce::from_slice(&self.nonce.as_ref().unwrap()).unwrap();
-        let extsk_bytes = match secretbox::open(&self.enc_key.as_ref().unwrap(), &nonce, &key) {
-            Ok(s) => s,
-            Err(_) => {return Err(io::Error::new(ErrorKind::InvalidData, "Decryption failed. Is your password correct?"));}
-        };
-
-        self.extsk = Some(ExtendedSpendingKey::read(&extsk_bytes[..])?);
-      },
-      WalletZKeyType::ViewKey => {
-        panic!("Not implemented");
-      }
-    };
-
-    self.locked = false;
-    Ok(())
-  }
-
-  pub fn encrypt(&mut self, key: &secretbox::Key) -> io::Result<()> {
-    match self.keytype {
-        WalletZKeyType::HdKey => {
-            // For HD keys, we don't need to do anything, since the hdnum has all the info to recreate this key
-        },
-        WalletZKeyType::ImportedKey => {
-            // For imported keys, encrypt the key into enckey
-            let nonce = secretbox::gen_nonce();
-
-            let mut sk_bytes = vec![];
-            self.extsk.as_ref().unwrap().write(&mut sk_bytes)?;
-
-            self.enc_key = Some(secretbox::seal(&sk_bytes, &nonce, &key));
-            self.nonce = Some(nonce.as_ref().to_vec());
-        },
-        WalletZKeyType::ViewKey => {
-            panic!("Not implemented");
-        }
-    }
-
-    // Also lock after encrypt
-    self.lock();
-
-    Ok(())
-  }
-
-  pub fn remove_encryption(&mut self) -> io::Result<()> {
-    if self.locked {
-      return Err(Error::new(ErrorKind::InvalidInput, "Can't remove encryption while locked"));
-    }
-
-    match self.keytype {
-      WalletZKeyType::HdKey => {
-          // For HD keys, we don't need to do anything, since the hdnum has all the info to recreate this key
-          Ok(())
-      },
-      WalletZKeyType::ImportedKey => {
-          self.enc_key = None;
-          self.nonce = None;
-          Ok(())
-      },
-      WalletZKeyType::ViewKey => {
-          panic!("Not implemented");
-      }
-    }
-  }
 }
 
 pub struct LightWallet {
@@ -950,11 +711,10 @@ impl LightWallet {
         self.tkeys = Arc::new(RwLock::new(vec![]));
 
         // Remove all the private key from the zkeys
-        self.zkeys.write().unwrap().iter_mut().for_each(|zk| {
-            zk.lock();
-        });
+        self.zkeys.write().unwrap().iter_mut().map(|zk| {
+            zk.lock()
+        }).collect::<io::Result<Vec<_>>>()?;
         
-
         self.unlocked = false;
 
         Ok(())

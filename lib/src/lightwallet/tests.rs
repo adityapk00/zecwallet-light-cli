@@ -5,7 +5,7 @@ use rand::{RngCore, rngs::OsRng};
 use ff::{Field, PrimeField, PrimeFieldRepr};
 use pairing::bls12_381::Bls12;
 use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
-use zcash_client_backend::{encoding::encode_payment_address,
+use zcash_client_backend::{encoding::{encode_payment_address},
     proto::compact_formats::{
         CompactBlock, CompactOutput, CompactSpend, CompactTx,
     }
@@ -27,7 +27,7 @@ use zcash_primitives::{
 
 use sha2::{Sha256, Digest};
 
-use super::LightWallet;
+use super::{LightWallet};
 use super::LightClientConfig;
 use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
 use crate::SaplingParams;
