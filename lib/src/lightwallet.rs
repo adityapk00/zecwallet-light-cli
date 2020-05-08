@@ -239,12 +239,15 @@ impl LightWallet {
             return Err(io::Error::new(ErrorKind::InvalidData, e));
         }
 
+        println!("Reading wallet version {}", version);
         info!("Reading wallet version {}", version);
         
         // After version 5, we're writing the rest of the file as a compressed stream (gzip)
         let mut reader: Box<dyn Read> = if version <= 4 {
+            info!("Reading direct");
             Box::new(inp)
         } else {
+            info!("Reading libflat");
             Box::new(Decoder::new(inp).unwrap())
         };
 
@@ -253,25 +256,25 @@ impl LightWallet {
         } else {
             false
         };
+        info!("Wallet Encryption {:?}", encrypted);
         
         let mut enc_seed = [0u8; 48];
         if version >= 4 {
             reader.read_exact(&mut enc_seed)?;
         }
-
+        
         let nonce = if version >= 4 {
             Vector::read(&mut reader, |r| r.read_u8())?
         } else {
             vec![]
         };
-        
+
         // Seed
         let mut seed_bytes = [0u8; 32];
         reader.read_exact(&mut seed_bytes)?;
         
         // Read the spending keys
         let extsks = Vector::read(&mut reader, |r| ExtendedSpendingKey::read(r))?;
-        println!("reading version {}", version);
         
         let extfvks = if version >= 4 {
             // Read the viewing keys
@@ -281,7 +284,7 @@ impl LightWallet {
             extsks.iter().map(|sk| ExtendedFullViewingKey::from(sk))
                 .collect::<Vec<ExtendedFullViewingKey>>()
         };
-
+        
         // Calculate the addresses
         let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
             .collect::<Vec<PaymentAddress<Bls12>>>();
@@ -291,7 +294,7 @@ impl LightWallet {
             r.read_exact(&mut tpk_bytes)?;
             secp256k1::SecretKey::from_slice(&tpk_bytes).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
         })?;      
-
+        
         let taddresses = if version >= 4 {
             // Read the addresses
             Vector::read(&mut reader, |r| utils::read_string(r))?
@@ -299,9 +302,9 @@ impl LightWallet {
             // Calculate the addresses
             tkeys.iter().map(|sk| LightWallet::address_from_prefix_sk(&config.base58_pubkey_address(), sk)).collect()
         };
-
+        
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
-
+        
         let txs_tuples = Vector::read(&mut reader, |r| {
             let mut txid_bytes = [0u8; 32];
             r.read_exact(&mut txid_bytes)?;
@@ -363,7 +366,7 @@ impl LightWallet {
         writer.write_all(&self.seed)?;
 
         // Flush after writing the seed, so in case of a disaster, we can still recover the seed.
-        //writer.flush()?;
+        writer.flush()?;
 
         // Write all the spending keys
         Vector::write(&mut writer, &self.extsks.read().unwrap(),

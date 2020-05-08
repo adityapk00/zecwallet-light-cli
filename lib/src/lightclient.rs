@@ -418,7 +418,7 @@ impl LightClient {
         Ok(())
     }
 
-    pub fn attempt_recover_seed(config: &LightClientConfig) -> Result<String, String> {
+    pub fn attempt_recover_seed(config: &LightClientConfig, password: Option<String>) -> Result<String, String> {
         use std::io::prelude::*;
         use byteorder::{LittleEndian, ReadBytesExt};
         use libflate::gzip::Decoder;
@@ -442,8 +442,8 @@ impl LightClient {
             false
         };
 
-        if encrypted {
-            return Err("The wallet is encrypted!".to_string());
+        if encrypted && password.is_none() {
+            return Err("The wallet is encrypted and a password was not specified. Please specify the password with '--password'!".to_string());
         }
 
         let mut enc_seed = [0u8; 48];
@@ -451,19 +451,35 @@ impl LightClient {
             reader.read_exact(&mut enc_seed).unwrap();
         }
 
-        let _nonce = if version >= 4 {
+        let nonce = if version >= 4 {
             Vector::read(&mut reader, |r| r.read_u8()).unwrap()
         } else {
             vec![]
         };
 
-        // Seed
-        let mut seed_bytes = [0u8; 32];
-        reader.read_exact(&mut seed_bytes).unwrap();
+        let phrase = if encrypted {
+            use sodiumoxide::crypto::secretbox;
+            use crate::lightwallet::double_sha256;
 
-        let phrase = Mnemonic::from_entropy(&seed_bytes, Language::English,).unwrap().phrase().to_string();
+            // Get the doublesha256 of the password, which is the right length
+            let key = secretbox::Key::from_slice(&double_sha256(password.unwrap().as_bytes())).unwrap();
+            let nonce = secretbox::Nonce::from_slice(&nonce).unwrap();
 
-        Ok(phrase)
+            let seed = match secretbox::open(&enc_seed, &nonce, &key) {
+                Ok(s) => s,
+                Err(_) => return Err("Decryption failed. Is your password correct?".to_string())
+            };
+            
+            Mnemonic::from_entropy(&seed, Language::English)
+        } else {
+            // Seed
+            let mut seed_bytes = [0u8; 32];
+            reader.read_exact(&mut seed_bytes).unwrap();
+
+            Mnemonic::from_entropy(&seed_bytes, Language::English) 
+        }.map_err(|e| format!("Failed to read seed. {:?}", e));
+        
+        phrase.map(|m| m.phrase().to_string())
     }
 
 
@@ -1268,13 +1284,14 @@ pub mod tests {
             let seed = lc.do_seed_phrase().unwrap()["seed"].as_str().unwrap().to_string();
             lc.do_save().unwrap();
 
-            assert_eq!(seed, LightClient::attempt_recover_seed(&config).unwrap());
+            assert_eq!(seed, LightClient::attempt_recover_seed(&config, None).unwrap());
 
             // Now encrypt and save the file
-            lc.wallet.write().unwrap().encrypt("password".to_string()).unwrap();
+            let pwd = "password".to_string();
+            lc.wallet.write().unwrap().encrypt(pwd.clone()).unwrap();
             lc.do_save().unwrap();
 
-            assert!(LightClient::attempt_recover_seed(&config).is_err());
+            assert_eq!(seed, LightClient::attempt_recover_seed(&config, Some(pwd)).unwrap());
         }
     }
 

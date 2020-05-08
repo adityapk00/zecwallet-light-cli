@@ -27,6 +27,10 @@ macro_rules! configure_clapapp {
                 .long("recover")
                 .help("Attempt to recover the seed from the wallet")
                 .takes_value(false))
+            .arg(Arg::with_name("password")
+                .long("password")
+                .help("When recovering seed, specify a password for the encrypted wallet")
+                .takes_value(true))
             .arg(Arg::with_name("seed")
                 .short("s")
                 .long("seed")
@@ -234,7 +238,7 @@ pub fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<Strin
     (command_tx, resp_rx)
 }
 
-pub fn attempt_recover_seed() {
+pub fn attempt_recover_seed(password: Option<String>) {
     // Create a Light Client Config in an attempt to recover the file.
     let config = LightClientConfig {
         server: "0.0.0.0:0".parse().unwrap(),
@@ -246,7 +250,7 @@ pub fn attempt_recover_seed() {
         data_dir: None,
     };
 
-    match LightClient::attempt_recover_seed(&config) {
+    match LightClient::attempt_recover_seed(&config, password) {
         Ok(seed) => println!("Recovered seed: '{}'", seed),
         Err(e)   => eprintln!("Failed to recover seed. Error: {}", e)
     };

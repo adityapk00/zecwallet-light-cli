@@ -13,9 +13,10 @@ pub fn main() {
     let fresh_app = App::new("Zecwallet CLI");
     let configured_app = configure_clapapp!(fresh_app);
     let matches = configured_app.get_matches();
+
     if matches.is_present("recover") {
         // Create a Light Client Config in an attempt to recover the file.
-        attempt_recover_seed();
+        attempt_recover_seed(matches.value_of("password").map(|s| s.to_string()));
         return;
     }
 
@@ -55,8 +56,9 @@ pub fn main() {
     let (command_tx, resp_rx) = match startup(server, dangerous, seed, birthday, !nosync, command.is_none()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Error during startup: {}", e);
-            error!("Error during startup: {}", e);
+            let emsg = format!("Error during startup:{}\nIf you repeatedly run into this issue, you might have to restore your wallet from your seed phrase.", e);
+            eprintln!("{}", emsg);
+            error!("{}", emsg);
             if cfg!(target_os = "unix" ) {
                 match e.raw_os_error() {
                     Some(13) => report_permission_error(),
