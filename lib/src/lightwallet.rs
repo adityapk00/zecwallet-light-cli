@@ -11,7 +11,7 @@ use log::{info, warn, error};
 
 use protobuf::parse_from_bytes;
 
-use libflate::{gzip::{Decoder, Encoder}, finish::AutoFinishUnchecked};
+use libflate::gzip::{Decoder};
 use secp256k1::SecretKey;
 use bip39::{Mnemonic, Language};
 
@@ -133,7 +133,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 5;
+        return 6;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -242,8 +242,8 @@ impl LightWallet {
         println!("Reading wallet version {}", version);
         info!("Reading wallet version {}", version);
         
-        // After version 5, we're writing the rest of the file as a compressed stream (gzip)
-        let mut reader: Box<dyn Read> = if version <= 4 {
+        // At version 5, we're writing the rest of the file as a compressed stream (gzip)
+        let mut reader: Box<dyn Read> = if version != 5 {
             info!("Reading direct");
             Box::new(inp)
         } else {
@@ -341,17 +341,14 @@ impl LightWallet {
         })
     }
 
-    pub fn write<W: Write>(&self, mut out: W) -> io::Result<()> {
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         if self.encrypted && self.unlocked {
             return Err(Error::new(ErrorKind::InvalidInput, 
                         format!("Cannot write while wallet is unlocked while encrypted.")));
         }
 
         // Write the version
-        out.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
-
-        // Gzip encoder
-        let mut writer = AutoFinishUnchecked::new(Encoder::new(out).unwrap());
+        writer.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
 
         // Write if it is locked
         writer.write_u8(if self.encrypted {1} else {0})?;

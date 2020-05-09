@@ -429,8 +429,8 @@ impl LightClient {
         let version = inp.read_u64::<LittleEndian>().unwrap();
         println!("Reading wallet version {}", version);
 
-        // After version 5, we're writing the rest of the file as a compressed stream (gzip)
-        let mut reader: Box<dyn Read> = if version <= 4 {
+        // At version 5, we're writing the rest of the file as a compressed stream (gzip)
+        let mut reader: Box<dyn Read> = if version != 5 {
             Box::new(inp)
         } else {
             Box::new(Decoder::new(inp).unwrap())
