@@ -87,7 +87,7 @@ pub fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, birthda
     let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
 
     let lightclient = match seed {
-        Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, birthday)?),
+        Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, birthday, false)?),
         None => {
             if config.wallet_exists() {
                 Arc::new(LightClient::read_from_disk(&config)?)

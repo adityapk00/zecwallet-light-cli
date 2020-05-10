@@ -348,8 +348,8 @@ impl LightClient {
         Ok(l)
     }
 
-    pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, birthday: u64) -> io::Result<Self> {
-        if config.wallet_exists() {
+    pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, birthday: u64, overwrite: bool) -> io::Result<Self> {
+        if !overwrite && config.wallet_exists() {
             return Err(Error::new(ErrorKind::AlreadyExists,
                     "Cannot create a new wallet from seed, because a wallet already exists"));
         }
@@ -1243,7 +1243,7 @@ pub mod tests {
             assert!(LightClient::new(&config, 0).is_err());
 
             // new_from_phrase will not work either, again, because wallet file exists
-            assert!(LightClient::new_from_phrase(TEST_SEED.to_string(), &config, 0).is_err());
+            assert!(LightClient::new_from_phrase(TEST_SEED.to_string(), &config, 0, false).is_err());
 
             // Creating a lightclient to the same dir without a seed should re-read the same wallet
             // file and therefore the same seed phrase
@@ -1262,7 +1262,7 @@ pub mod tests {
             assert!(LightClient::read_from_disk(&config).is_err());
 
             // New from phrase should work becase a file doesn't exist already
-            let lc = LightClient::new_from_phrase(TEST_SEED.to_string(), &config, 0).unwrap();
+            let lc = LightClient::new_from_phrase(TEST_SEED.to_string(), &config, 0, false).unwrap();
             assert_eq!(TEST_SEED.to_string(), lc.do_seed_phrase().unwrap()["seed"].as_str().unwrap().to_string());
             lc.do_save().unwrap();
 
