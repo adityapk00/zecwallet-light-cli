@@ -187,7 +187,7 @@ impl LightWallet {
             let mut system_rng = OsRng;
             system_rng.fill(&mut seed_bytes);
         } else {
-            let phrase = match Mnemonic::from_phrase(seed_phrase.unwrap(), Language::English) {
+            let phrase = match Mnemonic::from_phrase(seed_phrase.clone().unwrap(), Language::English) {
                 Ok(p) => p,
                 Err(e) => {
                     let e = format!("Error parsing phrase: {}", e);
@@ -212,7 +212,7 @@ impl LightWallet {
         let (extsk, extfvk, address)
             = LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed.as_bytes(), 0);
 
-        Ok(LightWallet {
+        let lw = LightWallet {
             encrypted:   false,
             unlocked:    true,
             enc_seed:    [0u8; 48],
@@ -228,7 +228,17 @@ impl LightWallet {
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday:    latest_block,
-        })
+        };
+
+        // If restoring from seed, make sure we are creating 5 addresses for users
+        if seed_phrase.is_some() {
+            for _i in 0..5 {
+                lw.add_taddr();
+                lw.add_zaddr();
+            }
+        }
+
+        Ok(lw)
     }
 
     pub fn read<R: Read>(mut inp: R, config: &LightClientConfig) -> io::Result<Self> {
