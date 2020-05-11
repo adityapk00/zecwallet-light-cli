@@ -59,6 +59,7 @@ pub fn get_info(uri: &http::Uri) -> Result<LightdInfo, String> {
 async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, c: F) 
     -> Result<(), Box<dyn std::error::Error>> 
 where F : Fn(&[u8], u64) {
+    use std::time::{Duration, Instant};
     let mut client = get_client(uri).await?;
 
     let bs = BlockId{ height: start_height, hash: vec!()};
@@ -66,14 +67,22 @@ where F : Fn(&[u8], u64) {
 
     let request = Request::new(BlockRange{ start: Some(bs), end: Some(be) });
 
+    let mut process_duration = Duration::new(0, 0);
+    let start_time = Instant::now();
+
     let mut response = client.get_block_range(request).await?.into_inner();
     while let Some(block) = response.message().await? {
         use prost::Message;
         let mut encoded_buf = vec![];
 
         block.encode(&mut encoded_buf).unwrap();
+        let process_start_time = Instant::now();
         c(&encoded_buf, block.height);
+        let process_end_time = Instant::now();
+        process_duration = process_duration + process_end_time.duration_since(process_start_time);
+
     }
+    let end_time = Instant::now();
 
     Ok(())
 }
@@ -162,26 +171,26 @@ async fn get_transaction(uri: &http::Uri, txid: TxId)
     Ok(response.into_inner())
 }
 
-pub fn fetch_full_tx<F : 'static + std::marker::Send>(uri: &http::Uri, txid: TxId, c: F)
-        where F : Fn(&[u8]) {
+pub fn fetch_full_tx(uri: &http::Uri, txid: TxId) -> Result<Vec<u8>, String> {
     let mut rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
-            error!("Error creating runtime {}", e.to_string());
-            eprintln!("{}", e);
-            return;
+            let errstr = format!("Error creating runtime {}", e.to_string());
+            error!("{}", errstr);
+            eprintln!("{}", errstr);
+            return Err(errstr);
         }
     };
 
     match rt.block_on(get_transaction(uri, txid)) {
-        Ok(rawtx) => c(&rawtx.data),
+        Ok(rawtx) => Ok(rawtx.data.to_vec()),
         Err(e) => {
-            error!("Error in get_transaction runtime {}", e.to_string());
-            eprintln!("{}", e);
+            let errstr = format!("Error in get_transaction runtime {}", e.to_string());
+            error!("{}", errstr);
+            eprintln!("{}", errstr);
+            Err(errstr)
         }
-    }
-
-    
+    }    
 }
 
 // send_transaction GRPC call
@@ -222,22 +231,19 @@ async fn get_latest_block(uri: &http::Uri) -> Result<BlockId, Box<dyn std::error
     Ok(response.into_inner())
 }
 
-pub fn fetch_latest_block<F : 'static + std::marker::Send>(uri: &http::Uri, mut c : F) 
-    where F : FnMut(BlockId) {
+pub fn fetch_latest_block(uri: &http::Uri) -> Result<BlockId, String> {
     let mut rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
-            error!("Error creating runtime {}", e.to_string());
-            eprintln!("{}", e);
-            return;
+            let errstr = format!("Error creating runtime {}", e.to_string());
+            eprintln!("{}", errstr);
+            return Err(errstr);
         }
     };
 
-    match rt.block_on(get_latest_block(uri)) {
-        Ok(b) => c(b),
-        Err(e) => {
-            error!("Error getting latest block {}", e.to_string());
-            eprintln!("{}", e);
-        }
-    };
+    rt.block_on(get_latest_block(uri)).map_err(|e| {
+        let errstr = format!("Error getting latest block {}", e.to_string());
+        eprintln!("{}", errstr);
+        errstr
+    })
 }
