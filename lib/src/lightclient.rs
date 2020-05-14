@@ -376,6 +376,25 @@ impl LightClient {
         Ok(l)
     }
 
+    pub fn read_from_buffer<R: Read>(config: &LightClientConfig, mut reader: R) -> io::Result<Self>{
+        let wallet = LightWallet::read(&mut reader, config)?;
+        let mut lc = LightClient {
+            wallet          : Arc::new(RwLock::new(wallet)),
+            config          : config.clone(),
+            sapling_output  : vec![], 
+            sapling_spend   : vec![],
+            sync_lock       : Mutex::new(()),
+            sync_status     : Arc::new(RwLock::new(WalletStatus::new())),
+        };
+
+        lc.read_sapling_params();
+
+        info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
+        info!("Created LightClient to {}", &config.server);
+
+        Ok(lc)
+    }
+
     pub fn read_from_disk(config: &LightClientConfig) -> io::Result<Self> {
         if !config.wallet_exists() {
             return Err(Error::new(ErrorKind::AlreadyExists,
@@ -611,6 +630,34 @@ impl LightClient {
 
         r
     }
+
+
+    pub fn do_save_to_buffer(&self) -> Result<Vec<u8>, String> {
+        // If the wallet is encrypted but unlocked, lock it again.
+        {
+           let mut wallet = self.wallet.write().unwrap();
+           if wallet.is_encrypted() && wallet.is_unlocked_for_spending() {
+               match wallet.lock() {
+                   Ok(_) => {},
+                   Err(e) => {
+                       let err = format!("ERR: {}", e);
+                       error!("{}", err);
+                       return Err(e.to_string());
+                   }
+               }
+           }
+       }        
+
+       let mut buffer: Vec<u8> = vec![];
+       match self.wallet.write().unwrap().write(&mut buffer) {
+           Ok(_) => Ok(buffer),
+           Err(e) => {
+               let err = format!("ERR: {}", e);
+               error!("{}", err);
+               Err(e.to_string())
+           }
+       }
+   }
 
     pub fn get_server_uri(&self) -> http::Uri {
         self.config.server.clone()
