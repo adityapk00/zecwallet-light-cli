@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::io::{Error};
 use rand::{RngCore, rngs::OsRng};
 
-use ff::{Field, PrimeField, PrimeFieldRepr};
+use ff::{Field, PrimeField};
 use pairing::bls12_381::Bls12;
 use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
 use zcash_client_backend::{encoding::encode_payment_address,
@@ -85,7 +85,7 @@ impl FakeCompactBlock {
             let mut c_out = CompactOutput::default();
 
             let mut cmu_bytes = vec![];
-            o.cmu.into_repr().write_le(&mut cmu_bytes).unwrap();
+            cmu_bytes.extend_from_slice(&o.cmu.to_repr().0);
 
             let mut epk_bytes = vec![];
             o.ephemeral_key.write(&mut epk_bytes).unwrap();
@@ -124,8 +124,8 @@ impl FakeCompactBlock {
         // Create a fake Note for the account
         let mut rng = OsRng;
         let note = Note {
-            g_d: to.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
-            pk_d: to.pk_d.clone(),
+            g_d: to.diversifier().g_d::<Bls12>(&JUBJUB).unwrap(),
+            pk_d: to.pk_d().clone(),
             value: value.into(),
             r: Fs::random(&mut rng),
         };
@@ -137,7 +137,7 @@ impl FakeCompactBlock {
             &mut rng,
         );
         let mut cmu = vec![];
-        note.cm(&JUBJUB).into_repr().write_le(&mut cmu).unwrap();
+        cmu.extend_from_slice(&note.cm(&JUBJUB).to_repr().0);
         let mut epk = vec![];
         encryptor.epk().write(&mut epk).unwrap();
         let enc_ciphertext = encryptor.encrypt_note_plaintext();
@@ -179,8 +179,8 @@ impl FakeCompactBlock {
         // Create a fake Note for the payment
         ctx.outputs.push({
             let note = Note {
-                g_d: to.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
-                pk_d: to.pk_d.clone(),
+                g_d: to.diversifier().g_d::<Bls12>(&JUBJUB).unwrap(),
+                pk_d: to.pk_d().clone(),
                 value: value.into(),
                 r: Fs::random(&mut rng),
             };
@@ -192,7 +192,7 @@ impl FakeCompactBlock {
                 &mut rng,
             );
             let mut cmu = vec![];
-            note.cm(&JUBJUB).into_repr().write_le(&mut cmu).unwrap();
+            cmu.extend_from_slice(&note.cm(&JUBJUB).to_repr().0);
             let mut epk = vec![];
             encryptor.epk().write(&mut epk).unwrap();
             let enc_ciphertext = encryptor.encrypt_note_plaintext();
@@ -208,8 +208,8 @@ impl FakeCompactBlock {
         ctx.outputs.push({
             let change_addr = extfvk.default_address().unwrap().1;
             let note = Note {
-                g_d: change_addr.diversifier.g_d::<Bls12>(&JUBJUB).unwrap(),
-                pk_d: change_addr.pk_d.clone(),
+                g_d: change_addr.diversifier().g_d::<Bls12>(&JUBJUB).unwrap(),
+                pk_d: change_addr.pk_d().clone(),
                 value: (in_value - value).into(),
                 r: Fs::random(&mut rng),
             };
@@ -221,7 +221,7 @@ impl FakeCompactBlock {
                 &mut rng,
             );
             let mut cmu = vec![];
-            note.cm(&JUBJUB).into_repr().write_le(&mut cmu).unwrap();
+            cmu.extend_from_slice(&note.cm(&JUBJUB).to_repr().0);
             let mut epk = vec![];
             encryptor.epk().write(&mut epk).unwrap();
             let enc_ciphertext = encryptor.encrypt_note_plaintext();
