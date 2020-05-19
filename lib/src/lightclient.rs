@@ -162,14 +162,19 @@ impl LightClientConfig {
             };
         }
 
-        // Create directory if it doesn't exist
-        match std::fs::create_dir_all(zcash_data_location.clone()) {
-            Ok(_) => zcash_data_location.into_boxed_path(),
-            Err(e) => {
-                eprintln!("Couldn't create zcash directory!\n{}", e);
-                panic!("Couldn't create zcash directory!");
+        // Create directory if it doesn't exist on non-mobile platforms
+        #[cfg(all(not(target_os="ios"), not(target_os="android")))]
+        {
+            match std::fs::create_dir_all(zcash_data_location.clone()) {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("Couldn't create zcash directory!\n{}", e);
+                    panic!("Couldn't create zcash directory!");
+                }
             }
         }
+
+        zcash_data_location.into_boxed_path()
     }
 
     pub fn get_wallet_path(&self) -> Box<Path> {
@@ -322,9 +327,12 @@ impl LightClient {
     /// Create a brand new wallet with a new seed phrase. Will fail if a wallet file 
     /// already exists on disk
     pub fn new(config: &LightClientConfig, latest_block: u64) -> io::Result<Self> {
-        if config.wallet_exists() {
-            return Err(Error::new(ErrorKind::AlreadyExists,
-                    "Cannot create a new wallet from seed, because a wallet already exists"));
+        #[cfg(all(not(target_os="ios"), not(target_os="android")))]
+        {        
+            if config.wallet_exists() {
+                return Err(Error::new(ErrorKind::AlreadyExists,
+                        "Cannot create a new wallet from seed, because a wallet already exists"));
+            }
         }
 
         let mut l = LightClient {
@@ -349,9 +357,12 @@ impl LightClient {
     }
 
     pub fn new_from_phrase(seed_phrase: String, config: &LightClientConfig, birthday: u64, overwrite: bool) -> io::Result<Self> {
-        if !overwrite && config.wallet_exists() {
-            return Err(Error::new(ErrorKind::AlreadyExists,
-                    "Cannot create a new wallet from seed, because a wallet already exists"));
+        #[cfg(all(not(target_os="ios"), not(target_os="android")))]
+        {
+            if !overwrite && config.wallet_exists() {
+                return Err(Error::new(ErrorKind::AlreadyExists,
+                        "Cannot create a new wallet from seed, because a wallet already exists"));
+            }
         }
 
         let mut l = LightClient {
