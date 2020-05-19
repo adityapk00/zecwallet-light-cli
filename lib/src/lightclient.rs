@@ -609,37 +609,43 @@ impl LightClient {
     }
 
     pub fn do_save(&self) -> Result<(), String> {        
-        // If the wallet is encrypted but unlocked, lock it again.
-        {
-            let mut wallet = self.wallet.write().unwrap();
-            if wallet.is_encrypted() && wallet.is_unlocked_for_spending() {
-                match wallet.lock() {
-                    Ok(_) => {},
-                    Err(e) => {
-                        let err = format!("ERR: {}", e);
-                        error!("{}", err);
-                        return Err(e.to_string());
+        // On mobile platforms, disable the save, because the saves will be handled by the native layer, and not in rust
+        if cfg!(all(not(target_os="ios"), not(target_os="android"))) { 
+            // If the wallet is encrypted but unlocked, lock it again.
+            {
+                let mut wallet = self.wallet.write().unwrap();
+                if wallet.is_encrypted() && wallet.is_unlocked_for_spending() {
+                    match wallet.lock() {
+                        Ok(_) => {},
+                        Err(e) => {
+                            let err = format!("ERR: {}", e);
+                            error!("{}", err);
+                            return Err(e.to_string());
+                        }
                     }
                 }
-            }
-        }        
+            }        
 
-        let mut file_buffer = BufWriter::with_capacity(
-            1_000_000, // 1 MB write buffer
-            File::create(self.config.get_wallet_path()).unwrap());
-        
-        let r = match self.wallet.write().unwrap().write(&mut file_buffer) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let err = format!("ERR: {}", e);
-                error!("{}", err);
-                Err(e.to_string())
-            }
-        };
+            let mut file_buffer = BufWriter::with_capacity(
+                1_000_000, // 1 MB write buffer
+                File::create(self.config.get_wallet_path()).unwrap());
+            
+            let r = match self.wallet.write().unwrap().write(&mut file_buffer) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    let err = format!("ERR: {}", e);
+                    error!("{}", err);
+                    Err(e.to_string())
+                }
+            };
 
-        file_buffer.flush().map_err(|e| format!("{}", e))?;
+            file_buffer.flush().map_err(|e| format!("{}", e))?;
 
-        r
+            r
+        } else {
+            // On ios and android just return OK
+            Ok(())
+        }
     }
 
 
