@@ -1029,6 +1029,24 @@ impl LightClient {
     }
 
     pub fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
+        let mut retry_count = 0;
+        loop {
+            match self.do_sync_internal(print_updates, retry_count) {
+                Ok(j) => return Ok(j),
+                Err(e) => {
+                    retry_count += 1;
+                    if retry_count > 5 {
+                        return Err(e);
+                    }
+                    // Sleep exponentially backing off
+                    std::thread::sleep(std::time::Duration::from_secs((2 as u64).pow(retry_count)));
+                    println!("Sync error {}\nRetry count {}", e, retry_count);
+                }
+            }
+        }
+    }
+
+    fn do_sync_internal(&self, print_updates: bool, retry_count: u32) -> Result<JsonValue, String> {
         // We can only do one sync at a time because we sync blocks in serial order
         // If we allow multiple syncs, they'll all get jumbled up.
         let _lock = self.sync_lock.lock().unwrap();
@@ -1059,7 +1077,8 @@ impl LightClient {
         info!("Latest block is {}", latest_block);
 
         // Get the end height to scan to.
-        let mut end_height = std::cmp::min(last_scanned_height + 1000, latest_block);
+        let scan_batch_size = 1000;
+        let mut end_height = std::cmp::min(last_scanned_height + scan_batch_size, latest_block);
 
         // If there's nothing to scan, just return
         if last_scanned_height == latest_block {
@@ -1085,7 +1104,9 @@ impl LightClient {
         let all_new_txs = Arc::new(RwLock::new(vec![]));
 
         // Fetch CompactBlocks in increments
+        let mut pass = 0;
         loop {
+            pass +=1 ;
             // Collect all block times, because we'll need to update transparent tx
             // datetime via the block height timestamp
             let block_times = Arc::new(RwLock::new(HashMap::new()));
@@ -1147,7 +1168,7 @@ impl LightClient {
                     };
 
                     local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
-            });
+            })?;
 
             // Check if there was any invalid block, which means we might have to do a reorg
             let invalid_height = last_invalid_height.load(Ordering::SeqCst);
@@ -1187,15 +1208,23 @@ impl LightClient {
                     let wallet = self.wallet.clone();
                     let block_times_inner = block_times.clone();
 
-                    fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height,
-                        move |tx_bytes: &[u8], height: u64| {
+                    // If this is the first pass after a retry, fetch older t address txids too, becuse
+                    // they might have been missed last time.
+                    let transparent_start_height = if pass == 1 && retry_count > 0 {
+                        start_height - scan_batch_size
+                    } else {
+                        start_height
+                    };
+
+                    fetch_transparent_txids(&self.get_server_uri(), address, transparent_start_height, end_height, 
+                    move |tx_bytes: &[u8], height: u64| {
                             let tx = Transaction::read(tx_bytes).unwrap();
 
                             // Scan this Tx for transparent inputs and outputs
                             let datetime = block_times_inner.read().unwrap().get(&height).map(|v| *v).unwrap_or(0);
                             wallet.read().unwrap().scan_full_tx(&tx, height as i32, datetime as u64); 
                         }
-                    );
+                    )?;
                 }
             }           
             

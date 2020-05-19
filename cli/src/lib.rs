@@ -144,8 +144,8 @@ pub fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Rec
         }
     };
 
-    let info = &send_command("info".to_string(), vec![]);
-    let chain_name = json::parse(info).unwrap()["chain_name"].as_str().unwrap().to_string();
+    let info = send_command("info".to_string(), vec![]);
+    let chain_name = json::parse(&info).unwrap()["chain_name"].as_str().unwrap().to_string();
 
     loop {
         // Read the height first
