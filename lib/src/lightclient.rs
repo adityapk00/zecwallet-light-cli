@@ -65,7 +65,6 @@ pub struct LightClientConfig {
     pub sapling_activation_height   : u64,
     pub consensus_branch_id         : String,
     pub anchor_offset               : u32,
-    pub no_cert_verification        : bool,
     pub data_dir                    : Option<String>
 }
 
@@ -79,12 +78,11 @@ impl LightClientConfig {
             sapling_activation_height   : 0,
             consensus_branch_id         : "".to_string(),
             anchor_offset               : ANCHOR_OFFSET,
-            no_cert_verification        : false,
             data_dir                    : dir,
         }
     }
 
-    pub fn create(server: http::Uri, dangerous: bool) -> io::Result<(LightClientConfig, u64)> {
+    pub fn create(server: http::Uri) -> io::Result<(LightClientConfig, u64)> {
         use std::net::ToSocketAddrs;
         // Test for a connection first
         format!("{}:{}", server.host().unwrap(), server.port().unwrap())
@@ -93,7 +91,7 @@ impl LightClientConfig {
             .ok_or(std::io::Error::new(ErrorKind::ConnectionRefused, "Couldn't resolve server!"))?;
 
         // Do a getinfo first, before opening the wallet
-        let info = grpcconnector::get_info(&server, dangerous)
+        let info = grpcconnector::get_info(&server)
             .map_err(|e| std::io::Error::new(ErrorKind::ConnectionRefused, e))?;
 
         // Create a Light Client Config
@@ -103,7 +101,6 @@ impl LightClientConfig {
             sapling_activation_height   : info.sapling_activation_height,
             consensus_branch_id         : info.consensus_branch_id,
             anchor_offset               : ANCHOR_OFFSET,
-            no_cert_verification        : dangerous,
             data_dir                    : None,
         };
 
@@ -681,7 +678,7 @@ impl LightClient {
     }
 
     pub fn do_info(&self) -> String {
-        match get_info(&self.get_server_uri(), self.config.no_cert_verification) {
+        match get_info(&self.get_server_uri()) {
             Ok(i) => {
                 let o = object!{
                     "version" => i.version,
@@ -993,7 +990,7 @@ impl LightClient {
         // This will hold the latest block fetched from the RPC
         let latest_block_height = Arc::new(AtomicU64::new(0));
         let lbh = latest_block_height.clone();
-        fetch_latest_block(&self.get_server_uri(), self.config.no_cert_verification, 
+        fetch_latest_block(&self.get_server_uri(),
             move |block: BlockId| {
                 lbh.store(block.height, Ordering::SeqCst);
             });
@@ -1067,7 +1064,7 @@ impl LightClient {
 
             let last_invalid_height = Arc::new(AtomicI32::new(0));
             let last_invalid_height_inner = last_invalid_height.clone();
-            fetch_blocks(&self.get_server_uri(), start_height, end_height, self.config.no_cert_verification,
+            fetch_blocks(&self.get_server_uri(), start_height, end_height,
                 move |encoded_block: &[u8], height: u64| {
                     // Process the block only if there were no previous errors
                     if last_invalid_height_inner.load(Ordering::SeqCst) > 0 {
@@ -1137,7 +1134,7 @@ impl LightClient {
                     let wallet = self.wallet.clone();
                     let block_times_inner = block_times.clone();
 
-                    fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height, self.config.no_cert_verification,
+                    fetch_transparent_txids(&self.get_server_uri(), address, start_height, end_height,
                         move |tx_bytes: &[u8], height: u64| {
                             let tx = Transaction::read(tx_bytes).unwrap();
 
@@ -1195,7 +1192,7 @@ impl LightClient {
             let light_wallet_clone = self.wallet.clone();
             info!("Fetching full Tx: {}", txid);
 
-            fetch_full_tx(&self.get_server_uri(), txid, self.config.no_cert_verification, move |tx_bytes: &[u8] | {
+            fetch_full_tx(&self.get_server_uri(), txid,move |tx_bytes: &[u8] | {
                 let tx = Transaction::read(tx_bytes).unwrap();
 
                 light_wallet_clone.read().unwrap().scan_full_tx(&tx, height, 0);
@@ -1224,7 +1221,7 @@ impl LightClient {
         );
         
         match rawtx {
-            Ok(txbytes)   => broadcast_raw_tx(&self.get_server_uri(), self.config.no_cert_verification, txbytes),
+            Ok(txbytes)   => broadcast_raw_tx(&self.get_server_uri(), txbytes),
             Err(e)        => Err(format!("Error: No Tx to broadcast. Error was: {}", e))
         }
     }

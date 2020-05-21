@@ -14,10 +14,6 @@ pub mod version;
 macro_rules! configure_clapapp {
     ( $freshapp: expr ) => {
     $freshapp.version(VERSION)
-            .arg(Arg::with_name("dangerous")
-                .long("dangerous")
-                .help("Disable server TLS certificate verification. Use this if you're running a local lightwalletd with a self-signed certificate. WARNING: This is dangerous, don't use it with a server that is not your own.")
-                .takes_value(false))
             .arg(Arg::with_name("nosync")
                 .help("By default, zecwallet-cli will sync the wallet at startup. Pass --nosync to prevent the automatic sync at startup.")
                 .long("nosync")
@@ -81,10 +77,10 @@ pub fn report_permission_error() {
     }
 }
 
-pub fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, birthday: u64, first_sync: bool, print_updates: bool)
+pub fn startup(server: http::Uri, seed: Option<String>, birthday: u64, first_sync: bool, print_updates: bool)
         -> io::Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
-    let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
+    let (config, latest_block_height) = LightClientConfig::create(server.clone())?;
 
     let lightclient = match seed {
         Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, birthday, false)?),
@@ -246,7 +242,6 @@ pub fn attempt_recover_seed(password: Option<String>) {
         sapling_activation_height: 0,
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
-        no_cert_verification: false,
         data_dir: None,
     };
 

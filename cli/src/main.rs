@@ -51,9 +51,8 @@ pub fn main() {
         return;
     }
 
-    let dangerous = matches.is_present("dangerous");
     let nosync = matches.is_present("nosync");
-    let (command_tx, resp_rx) = match startup(server, dangerous, seed, birthday, !nosync, command.is_none()) {
+    let (command_tx, resp_rx) = match startup(server, seed, birthday, !nosync, command.is_none()) {
         Ok(c) => c,
         Err(e) => {
             let emsg = format!("Error during startup:{}\nIf you repeatedly run into this issue, you might have to restore your wallet from your seed phrase.", e);

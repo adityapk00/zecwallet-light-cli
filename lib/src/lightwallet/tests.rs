@@ -656,7 +656,6 @@ fn get_test_config() -> LightClientConfig {
         sapling_activation_height: 0,
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
-        no_cert_verification: false,
         data_dir: None,
     }
 }
@@ -1763,7 +1762,6 @@ fn test_t_derivation() {
         sapling_activation_height: 0,
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 1,
-        no_cert_verification: false,
         data_dir: None,
     };
 
