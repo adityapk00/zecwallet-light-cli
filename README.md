@@ -14,9 +14,7 @@ Run `zecwallet-cli help` to see a list of all commands.
 * Also remember that t-addresses don't provide any privacy protection.
 
 ## Notes:
-* The wallet connects to the mainnet by default. To connect to testnet, please pass `--server https://lightd-test.zecwallet.co:443`
 * If you want to run your own server, please see [zecwallet lightwalletd](https://github.com/adityapk00/lightwalletd), and then run `./zecwallet-cli --server http://127.0.0.1:9067`.
-
 * The log file is in `~/.zcash/zecwallet-light-wallet.debug.log`. Wallet is stored in `~/.zcash/zecwallet-light-wallet.dat`
 
 ### Note Management
