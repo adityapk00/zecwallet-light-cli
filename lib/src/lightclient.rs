@@ -185,6 +185,21 @@ impl LightClientConfig {
         return self.get_wallet_path().exists()
     }
 
+    pub fn backup_existing_wallet(&self) -> Result<String, String> {
+        if !self.wallet_exists() {
+            return Err(format!("Couldn't find existing wallet to backup. Looked in {:?}", self.get_wallet_path().to_str()));
+        }
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut backup_file_path = self.get_zcash_data_path().into_path_buf();
+        backup_file_path.push(&format!("zecwallet-light-wallet.backup.{}.dat", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()));
+
+        let backup_file_str = backup_file_path.to_string_lossy().to_string();
+        std::fs::copy(self.get_wallet_path(), backup_file_path).map_err(|e| format!("{}", e))?;
+
+        Ok(backup_file_str)
+    }
+
     pub fn get_log_path(&self) -> Box<Path> {
         let mut log_path = self.get_zcash_data_path().into_path_buf();
         log_path.push(LOGFILE_NAME);

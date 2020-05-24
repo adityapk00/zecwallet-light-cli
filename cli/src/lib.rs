@@ -246,7 +246,41 @@ pub fn attempt_recover_seed(password: Option<String>) {
     };
 
     match LightClient::attempt_recover_seed(&config, password) {
-        Ok(seed) => println!("Recovered seed: '{}'", seed),
+        Ok(seed) => {
+            println!("Recovered seed: '{}'", seed);
+            println!("Do you want to use this seed to re-create a new wallet?");
+
+            let mut rl = rustyline::Editor::<()>::new();
+            match rl.readline("(Y / N): ") {
+                Ok(response) => {
+                    if response.to_ascii_uppercase() == "Y" {
+                        match  attempt_save_recovered(&config, seed){
+                            Ok(backup_path) => {
+                                eprintln!("Backed up existing wallet to {}", backup_path);
+                                eprintln!("Saved a new wallet. Please start Zecwallet Lite to rescan your wallet.");
+                            },
+                            Err(e) => {
+                                eprintln!("Failed to save recovered seed. Error: {}", e)
+                            }
+                        };
+                    } else {
+                        println!("Leaving wallet unchanged");
+                    }
+                },
+                Err(_) => {
+                    println!("Leaving wallet unchanged");
+                }
+            }            
+        },
         Err(e)   => eprintln!("Failed to recover seed. Error: {}", e)
     };
+}
+
+fn attempt_save_recovered(config: &LightClientConfig, seed: String) -> Result<String, String> {
+    let backup_path = config.backup_existing_wallet()?;
+    let lightclient = LightClient::new_from_phrase(seed, &config, 0, true).map_err(|e| format!("{}", e))?;
+
+    lightclient.do_save()?;
+
+    Ok(backup_path)
 }
