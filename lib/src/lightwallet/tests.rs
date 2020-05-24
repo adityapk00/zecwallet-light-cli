@@ -1733,10 +1733,10 @@ fn test_rollback() {
         assert_eq!(txs[&sent_txid].notes[0].witnesses.len(), 1);
     }
 
-    // Invalidate 3 blocks
+    // Invalidate the last block
     assert_eq!(wallet.last_scanned_height(), 7);
-    assert_eq!(wallet.invalidate_block(5), 3);
-    assert_eq!(wallet.last_scanned_height(), 4);
+    assert_eq!(wallet.invalidate_block(7), 1);
+    assert_eq!(wallet.last_scanned_height(), 6);
     
     // Make sure the orig Tx is there, but new Tx has disappeared
     {
