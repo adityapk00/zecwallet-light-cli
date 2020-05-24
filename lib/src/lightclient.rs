@@ -9,7 +9,7 @@ use std::fs::File;
 use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
-use std::io::{BufReader, BufWriter, Error, ErrorKind};
+use std::io::{BufReader, Error, ErrorKind};
 
 use protobuf::parse_from_bytes;
 
@@ -623,28 +623,26 @@ impl LightClient {
                 }
             }        
 
-            let r;
             {
                 // Prevent any overlapping syncs during save, and don't save in the middle of a sync
                 let _lock = self.sync_lock.lock().unwrap();
 
                 let wallet = self.wallet.write().unwrap();
-                let mut file_buffer = BufWriter::with_capacity(
-                    1_000_000, // 1 MB write buffer
-                    File::create(self.config.get_wallet_path()).unwrap());
-                
-                r = match wallet.write(&mut file_buffer) {
-                    Ok(_) => Ok(()),
+
+                let mut wallet_bytes = vec![];
+                match wallet.write(&mut wallet_bytes) {
+                    Ok(_) => {
+                        let mut file = File::create(self.config.get_wallet_path()).unwrap();
+                        file.write_all(&wallet_bytes).map_err(|e| format!("{}", e))?;
+                        Ok(())
+                    }, 
                     Err(e) => {
                         let err = format!("ERR: {}", e);
                         error!("{}", err);
                         Err(e.to_string())
                     }
-                };
-
-                file_buffer.flush().map_err(|e| format!("{}", e))?;
+                }
             }
-            r
         } else {
             // On ios and android just return OK
             Ok(())
