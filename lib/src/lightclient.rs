@@ -623,21 +623,27 @@ impl LightClient {
                 }
             }        
 
-            let mut file_buffer = BufWriter::with_capacity(
-                1_000_000, // 1 MB write buffer
-                File::create(self.config.get_wallet_path()).unwrap());
-            
-            let r = match self.wallet.write().unwrap().write(&mut file_buffer) {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    let err = format!("ERR: {}", e);
-                    error!("{}", err);
-                    Err(e.to_string())
-                }
-            };
+            let r;
+            {
+                // Prevent any overlapping syncs during save, and don't save in the middle of a sync
+                let _lock = self.sync_lock.lock().unwrap();
 
-            file_buffer.flush().map_err(|e| format!("{}", e))?;
+                let wallet = self.wallet.write().unwrap();
+                let mut file_buffer = BufWriter::with_capacity(
+                    1_000_000, // 1 MB write buffer
+                    File::create(self.config.get_wallet_path()).unwrap());
+                
+                r = match wallet.write(&mut file_buffer) {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        let err = format!("ERR: {}", e);
+                        error!("{}", err);
+                        Err(e.to_string())
+                    }
+                };
 
+                file_buffer.flush().map_err(|e| format!("{}", e))?;
+            }
             r
         } else {
             // On ios and android just return OK
