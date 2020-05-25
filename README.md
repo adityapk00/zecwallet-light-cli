@@ -30,6 +30,8 @@ Zecwallet-CLI does automatic note and utxo management, which means it doesn't al
 #### Pre-requisites
 * Rust v1.37 or higher.
     * Run `rustup update` to get the latest version of Rust if you already have it installed
+* Rustfmt
+    * Run `rustup component add rustfmt` to add rustfmt
 * Build tools
     * Please install the build tools for your platform. On Ubuntu `sudo apt install build-essential gcc`
 
