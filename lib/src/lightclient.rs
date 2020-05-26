@@ -354,9 +354,9 @@ impl LightClient {
             };
 
         l.set_wallet_initial_state(0);
-        if cfg!(feature = "embed_params") {
-            l.read_sapling_params();
-        }
+        
+        #[cfg(feature = "embed_params")]
+        l.read_sapling_params();
 
         info!("Created new wallet!");
         info!("Created LightClient to {}", &config.server);
@@ -385,9 +385,9 @@ impl LightClient {
             };
 
         l.set_wallet_initial_state(latest_block);
-        if cfg!(feature = "embed_params") {
-            l.read_sapling_params();
-        }
+        
+        #[cfg(feature = "embed_params")]
+        l.read_sapling_params();
 
         info!("Created new wallet with a new seed!");
         info!("Created LightClient to {}", &config.server);
@@ -418,9 +418,9 @@ impl LightClient {
 
         println!("Setting birthday to {}", birthday);
         l.set_wallet_initial_state(birthday);
-        if cfg!(feature = "embed_params") {
-            l.read_sapling_params();
-        }
+        
+        #[cfg(feature = "embed_params")]
+        l.read_sapling_params();
 
         info!("Created new wallet!");
         info!("Created LightClient to {}", &config.server);
@@ -442,9 +442,8 @@ impl LightClient {
             sync_status     : Arc::new(RwLock::new(WalletStatus::new())),
         };
 
-        if cfg!(feature = "embed_params") {
-            lc.read_sapling_params();
-        }
+        #[cfg(feature = "embed_params")]
+        lc.read_sapling_params();
 
         info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
@@ -470,9 +469,8 @@ impl LightClient {
             sync_status     : Arc::new(RwLock::new(WalletStatus::new())),
         };
 
-        if cfg!(feature = "embed_params") {
-            lc.read_sapling_params();
-        }
+        #[cfg(feature = "embed_params")]
+        lc.read_sapling_params();
 
         info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
