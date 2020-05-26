@@ -32,7 +32,6 @@ use log4rs::append::rolling_file::policy::compound::{
 
 use crate::grpc_client::{BlockId};
 use crate::grpcconnector::{self, *};
-use crate::SaplingParams;
 use crate::ANCHOR_OFFSET;
 
 mod checkpoints;
@@ -307,11 +306,38 @@ impl LightClient {
         };
     }
 
+    #[cfg(feature = "embed_params")]
     fn read_sapling_params(&mut self) {
         // Read Sapling Params
+        use crate::SaplingParams;
         self.sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
         self.sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
+    }
 
+    pub fn set_sapling_params(&mut self, sapling_output: &[u8], sapling_spend: &[u8]) -> Result<(), String> {
+        use sha2::{Sha256, Digest};
+
+        // The hashes of the params need to match
+        const SAPLING_OUTPUT_HASH: &str = "2f0ebbcbb9bb0bcffe95a397e7eba89c29eb4dde6191c339db88570e3f3fb0e4";
+        const SAPLING_SPEND_HASH: &str = "8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13";
+
+        if SAPLING_OUTPUT_HASH.to_string() != hex::encode(Sha256::digest(&sapling_output)) {
+            return Err(format!("sapling-output hash didn't match. expected {}, found {}", SAPLING_OUTPUT_HASH, hex::encode(Sha256::digest(&sapling_output)) ))
+        }
+        if SAPLING_SPEND_HASH.to_string() != hex::encode(Sha256::digest(&sapling_spend)) {
+            return Err(format!("sapling-spend hash didn't match. expected {}, found {}", SAPLING_SPEND_HASH, hex::encode(Sha256::digest(&sapling_spend)) ))
+        }
+
+        // Will not overwrite previous params
+        if self.sapling_output.is_empty() {
+            self.sapling_output.extend_from_slice(sapling_output);
+        }
+
+        if self.sapling_spend.is_empty() {
+            self.sapling_spend.extend_from_slice(sapling_spend);
+        }
+
+        Ok(())
     }
 
     /// Method to create a test-only version of the LightClient
@@ -328,7 +354,9 @@ impl LightClient {
             };
 
         l.set_wallet_initial_state(0);
-        l.read_sapling_params();
+        if cfg!(feature = "embed_params") {
+            l.read_sapling_params();
+        }
 
         info!("Created new wallet!");
         info!("Created LightClient to {}", &config.server);
@@ -357,7 +385,9 @@ impl LightClient {
             };
 
         l.set_wallet_initial_state(latest_block);
-        l.read_sapling_params();
+        if cfg!(feature = "embed_params") {
+            l.read_sapling_params();
+        }
 
         info!("Created new wallet with a new seed!");
         info!("Created LightClient to {}", &config.server);
@@ -388,7 +418,9 @@ impl LightClient {
 
         println!("Setting birthday to {}", birthday);
         l.set_wallet_initial_state(birthday);
-        l.read_sapling_params();
+        if cfg!(feature = "embed_params") {
+            l.read_sapling_params();
+        }
 
         info!("Created new wallet!");
         info!("Created LightClient to {}", &config.server);
@@ -410,7 +442,9 @@ impl LightClient {
             sync_status     : Arc::new(RwLock::new(WalletStatus::new())),
         };
 
-        lc.read_sapling_params();
+        if cfg!(feature = "embed_params") {
+            lc.read_sapling_params();
+        }
 
         info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
@@ -436,7 +470,9 @@ impl LightClient {
             sync_status     : Arc::new(RwLock::new(WalletStatus::new())),
         };
 
-        lc.read_sapling_params();
+        if cfg!(feature = "embed_params") {
+            lc.read_sapling_params();
+        }
 
         info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
@@ -1399,6 +1435,20 @@ pub mod tests {
 
             assert_eq!(seed, LightClient::attempt_recover_seed(&config, Some(pwd)).unwrap());
         }
+    }
+
+    #[test]
+    pub fn test_set_params() {
+        let tmp = TempDir::new("lctest").unwrap();
+        let dir_name = tmp.path().to_str().map(|s| s.to_string());
+
+        let config = LightClientConfig::create_unconnected("test".to_string(), dir_name);
+        let mut lc = LightClient::new(&config, 0).unwrap();
+
+        use crate::SaplingParams;
+        assert!(lc.set_sapling_params(
+            SaplingParams::get("sapling-output.params").unwrap().as_ref(), 
+            SaplingParams::get("sapling-spend.params").unwrap().as_ref()).is_ok());
     }
 
 }

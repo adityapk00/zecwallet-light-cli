@@ -3,6 +3,10 @@ name = "zecwalletlitelib"
 version = "0.1.0"
 edition = "2018"
 
+[features]
+default = ["embed_params"]
+embed_params = []
+
 [dependencies]
 base58 = "0.1.0"
 log = "0.4"

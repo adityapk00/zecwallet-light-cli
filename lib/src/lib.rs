@@ -6,7 +6,7 @@ pub mod grpcconnector;
 pub mod lightwallet;
 pub mod commands;
 
-
+#[cfg(feature = "embed_params")]
 #[derive(RustEmbed)]
 #[folder = "zcash-params/"]
 pub struct SaplingParams;
@@ -14,7 +14,6 @@ pub struct SaplingParams;
 #[derive(RustEmbed)]
 #[folder = "res/"]
 pub struct PubCertificate;
-
 
 pub const ANCHOR_OFFSET: u32 = 4;
 
