@@ -1,11 +1,14 @@
 use log::{error};
 use zcash_primitives::transaction::{TxId};
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock,
                          TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tokio_rustls::{rustls::ClientConfig};
 use tonic::{Request};
+
+use threadpool::ThreadPool;
+use std::sync::mpsc::channel;
 
 use crate::PubCertificate;
 use crate::grpc_client::compact_tx_streamer_client::CompactTxStreamerClient;
@@ -56,10 +59,9 @@ pub fn get_info(uri: &http::Uri) -> Result<LightdInfo, String> {
 }
 
 
-async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, c: F) 
+async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, pool: ThreadPool, c: F) 
     -> Result<(), Box<dyn std::error::Error>> 
 where F : Fn(&[u8], u64) {
-    use std::time::{Duration, Instant};
     let mut client = get_client(uri).await?;
 
     let bs = BlockId{ height: start_height, hash: vec!()};
@@ -67,27 +69,39 @@ where F : Fn(&[u8], u64) {
 
     let request = Request::new(BlockRange{ start: Some(bs), end: Some(be) });
 
-    let mut process_duration = Duration::new(0, 0);
-    let start_time = Instant::now();
+    // Channel where the blocks are sent. A None signifies end of all blocks
+    let (tx, rx) = channel::<Option<CompactBlock>>();
+
+    // Channel that the processor signals it is done, so the method can return
+    let (ftx, frx) = channel();
+
+    // The processor runs on a different thread, so that the network calls don't
+    // block on this
+    pool.execute(move || {
+        while let Some(block) = rx.recv().unwrap() {
+            use prost::Message;
+            let mut encoded_buf = vec![];
+
+            block.encode(&mut encoded_buf).unwrap();
+            c(&encoded_buf, block.height);
+        }
+        
+        ftx.send(Ok(())).unwrap();
+    });
 
     let mut response = client.get_block_range(request).await?.into_inner();
     while let Some(block) = response.message().await? {
-        use prost::Message;
-        let mut encoded_buf = vec![];
-
-        block.encode(&mut encoded_buf).unwrap();
-        let process_start_time = Instant::now();
-        c(&encoded_buf, block.height);
-        let process_end_time = Instant::now();
-        process_duration = process_duration + process_end_time.duration_since(process_start_time);
-
+        tx.send(Some(block)).unwrap();
     }
-    let end_time = Instant::now();
+    tx.send(None).unwrap();
+
+    // Wait for the processor to exit
+    frx.iter().take(1).collect::<Result<Vec<()>, String>>()?;
 
     Ok(())
 }
 
-pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, c: F) -> Result<(), String>
+pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, pool: ThreadPool, c: F) -> Result<(), String>
     where F : Fn(&[u8], u64)  {
     
     let mut rt = match tokio::runtime::Runtime::new() {
@@ -100,7 +114,7 @@ pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_heig
         }
     };
 
-    match rt.block_on(get_block_range(uri, start_height, end_height, c)) {
+    match rt.block_on(get_block_range(uri, start_height, end_height, pool, c)) {
         Ok(o) => Ok(o),
         Err(e) => {
             let e = format!("Error fetching blocks {:?}", e);
