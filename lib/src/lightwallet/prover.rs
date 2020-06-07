@@ -9,7 +9,8 @@ use zcash_primitives::{
     transaction::components::Amount
 };
 use zcash_primitives::{
-    merkle_tree::CommitmentTreeWitness, prover::TxProver, sapling::Node,
+    merkle_tree::{MerklePath},
+    prover::TxProver, sapling::Node,
     transaction::components::GROTH_PROOF_SIZE, JUBJUB,
 };
 use zcash_proofs::sapling::SaplingProvingContext;
@@ -57,7 +58,7 @@ impl TxProver for InMemTxProver {
         ar: Fs,
         value: u64,
         anchor: Fr,
-        witness: CommitmentTreeWitness<Node>,
+        witness: MerklePath<Node>,
     ) -> Result<
         (
             [u8; GROTH_PROOF_SIZE],

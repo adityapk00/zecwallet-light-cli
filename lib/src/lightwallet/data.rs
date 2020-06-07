@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use pairing::bls12_381::{Bls12};
-use ff::{PrimeField, PrimeFieldRepr};
+use ff::{PrimeField};
 
 use zcash_primitives::{
     block::BlockHash,
@@ -18,7 +18,6 @@ use zcash_primitives::{
     JUBJUB,
     primitives::{Diversifier, Note,},
     jubjub::{
-        JubjubEngine,
         fs::{Fs, FsRepr},
     }
 };
@@ -83,8 +82,8 @@ pub struct SaplingNoteData {
 fn read_fs(from: &[u8]) -> FsRepr {
     assert_eq!(from.len(), 32);
 
-    let mut f = <<Bls12 as JubjubEngine>::Fs as PrimeField>::Repr::default();
-    f.read_le(from).expect("length is 32 bytes");
+    let mut f = FsRepr::default();
+    f.0.copy_from_slice(&from);
 
     f
 }
@@ -97,8 +96,8 @@ pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
     reader.read_exact(&mut r_bytes)?;
 
     let r = match Fs::from_repr(read_fs(&r_bytes)) {
-        Ok(r) => r,
-        Err(_) => return Err(io::Error::new(
+        Some(r) => r,
+        None => return Err(io::Error::new(
             io::ErrorKind::InvalidInput, "Couldn't parse randomness"))
     };
 
@@ -128,7 +127,7 @@ impl SaplingNoteData {
         SaplingNoteData {
             account: output.account,
             extfvk: extfvk.clone(),
-            diversifier: output.to.diversifier,
+            diversifier: *output.to.diversifier(),
             note: output.note,
             witnesses: vec![witness],
             nullifier: nf,
@@ -156,7 +155,7 @@ impl SaplingNoteData {
         // to recreate the note
         let (value, r) = read_note(&mut reader)?; // TODO: This method is in a different package, because of some fields that are private
 
-        let maybe_note = extfvk.fvk.vk.into_payment_address(diversifier, &JUBJUB).unwrap().create_note(value, r, &JUBJUB);
+        let maybe_note = extfvk.fvk.vk.to_payment_address(diversifier, &JUBJUB).unwrap().create_note(value, r, &JUBJUB);
 
         let note = match maybe_note {
             Some(n)  => Ok(n),
@@ -216,9 +215,7 @@ impl SaplingNoteData {
         // from these 2 values and the Payment address.
         writer.write_u64::<LittleEndian>(self.note.value)?;
 
-        let mut rcm = [0; 32];
-        self.note.r.into_repr().write_le(&mut rcm[..])?;
-        writer.write_all(&rcm)?;
+        writer.write_all(&self.note.r.to_repr().0)?;
 
         Vector::write(&mut writer, &self.witnesses, |wr, wi| wi.write(wr) )?;
 
