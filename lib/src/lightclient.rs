@@ -13,6 +13,8 @@ use std::io::{BufReader, Error, ErrorKind};
 
 use protobuf::parse_from_bytes;
 
+use threadpool::ThreadPool;
+
 use json::{object, array, JsonValue};
 use zcash_primitives::transaction::{TxId, Transaction};
 use zcash_client_backend::{
@@ -1096,7 +1098,7 @@ impl LightClient {
         let all_new_txs = Arc::new(RwLock::new(vec![]));
 
         // Create a new threadpool (max 8 threads) to scan with
-        let pool = threadpool::ThreadPool::new(std::cmp::min(8, num_cpus::get()));
+        let pool = ThreadPool::new(std::cmp::min(8, num_cpus::get()));
 
         // Fetch CompactBlocks in increments
         let mut pass = 0;
@@ -1135,7 +1137,7 @@ impl LightClient {
             let last_invalid_height_inner = last_invalid_height.clone();
 
             let tpool = pool.clone();
-            fetch_blocks(&self.get_server_uri(), start_height, end_height,
+            fetch_blocks(&self.get_server_uri(), start_height, end_height, pool.clone(),
                 move |encoded_block: &[u8], height: u64| {
                     // Process the block only if there were no previous errors
                     if last_invalid_height_inner.load(Ordering::SeqCst) > 0 {
