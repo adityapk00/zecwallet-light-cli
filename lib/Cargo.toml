@@ -3,6 +3,10 @@ name = "zecwalletlitelib"
 version = "0.1.0"
 edition = "2018"
 
+[features]
+default = ["embed_params"]
+embed_params = []
+
 [dependencies]
 base58 = "0.1.0"
 log = "0.4"
@@ -29,7 +33,7 @@ bytes = "0.4"
 prost = "0.6"
 prost-types = "0.6"
 tokio = { version = "0.2", features = ["rt-threaded", "time", "stream", "fs", "macros", "uds", "full"] }
-tokio-rustls = { version = "0.13.0", features = ["dangerous_configuration"] }
+tokio-rustls = { version = "0.13.0" }
 webpki = "0.21.0"
 webpki-roots = "0.18.0"
 

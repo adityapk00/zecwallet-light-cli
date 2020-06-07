@@ -14,10 +14,6 @@ pub mod version;
 macro_rules! configure_clapapp {
     ( $freshapp: expr ) => {
     $freshapp.version(VERSION)
-            .arg(Arg::with_name("dangerous")
-                .long("dangerous")
-                .help("Disable server TLS certificate verification. Use this if you're running a local lightwalletd with a self-signed certificate. WARNING: This is dangerous, don't use it with a server that is not your own.")
-                .takes_value(false))
             .arg(Arg::with_name("nosync")
                 .help("By default, zecwallet-cli will sync the wallet at startup. Pass --nosync to prevent the automatic sync at startup.")
                 .long("nosync")
@@ -81,10 +77,10 @@ pub fn report_permission_error() {
     }
 }
 
-pub fn startup(server: http::Uri, dangerous: bool, seed: Option<String>, birthday: u64, first_sync: bool, print_updates: bool)
+pub fn startup(server: http::Uri, seed: Option<String>, birthday: u64, first_sync: bool, print_updates: bool)
         -> io::Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
-    let (config, latest_block_height) = LightClientConfig::create(server.clone(), dangerous)?;
+    let (config, latest_block_height) = LightClientConfig::create(server.clone())?;
 
     let lightclient = match seed {
         Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, birthday, false)?),
@@ -148,8 +144,8 @@ pub fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Rec
         }
     };
 
-    let info = &send_command("info".to_string(), vec![]);
-    let chain_name = json::parse(info).unwrap()["chain_name"].as_str().unwrap().to_string();
+    let info = send_command("info".to_string(), vec![]);
+    let chain_name = json::parse(&info).unwrap()["chain_name"].as_str().unwrap().to_string();
 
     loop {
         // Read the height first
@@ -246,12 +242,45 @@ pub fn attempt_recover_seed(password: Option<String>) {
         sapling_activation_height: 0,
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
-        no_cert_verification: false,
         data_dir: None,
     };
 
     match LightClient::attempt_recover_seed(&config, password) {
-        Ok(seed) => println!("Recovered seed: '{}'", seed),
+        Ok(seed) => {
+            println!("Recovered seed: '{}'", seed);
+            println!("Do you want to use this seed to re-create a new wallet?");
+
+            let mut rl = rustyline::Editor::<()>::new();
+            match rl.readline("(Y / N): ") {
+                Ok(response) => {
+                    if response.to_ascii_uppercase() == "Y" {
+                        match  attempt_save_recovered(&config, seed){
+                            Ok(backup_path) => {
+                                eprintln!("Backed up existing wallet to {}", backup_path);
+                                eprintln!("Saved a new wallet. Please start Zecwallet Lite to rescan your wallet.");
+                            },
+                            Err(e) => {
+                                eprintln!("Failed to save recovered seed. Error: {}", e)
+                            }
+                        };
+                    } else {
+                        println!("Leaving wallet unchanged");
+                    }
+                },
+                Err(_) => {
+                    println!("Leaving wallet unchanged");
+                }
+            }            
+        },
         Err(e)   => eprintln!("Failed to recover seed. Error: {}", e)
     };
+}
+
+fn attempt_save_recovered(config: &LightClientConfig, seed: String) -> Result<String, String> {
+    let backup_path = config.backup_existing_wallet()?;
+    let lightclient = LightClient::new_from_phrase(seed, &config, 0, true).map_err(|e| format!("{}", e))?;
+
+    lightclient.do_save()?;
+
+    Ok(backup_path)
 }

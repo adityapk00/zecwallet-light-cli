@@ -656,7 +656,6 @@ fn get_test_config() -> LightClientConfig {
         sapling_activation_height: 0,
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
-        no_cert_verification: false,
         data_dir: None,
     }
 }
@@ -1734,10 +1733,10 @@ fn test_rollback() {
         assert_eq!(txs[&sent_txid].notes[0].witnesses.len(), 1);
     }
 
-    // Invalidate 3 blocks
+    // Invalidate the last block
     assert_eq!(wallet.last_scanned_height(), 7);
-    assert_eq!(wallet.invalidate_block(5), 3);
-    assert_eq!(wallet.last_scanned_height(), 4);
+    assert_eq!(wallet.invalidate_block(7), 1);
+    assert_eq!(wallet.last_scanned_height(), 6);
     
     // Make sure the orig Tx is there, but new Tx has disappeared
     {
@@ -1763,7 +1762,6 @@ fn test_t_derivation() {
         sapling_activation_height: 0,
         consensus_branch_id: "000000".to_string(),
         anchor_offset: 1,
-        no_cert_verification: false,
         data_dir: None,
     };
 

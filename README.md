@@ -14,9 +14,7 @@ Run `zecwallet-cli help` to see a list of all commands.
 * Also remember that t-addresses don't provide any privacy protection.
 
 ## Notes:
-* The wallet connects to the mainnet by default. To connect to testnet, please pass `--server https://lightd-test.zecwallet.co:443`
-* If you want to run your own server, please see [zecwallet lightwalletd](https://github.com/adityapk00/lightwalletd), and then run `./zecwallet-cli --server http://127.0.0.1:9067`. You might also need to pass `--dangerous` if you are using a self-signed  TLS certificate.
-
+* If you want to run your own server, please see [zecwallet lightwalletd](https://github.com/adityapk00/lightwalletd), and then run `./zecwallet-cli --server http://127.0.0.1:9067`.
 * The log file is in `~/.zcash/zecwallet-light-wallet.debug.log`. Wallet is stored in `~/.zcash/zecwallet-light-wallet.dat`
 
 ### Note Management
@@ -32,6 +30,10 @@ Zecwallet-CLI does automatic note and utxo management, which means it doesn't al
 #### Pre-requisites
 * Rust v1.37 or higher.
     * Run `rustup update` to get the latest version of Rust if you already have it installed
+* Rustfmt
+    * Run `rustup component add rustfmt` to add rustfmt
+* Build tools
+    * Please install the build tools for your platform. On Ubuntu `sudo apt install build-essential gcc`
 
 ```
 git clone https://github.com/adityapk00/zecwallet-light-cli.git
