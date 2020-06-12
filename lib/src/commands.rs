@@ -457,7 +457,7 @@ impl Command for SendCommand {
         let mut h = vec![];
         h.push("Send ZEC to a given address(es)");
         h.push("Usage:");
-        h.push("send <address> <amount in zatoshis || \"max\"> \"optional_memo\"");
+        h.push("send <address> <amount in zatoshis || \"entire-verified-zbalance\"> \"optional_memo\"");
         h.push("OR");
         h.push("send '[{'address': <address>, 'amount': <amount in zatoshis>, 'memo': <optional memo>}, ...]'");
         h.push("");
@@ -508,7 +508,7 @@ impl Command for SendCommand {
                     Err(format!("Need 'address' and 'amount'\n"))
                 } else {
                     let amount = match j["amount"].as_str() {
-                        Some("max") => lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee),
+                        Some("entire-verified-zbalance") => lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee),
                         _ => Some(j["amount"].as_u64().unwrap())
                     };
 
@@ -530,7 +530,7 @@ impl Command for SendCommand {
             let value = match args[1].parse::<u64>() {
                 Ok(amt) => amt,
                 Err(e)  => {
-                    if args[1] == "max" {
+                    if args[1] == "entire-verified-zbalance" {
                         match lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee) {
                             Some(amt) => amt,
                             None => { return format!("Not enough in wallet to pay transaction fee") }
