@@ -457,7 +457,7 @@ impl Command for SendCommand {
         let mut h = vec![];
         h.push("Send ZEC to a given address(es)");
         h.push("Usage:");
-        h.push("send <address> <amount in zatoshis> \"optional_memo\"");
+        h.push("send <address> <amount in zatoshis || \"entire-verified-zbalance\"> \"optional_memo\"");
         h.push("OR");
         h.push("send '[{'address': <address>, 'amount': <amount in zatoshis>, 'memo': <optional memo>}, ...]'");
         h.push("");
@@ -483,6 +483,10 @@ impl Command for SendCommand {
             return self.help();
         }
 
+        use std::convert::TryInto;
+        use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
+        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
         // Check for a single argument that can be parsed as JSON
         let send_args = if args.len() == 1 {
             let arg_list = args[0];
@@ -503,7 +507,15 @@ impl Command for SendCommand {
                 if !j.has_key("address") || !j.has_key("amount") {
                     Err(format!("Need 'address' and 'amount'\n"))
                 } else {
-                    Ok((j["address"].as_str().unwrap().to_string().clone(), j["amount"].as_u64().unwrap(), j["memo"].as_str().map(|s| s.to_string().clone())))
+                    let amount = match j["amount"].as_str() {
+                        Some("entire-verified-zbalance") => lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee),
+                        _ => Some(j["amount"].as_u64().unwrap())
+                    };
+
+                    match amount {
+                        Some(amt) => Ok((j["address"].as_str().unwrap().to_string().clone(), amt, j["memo"].as_str().map(|s| s.to_string().clone()))),
+                        None => Err(format!("Not enough in wallet to pay transaction fee"))
+                    }
                 }
             }).collect::<Result<Vec<(String, u64, Option<String>)>, String>>();
 
@@ -518,7 +530,14 @@ impl Command for SendCommand {
             let value = match args[1].parse::<u64>() {
                 Ok(amt) => amt,
                 Err(e)  => {
-                    return format!("Couldn't parse amount: {}", e);
+                    if args[1] == "entire-verified-zbalance" {
+                        match lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee) {
+                            Some(amt) => amt,
+                            None => { return format!("Not enough in wallet to pay transaction fee") }
+                        }
+                    } else {
+                        return format!("Couldn't parse amount: {}", e);
+                    }
                 }
             };
 
