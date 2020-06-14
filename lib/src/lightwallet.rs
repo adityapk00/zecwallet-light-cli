@@ -409,12 +409,19 @@ impl LightWallet {
 
         Vector::write(&mut writer, &self.blocks.read().unwrap(), |w, b| b.write(w))?;
                 
-        // The hashmap, write as a set of tuples
-        Vector::write(&mut writer, &self.txs.read().unwrap().iter().collect::<Vec<(&TxId, &WalletTx)>>(),
-                        |w, (k, v)| {
-                            w.write_all(&k.0)?;
-                            v.write(w)
-                        })?;
+        // The hashmap, write as a set of tuples. Store them sorted so that wallets are
+        // deterministically saved
+        {
+            let txlist = self.txs.read().unwrap();
+            let mut txns = txlist.iter().collect::<Vec<(&TxId, &WalletTx)>>();
+            txns.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
+
+            Vector::write(&mut writer, &txns,
+                            |w, (k, v)| {
+                                w.write_all(&k.0)?;
+                                v.write(w)
+                            })?;
+        }
         utils::write_string(&mut writer, &self.config.chain_name)?;
 
         // While writing the birthday, get it from the fn so we recalculate it properly
@@ -1220,7 +1227,7 @@ impl LightWallet {
             // Trim all witnesses for the invalidated blocks
             for tx in txs.values_mut() {
                 for nd in tx.notes.iter_mut() {
-                    nd.witnesses.split_off(nd.witnesses.len().saturating_sub(num_invalidated));
+                    let _discard = nd.witnesses.split_off(nd.witnesses.len().saturating_sub(num_invalidated));
                 }
             }
         }
@@ -1261,10 +1268,10 @@ impl LightWallet {
                 let m = try_sapling_compact_note_decryption(&ivk, &epk, &cmu, &ct);
                 let r = match m {
                     Some((note, to)) => {
-                        tx.send(Some((note, to, account)))
+                        tx.send(Some(Some((note, to, account))))
                     },
                     None => {
-                        tx.send(None)
+                        tx.send(Some(None))
                     }
                 };
                 
@@ -1272,7 +1279,6 @@ impl LightWallet {
                     Ok(_) => {},
                     Err(e) => println!("Send error {:?}", e)
                 }
-                drop(tx);
             });
         });
 
@@ -1290,28 +1296,31 @@ impl LightWallet {
         tree.append(node).unwrap();
 
         // Collect all the RXs and fine if there was a valid result somewhere
-        let wsos = rx.iter().take(ivks.len())
-            .map(move |n| {
-                let epk = epk.clone();
-                match n {
-                    None => None,
-                    Some((note, to, account)) => {
-                        // A note is marked as "change" if the account that received it
-                        // also spent notes in the same transaction. This will catch,
-                        // for instance:
-                        // - Change created by spending fractions of notes.
-                        // - Notes created by consolidation transactions.
-                        // - Notes sent from one account to itself.
-                        //let is_change = spent_from_accounts.contains(&account);
-                        
-                        Some(WalletShieldedOutput {
-                            index, cmu, epk, account, note, to, is_change: false,
-                            witness: IncrementalWitness::from_tree(tree),
-                        })
-                    }
+        let mut wsos =  vec![];
+        for _i in 0..ivks.len() {
+            let n = rx.recv().unwrap();
+            let epk = epk.clone();
+            
+            let wso = match n {
+                None => panic!("Got a none!"),
+                Some(None) => None,
+                Some(Some((note, to, account))) => {
+                    // A note is marked as "change" if the account that received it
+                    // also spent notes in the same transaction. This will catch,
+                    // for instance:
+                    // - Change created by spending fractions of notes.
+                    // - Notes created by consolidation transactions.
+                    // - Notes sent from one account to itself.
+                    //let is_change = spent_from_accounts.contains(&account);
+                    
+                    Some(WalletShieldedOutput {
+                        index, cmu, epk, account, note, to, is_change: false,
+                        witness: IncrementalWitness::from_tree(tree),
+                    })
                 }
-            })
-            .collect::<Vec<_>>();
+            };
+            wsos.push(wso);
+        }
         
         match wsos.into_iter().find(|wso| wso.is_some()) {
             Some(Some(wso)) => Some(wso),
@@ -1381,7 +1390,7 @@ impl LightWallet {
                     drop(ctx);
                 });
             }
-            
+
 
             // Check for incoming notes while incrementing tree and witnesses
             let mut shielded_outputs: Vec<WalletShieldedOutput> = vec![];
@@ -1545,7 +1554,7 @@ impl LightWallet {
             }
 
             new_txs = {
-                let nf_refs = nfs.iter().enumerate().map(|(account, (nf, _, _))| (nf.to_vec(), account)).collect::<Vec<_>>();
+                let nf_refs = nfs.iter().map(|(nf, account, _)| (nf.to_vec(), *account)).collect::<Vec<_>>();
 
                 // Create a single mutable slice of all the newly-added witnesses.
                 let mut witness_refs: Vec<_> = txs
