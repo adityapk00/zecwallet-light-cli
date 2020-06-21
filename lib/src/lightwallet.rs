@@ -1565,7 +1565,7 @@ impl LightWallet {
                     let txid = *txid;
                     tx.notes.iter().filter_map(move |nd| {
                         if nd.spent.is_none() {
-                            Some((nd.nullifier, txid))
+                            Some((nd.nullifier, nd.account, txid))
                         } else {
                             None
                         }
@@ -1591,6 +1591,7 @@ impl LightWallet {
 
             new_txs = {
                 let nf_refs = nfs.iter().map(|(nf, account, _)| (nf.to_vec(), *account)).collect::<Vec<_>>();
+                let extfvks: Vec<ExtendedFullViewingKey> = self.zkeys.read().unwrap().iter().map(|zk| zk.extfvk.clone()).collect();
 
                 // Create a single mutable slice of all the newly-added witnesses.
                 let mut witness_refs: Vec<_> = txs
@@ -1601,7 +1602,7 @@ impl LightWallet {
 
                 self.scan_block_internal(
                     block.clone(),
-                    &self.extfvks.read().unwrap(),
+                    &extfvks,
                     nf_refs,
                     &mut block_data.tree,
                     &mut witness_refs[..],
@@ -1634,9 +1635,9 @@ impl LightWallet {
             for spend in &tx.shielded_spends {                
                 let txid = nfs
                     .iter()
-                    .find(|(nf, _)| &nf[..] == &spend.nf[..])
+                    .find(|(nf, _, _)| &nf[..] == &spend.nf[..])
                     .unwrap()
-                    .1;
+                    .2;
                 let mut spent_note = txs
                     .get_mut(&txid)
                     .unwrap()

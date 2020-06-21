@@ -61,6 +61,7 @@ impl BlockData {
 }
 
 pub struct SaplingNoteData {
+    pub(super) account: usize,
     pub(super) extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here.
     pub diversifier: Diversifier,
     pub note: Note<Bls12>,
@@ -105,7 +106,7 @@ pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
 
 impl SaplingNoteData {
     fn serialized_version() -> u64 {
-        2
+        1
     }
 
     pub fn new(
@@ -124,6 +125,7 @@ impl SaplingNoteData {
         };
 
         SaplingNoteData {
+            account: output.account,
             extfvk: extfvk.clone(),
             diversifier: *output.to.diversifier(),
             note: output.note,
@@ -138,14 +140,10 @@ impl SaplingNoteData {
 
     // Reading a note also needs the corresponding address to read from.
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
-        let version = reader.read_u64::<LittleEndian>()?;
+        let _version = reader.read_u64::<LittleEndian>()?;
 
-        // We don't use the account field from v1 now
-        if version <= 1 {
-            // But we still have to read it so that we can move consume the bytes from the input stream
-            let _account = reader.read_u64::<LittleEndian>()? as usize;
-        }
-
+        let account = reader.read_u64::<LittleEndian>()? as usize;
+        
         let extfvk = ExtendedFullViewingKey::read(&mut reader)?;
 
         let mut diversifier_bytes = [0u8; 11];
@@ -189,7 +187,7 @@ impl SaplingNoteData {
         let is_change: bool = reader.read_u8()? > 0;
 
         Ok(SaplingNoteData {
-            // account,
+            account,
             extfvk,
             diversifier,
             note,
@@ -205,6 +203,8 @@ impl SaplingNoteData {
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         // Write a version number first, so we can later upgrade this if needed.
         writer.write_u64::<LittleEndian>(SaplingNoteData::serialized_version())?;
+
+        writer.write_u64::<LittleEndian>(self.account as u64)?;
 
         self.extfvk.write(&mut writer)?;
 

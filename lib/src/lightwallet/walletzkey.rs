@@ -273,7 +273,6 @@ pub mod tests {
       sapling_activation_height: 0,
       consensus_branch_id: "000000".to_string(),
       anchor_offset: 0,
-      no_cert_verification: false,
       data_dir: None,
     }
   }
