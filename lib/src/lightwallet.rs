@@ -1,17 +1,21 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration};
 use std::io::{self, Read, Write};
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::io::{Error, ErrorKind};
+use std::convert::TryFrom;
+
+use threadpool::ThreadPool;
+use std::sync::mpsc::{channel};
 
 use rand::{Rng, rngs::OsRng};
-
+use subtle::{ConditionallySelectable, ConstantTimeEq, CtOption};
 use log::{info, warn, error};
 
 use protobuf::parse_from_bytes;
 
-use libflate::{gzip::{Decoder, Encoder}, finish::AutoFinishUnchecked};
+use libflate::gzip::{Decoder};
 use secp256k1::SecretKey;
 use bip39::{Mnemonic, Language};
 
@@ -23,20 +27,24 @@ use sodiumoxide::crypto::secretbox;
 
 use zcash_client_backend::{
     encoding::{encode_payment_address, encode_extended_spending_key},
-    proto::compact_formats::CompactBlock, welding_rig::scan_block,
+    proto::compact_formats::{CompactBlock, CompactOutput},
+    wallet::{WalletShieldedOutput, WalletShieldedSpend}
 };
 
 use zcash_primitives::{
+    jubjub::fs::Fs,
     block::BlockHash,
-    merkle_tree::{CommitmentTree},
     serialize::{Vector},
+    consensus::BranchId,
     transaction::{
         builder::{Builder},
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
     },
-     legacy::{Script, TransparentAddress},
-    note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery},
+    sapling::Node,
+    merkle_tree::{CommitmentTree, IncrementalWitness},
+    legacy::{Script, TransparentAddress},
+    note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption},
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
     JUBJUB,
     primitives::{PaymentAddress},
@@ -129,6 +137,8 @@ pub struct LightWallet {
 
     // Non-serialized fields
     config: LightClientConfig,
+
+    pub total_scan_duration: Arc<RwLock<Vec<Duration>>>,
 }
 
 impl LightWallet {
@@ -187,7 +197,7 @@ impl LightWallet {
             let mut system_rng = OsRng;
             system_rng.fill(&mut seed_bytes);
         } else {
-            let phrase = match Mnemonic::from_phrase(seed_phrase.unwrap(), Language::English) {
+            let phrase = match Mnemonic::from_phrase(seed_phrase.clone().unwrap(), Language::English) {
                 Ok(p) => p,
                 Err(e) => {
                     let e = format!("Error parsing phrase: {}", e);
@@ -213,7 +223,7 @@ impl LightWallet {
         let (extsk, _, _)
             = LightWallet::get_zaddr_from_bip39seed(&config, &bip39_seed.as_bytes(), hdkey_num);
 
-        Ok(LightWallet {
+        let lw = LightWallet {
             encrypted:   false,
             unlocked:    true,
             enc_seed:    [0u8; 48],
@@ -227,7 +237,18 @@ impl LightWallet {
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday:    latest_block,
-        })
+            total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)]))
+        };
+
+        // If restoring from seed, make sure we are creating 5 addresses for users
+        if seed_phrase.is_some() {
+            for _i in 0..5 {
+                lw.add_taddr();
+                lw.add_zaddr();
+            }
+        }
+
+        Ok(lw)
     }
 
     pub fn read<R: Read>(mut inp: R, config: &LightClientConfig) -> io::Result<Self> {
@@ -238,12 +259,15 @@ impl LightWallet {
             return Err(io::Error::new(ErrorKind::InvalidData, e));
         }
 
+        println!("Reading wallet version {}", version);
         info!("Reading wallet version {}", version);
         
-        // After version 5, we're writing the rest of the file as a compressed stream (gzip)
-        let mut reader: Box<dyn Read> = if version <= 4 {
+        // At version 5, we're writing the rest of the file as a compressed stream (gzip)
+        let mut reader: Box<dyn Read> = if version != 5 {
+            info!("Reading direct");
             Box::new(inp)
         } else {
+            info!("Reading libflat");
             Box::new(Decoder::new(inp).unwrap())
         };
 
@@ -252,81 +276,82 @@ impl LightWallet {
         } else {
             false
         };
+        info!("Wallet Encryption {:?}", encrypted);
         
         let mut enc_seed = [0u8; 48];
         if version >= 4 {
             reader.read_exact(&mut enc_seed)?;
         }
-
+        
         let nonce = if version >= 4 {
             Vector::read(&mut reader, |r| r.read_u8())?
         } else {
             vec![]
         };
-        
+
         // Seed
         let mut seed_bytes = [0u8; 32];
         reader.read_exact(&mut seed_bytes)?;
         
         let zkeys = if version <= 5 {
-          // Up until version 5, the wallet keys were written out individually
-          // Read the spending keys
-          let extsks = Vector::read(&mut reader, |r| ExtendedSpendingKey::read(r))?;
-                  
-          let extfvks = if version >= 4 {
-              // Read the viewing keys
-              Vector::read(&mut reader, |r| ExtendedFullViewingKey::read(r))?
-          } else {
-              // Calculate the viewing keys
-              extsks.iter().map(|sk| ExtendedFullViewingKey::from(sk))
-                  .collect::<Vec<ExtendedFullViewingKey>>()
-          };
+            // Up until version 5, the wallet keys were written out individually
+            // Read the spending keys
+            let extsks = Vector::read(&mut reader, |r| ExtendedSpendingKey::read(r))?;
+                    
+            let extfvks = if version >= 4 {
+                // Read the viewing keys
+                Vector::read(&mut reader, |r| ExtendedFullViewingKey::read(r))?
+            } else {
+                // Calculate the viewing keys
+                extsks.iter().map(|sk| ExtendedFullViewingKey::from(sk))
+                    .collect::<Vec<ExtendedFullViewingKey>>()
+            };
 
-          // Calculate the addresses
-          let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
-              .collect::<Vec<PaymentAddress<Bls12>>>();
-
-          // If extsks is of len 0, then this wallet is locked
-          let zkeys_result = if extsks.len() == 0 {
-            // Wallet is locked, so read only the viewing keys.
-            extfvks.iter().zip(addresses.iter()).enumerate().map(|(i, (extfvk, payment_address))| {
-              let zk = WalletZKey::new_locked_hdkey(i as u32, extfvk.clone());
-              if zk.zaddress != *payment_address {
-                Err(io::Error::new(ErrorKind::InvalidData, "Payment address didn't match"))
-              } else {
-                Ok(zk)
-              }
-            }).collect::<Vec<io::Result<WalletZKey>>>()
-          } else {
-            // Wallet is unlocked, read the spending keys as well
-            extsks.into_iter().zip(extfvks.into_iter().zip(addresses.iter())).enumerate()
-              .map(|(i, (extsk, (extfvk, payment_address)))| {
-                let zk = WalletZKey::new_hdkey(i as u32, extsk);
+            // Calculate the addresses
+            let addresses = extfvks.iter().map( |fvk| fvk.default_address().unwrap().1 )
+                .collect::<Vec<PaymentAddress<Bls12>>>();
+            
+            // If extsks is of len 0, then this wallet is locked
+            let zkeys_result = if extsks.len() == 0 {
+                // Wallet is locked, so read only the viewing keys.
+                extfvks.iter().zip(addresses.iter()).enumerate().map(|(i, (extfvk, payment_address))| {
+                let zk = WalletZKey::new_locked_hdkey(i as u32, extfvk.clone());
                 if zk.zaddress != *payment_address {
-                  return Err(io::Error::new(ErrorKind::InvalidData, "Payment address didn't match"));
-                } 
-                
-                if zk.extfvk != extfvk {
-                  return Err(io::Error::new(ErrorKind::InvalidData, "Full View key didn't match"));
+                    Err(io::Error::new(ErrorKind::InvalidData, "Payment address didn't match"))
+                } else {
+                    Ok(zk)
                 }
+                }).collect::<Vec<io::Result<WalletZKey>>>()
+            } else {
+                // Wallet is unlocked, read the spending keys as well
+                extsks.into_iter().zip(extfvks.into_iter().zip(addresses.iter())).enumerate()
+                .map(|(i, (extsk, (extfvk, payment_address)))| {
+                    let zk = WalletZKey::new_hdkey(i as u32, extsk);
+                    if zk.zaddress != *payment_address {
+                    return Err(io::Error::new(ErrorKind::InvalidData, "Payment address didn't match"));
+                    } 
+                    
+                    if zk.extfvk != extfvk {
+                    return Err(io::Error::new(ErrorKind::InvalidData, "Full View key didn't match"));
+                    }
 
-                Ok(zk)
-              }).collect::<Vec<io::Result<WalletZKey>>>()
-          };
+                    Ok(zk)
+                }).collect::<Vec<io::Result<WalletZKey>>>()
+            };
 
-          // Convert vector of results into result of vector, returning an error if any one of the keys failed the checks above
-          zkeys_result.into_iter().collect::<io::Result<_>>()?
-        } else {
-          // After version 5, we read the WalletZKey structs directly
-          Vector::read(&mut reader, |r| WalletZKey::read(r))?
+            // Convert vector of results into result of vector, returning an error if any one of the keys failed the checks above
+            zkeys_result.into_iter().collect::<io::Result<_>>()?
+        }  else {
+            // After version 5, we read the WalletZKey structs directly
+            Vector::read(&mut reader, |r| WalletZKey::read(r))?
         };
-
+        
         let tkeys = Vector::read(&mut reader, |r| {
             let mut tpk_bytes = [0u8; 32];
             r.read_exact(&mut tpk_bytes)?;
             secp256k1::SecretKey::from_slice(&tpk_bytes).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
         })?;      
-
+        
         let taddresses = if version >= 4 {
             // Read the addresses
             Vector::read(&mut reader, |r| utils::read_string(r))?
@@ -334,9 +359,9 @@ impl LightWallet {
             // Calculate the addresses
             tkeys.iter().map(|sk| LightWallet::address_from_prefix_sk(&config.base58_pubkey_address(), sk)).collect()
         };
-
+        
         let blocks = Vector::read(&mut reader, |r| BlockData::read(r))?;
-
+        
         let txs_tuples = Vector::read(&mut reader, |r| {
             let mut txid_bytes = [0u8; 32];
             r.read_exact(&mut txid_bytes)?;
@@ -368,20 +393,18 @@ impl LightWallet {
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday,
+            total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)])),
         })
     }
 
-    pub fn write<W: Write>(&self, mut out: W) -> io::Result<()> {
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         if self.encrypted && self.unlocked {
             return Err(Error::new(ErrorKind::InvalidInput, 
                         format!("Cannot write while wallet is unlocked while encrypted.")));
         }
 
         // Write the version
-        out.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
-
-        // Gzip encoder
-        let mut writer = AutoFinishUnchecked::new(Encoder::new(out).unwrap());
+        writer.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
 
         // Write if it is locked
         writer.write_u8(if self.encrypted {1} else {0})?;
@@ -396,7 +419,7 @@ impl LightWallet {
         writer.write_all(&self.seed)?;
 
         // Flush after writing the seed, so in case of a disaster, we can still recover the seed.
-        //writer.flush()?;
+        writer.flush()?;
 
         // Write all the wallet's keys
         Vector::write(&mut writer, &self.zkeys.read().unwrap(),
@@ -415,12 +438,19 @@ impl LightWallet {
 
         Vector::write(&mut writer, &self.blocks.read().unwrap(), |w, b| b.write(w))?;
                 
-        // The hashmap, write as a set of tuples
-        Vector::write(&mut writer, &self.txs.read().unwrap().iter().collect::<Vec<(&TxId, &WalletTx)>>(),
-                        |w, (k, v)| {
-                            w.write_all(&k.0)?;
-                            v.write(w)
-                        })?;
+        // The hashmap, write as a set of tuples. Store them sorted so that wallets are
+        // deterministically saved
+        {
+            let txlist = self.txs.read().unwrap();
+            let mut txns = txlist.iter().collect::<Vec<(&TxId, &WalletTx)>>();
+            txns.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
+
+            Vector::write(&mut writer, &txns,
+                            |w, (k, v)| {
+                                w.write_all(&k.0)?;
+                                v.write(w)
+                            })?;
+        }
         utils::write_string(&mut writer, &self.config.chain_name)?;
 
         // While writing the birthday, get it from the fn so we recalculate it properly
@@ -429,7 +459,7 @@ impl LightWallet {
     }
 
     pub fn note_address(hrp: &str, note: &SaplingNoteData) -> Option<String> {
-        match note.extfvk.fvk.vk.into_payment_address(note.diversifier, &JUBJUB) {
+        match note.extfvk.fvk.vk.to_payment_address(note.diversifier, &JUBJUB) {
             Some(pa) => Some(encode_payment_address(hrp, &pa)),
             None     => None
         }
@@ -817,7 +847,7 @@ impl LightWallet {
                             Some(a) => a == encode_payment_address(
                                                 self.config.hrp_sapling_address(),
                                                 &nd.extfvk.fvk.vk
-                                                    .into_payment_address(nd.diversifier, &JUBJUB).unwrap()
+                                                    .to_payment_address(nd.diversifier, &JUBJUB).unwrap()
                                             ),
                             None    => true
                         }
@@ -871,7 +901,7 @@ impl LightWallet {
                                 Some(a) => a == encode_payment_address(
                                                     self.config.hrp_sapling_address(),
                                                     &nd.extfvk.fvk.vk
-                                                        .into_payment_address(nd.diversifier, &JUBJUB).unwrap()
+                                                        .to_payment_address(nd.diversifier, &JUBJUB).unwrap()
                                                 ),
                                 None    => true
                             }
@@ -1233,7 +1263,7 @@ impl LightWallet {
             // Trim all witnesses for the invalidated blocks
             for tx in txs.values_mut() {
                 for nd in tx.notes.iter_mut() {
-                    nd.witnesses.split_off(nd.witnesses.len().saturating_sub(num_invalidated));
+                    let _discard = nd.witnesses.split_off(nd.witnesses.len().saturating_sub(num_invalidated));
                 }
             }
         }
@@ -1241,8 +1271,235 @@ impl LightWallet {
         num_invalidated as u64
     }
 
-    // Scan a block. Will return an error with the block height that failed to scan
+    /// Scans a [`CompactOutput`] with a set of [`ExtendedFullViewingKey`]s.
+    ///
+    /// Returns a [`WalletShieldedOutput`] and corresponding [`IncrementalWitness`] if this
+    /// output belongs to any of the given [`ExtendedFullViewingKey`]s.
+    ///
+    /// The given [`CommitmentTree`] and existing [`IncrementalWitness`]es are incremented
+    /// with this output's commitment.
+    fn scan_output_internal(
+        &self,
+        (index, output): (usize, CompactOutput),
+        ivks: &[Fs],
+        tree: &mut CommitmentTree<Node>,
+        existing_witnesses: &mut [&mut IncrementalWitness<Node>],
+        block_witnesses: &mut [&mut IncrementalWitness<Node>],
+        new_witnesses: &mut [&mut IncrementalWitness<Node>],
+        pool: &ThreadPool
+    ) -> Option<WalletShieldedOutput> {
+        let cmu = output.cmu().ok()?;
+        let epk = output.epk().ok()?;
+        let ct = output.ciphertext;
+
+        let (tx, rx) = channel();
+        ivks.iter().enumerate().for_each(|(account, ivk)| {
+            // Clone all values for passing to the closure
+            let ivk = ivk.clone();
+            let epk = epk.clone();
+            let ct = ct.clone();
+            let tx = tx.clone();
+
+            pool.execute(move || {
+                let m = try_sapling_compact_note_decryption(&ivk, &epk, &cmu, &ct);
+                let r = match m {
+                    Some((note, to)) => {
+                        tx.send(Some(Some((note, to, account))))
+                    },
+                    None => {
+                        tx.send(Some(None))
+                    }
+                };
+                
+                match r {
+                    Ok(_) => {},
+                    Err(e) => println!("Send error {:?}", e)
+                }
+            });
+        });
+
+        // Increment tree and witnesses
+        let node = Node::new(cmu.into());
+        for witness in existing_witnesses {
+            witness.append(node).unwrap();
+        }
+        for witness in block_witnesses {
+            witness.append(node).unwrap();
+        }
+        for witness in new_witnesses {
+            witness.append(node).unwrap();
+        }
+        tree.append(node).unwrap();
+
+        // Collect all the RXs and fine if there was a valid result somewhere
+        let mut wsos =  vec![];
+        for _i in 0..ivks.len() {
+            let n = rx.recv().unwrap();
+            let epk = epk.clone();
+            
+            let wso = match n {
+                None => panic!("Got a none!"),
+                Some(None) => None,
+                Some(Some((note, to, account))) => {
+                    // A note is marked as "change" if the account that received it
+                    // also spent notes in the same transaction. This will catch,
+                    // for instance:
+                    // - Change created by spending fractions of notes.
+                    // - Notes created by consolidation transactions.
+                    // - Notes sent from one account to itself.
+                    //let is_change = spent_from_accounts.contains(&account);
+                    
+                    Some(WalletShieldedOutput {
+                        index, cmu, epk, account, note, to, is_change: false,
+                        witness: IncrementalWitness::from_tree(tree),
+                    })
+                }
+            };
+            wsos.push(wso);
+        }
+        
+        match wsos.into_iter().find(|wso| wso.is_some()) {
+            Some(Some(wso)) => Some(wso),
+            _ => None
+        }
+    }
+
+    /// Scans a [`CompactBlock`] with a set of [`ExtendedFullViewingKey`]s.
+    ///
+    /// Returns a vector of [`WalletTx`]s belonging to any of the given
+    /// [`ExtendedFullViewingKey`]s, and the corresponding new [`IncrementalWitness`]es.
+    ///
+    /// The given [`CommitmentTree`] and existing [`IncrementalWitness`]es are
+    /// incremented appropriately.
+    pub fn scan_block_internal(
+        &self,
+        block: CompactBlock,
+        extfvks: &[ExtendedFullViewingKey],
+        nullifiers: Vec<(Vec<u8>, usize)>,
+        tree: &mut CommitmentTree<Node>,
+        existing_witnesses: &mut [&mut IncrementalWitness<Node>],
+        pool: &ThreadPool
+    ) -> Vec<zcash_client_backend::wallet::WalletTx> {
+        let mut wtxs: Vec<zcash_client_backend::wallet::WalletTx> = vec![];
+        let ivks = extfvks.iter().map(|extfvk| extfvk.fvk.vk.ivk()).collect::<Vec<_>>();
+
+        for tx in block.vtx.into_iter() {
+            let num_spends = tx.spends.len();
+            let num_outputs = tx.outputs.len();
+
+            let (ctx, crx) = channel();
+            {
+                let nullifiers = nullifiers.clone();
+                let tx = tx.clone();
+                pool.execute(move || {
+                    // Check for spent notes
+                    // The only step that is not constant-time is the filter() at the end.
+                    let shielded_spends: Vec<_> = tx
+                        .spends
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, spend)| {
+                            // Find the first tracked nullifier that matches this spend, and produce
+                            // a WalletShieldedSpend if there is a match, in constant time.
+                            nullifiers
+                                .iter()
+                                .map(|(nf, account)| CtOption::new(*account as u64, nf.ct_eq(&spend.nf[..])))
+                                .fold(CtOption::new(0, 0.into()), |first, next| {
+                                    CtOption::conditional_select(&next, &first, first.is_some())
+                                })
+                                .map(|account| WalletShieldedSpend {
+                                    index,
+                                    nf: spend.nf,
+                                    account: account as usize,
+                                })
+                        })
+                        .filter(|spend| spend.is_some().into())
+                        .map(|spend| spend.unwrap())
+                        .collect();
+
+                    // Collect the set of accounts that were spent from in this transaction
+                    let spent_from_accounts: HashSet<_> =
+                        shielded_spends.iter().map(|spend| spend.account).collect();
+
+                    ctx.send((shielded_spends, spent_from_accounts)).unwrap();
+
+                    drop(ctx);
+                });
+            }
+
+
+            // Check for incoming notes while incrementing tree and witnesses
+            let mut shielded_outputs: Vec<WalletShieldedOutput> = vec![];
+            {
+                // Grab mutable references to new witnesses from previous transactions
+                // in this block so that we can update them. Scoped so we don't hold
+                // mutable references to wtxs for too long.
+                let mut block_witnesses: Vec<_> = wtxs
+                    .iter_mut()
+                    .map(|tx| {
+                        tx.shielded_outputs
+                            .iter_mut()
+                            .map(|output| &mut output.witness)
+                    })
+                    .flatten()
+                    .collect();
+
+                for to_scan in tx.outputs.into_iter().enumerate() {
+                    // Grab mutable references to new witnesses from previous outputs
+                    // in this transaction so that we can update them. Scoped so we
+                    // don't hold mutable references to shielded_outputs for too long.
+                    let mut new_witnesses: Vec<_> = shielded_outputs
+                        .iter_mut()
+                        .map(|output| &mut output.witness)
+                        .collect();
+
+                    if let Some(output) = self.scan_output_internal(
+                        to_scan,
+                        &ivks,
+                        tree,
+                        existing_witnesses,
+                        &mut block_witnesses,
+                        &mut new_witnesses,
+                        pool
+                    ) {
+                        shielded_outputs.push(output);
+                    }
+                }
+            }
+
+            let (shielded_spends, spent_from_accounts) = crx.recv().unwrap();
+
+            // Identify change outputs
+            shielded_outputs.iter_mut().for_each(|output| {
+                if spent_from_accounts.contains(&output.account) {
+                    output.is_change = true;
+                }
+            });
+
+            // Update wallet tx
+            if !(shielded_spends.is_empty() && shielded_outputs.is_empty()) {
+                let mut txid = TxId([0u8; 32]);
+                txid.0.copy_from_slice(&tx.hash);
+                wtxs.push(zcash_client_backend::wallet::WalletTx {
+                    txid,
+                    index: tx.index as usize,
+                    num_spends,
+                    num_outputs,
+                    shielded_spends,
+                    shielded_outputs,
+                });
+            }
+        }
+
+        wtxs
+    }
+
     pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
+        self.scan_block_with_pool(&block_bytes, &ThreadPool::new(1))
+    }
+
+    // Scan a block. Will return an error with the block height that failed to scan
+    pub fn scan_block_with_pool(&self, block_bytes: &[u8], pool: &ThreadPool) -> Result<Vec<TxId>, i32> {
         let block: CompactBlock = match parse_from_bytes(block_bytes) {
             Ok(block) => block,
             Err(e) => {
@@ -1333,7 +1590,7 @@ impl LightWallet {
             }
 
             new_txs = {
-                let nf_refs: Vec<_> = nfs.iter().enumerate().map(|(account, (nf, _))| (&nf[..], account)).collect();
+                let nf_refs = nfs.iter().map(|(nf, account, _)| (nf.to_vec(), *account)).collect::<Vec<_>>();
 
                 // Create a single mutable slice of all the newly-added witnesses.
                 let mut witness_refs: Vec<_> = txs
@@ -1342,18 +1599,16 @@ impl LightWallet {
                     .flatten()
                     .collect();
 
-                let extfvks: Vec<_> = self.zkeys.read().unwrap().iter().map(|zk| zk.extfvk.clone()).collect();
-
-                scan_block(
+                self.scan_block_internal(
                     block.clone(),
-                    &extfvks,
-                    &nf_refs[..],
+                    &self.extfvks.read().unwrap(),
+                    nf_refs,
                     &mut block_data.tree,
                     &mut witness_refs[..],
+                    pool
                 )
             };
         }
-
         
         // If this block had any new Txs, return the list of ALL txids in this block, 
         // so the wallet can fetch them all as a decoy.
@@ -1574,7 +1829,7 @@ impl LightWallet {
                 
             })
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("{}", e))?;
+            .map_err(|e| format!("{:?}", e))?;
         
 
         // Confirm we were able to select sufficient value
@@ -1598,7 +1853,7 @@ impl LightWallet {
                 selected.extsk.clone(),
                 selected.diversifier,
                 selected.note.clone(),
-                selected.witness.clone(),
+                selected.witness.path().unwrap(),
             ) {
                 let e = format!("Error adding note: {:?}", e);
                 error!("{}", e);
@@ -1622,7 +1877,7 @@ impl LightWallet {
             // Compute memo if it exists
             let encoded_memo = match memo {
                 None => None,
-                Some(s) => match Memo::from_str(&s) {
+                Some(s) => match Memo::from_bytes(s.as_bytes()) {
                     None => {
                         let e = format!("Error creating output. Memo {:?} is too long", s);
                         error!("{}", e);
@@ -1651,8 +1906,8 @@ impl LightWallet {
 
         println!("{}: Building transaction", now() - start_time);
         let (tx, _) = match builder.build(
-            consensus_branch_id,
-            prover::InMemTxProver::new(spend_params, output_params),
+            BranchId::try_from(consensus_branch_id).unwrap(),
+            &prover::InMemTxProver::new(spend_params, output_params),
         ) {
             Ok(res) => res,
             Err(e) => {
@@ -1701,7 +1956,7 @@ impl LightWallet {
                                 Some(s) => {
                                     // If the address is not a z-address, then drop the memo
                                     if LightWallet::is_shielded_address(&addr.to_string(), &self.config) {
-                                            Memo::from_str(s).unwrap()
+                                            Memo::from_bytes(s.as_bytes()).unwrap()
                                     } else {
                                         Memo::default()
                                     }                                        
