@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::collections::HashMap;
+use std::cmp::{max, min};
 use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, Error, ErrorKind};
@@ -1097,8 +1098,8 @@ impl LightClient {
         // belong to us.
         let all_new_txs = Arc::new(RwLock::new(vec![]));
 
-        // Create a new threadpool (max 8 threads) to scan with
-        let pool = ThreadPool::new(std::cmp::min(8, num_cpus::get()));
+        // Create a new threadpool (upto 8, atleast 2 threads) to scan with
+        let pool = ThreadPool::new(max(2, min(8, num_cpus::get())));
 
         // Fetch CompactBlocks in increments
         let mut pass = 0;
