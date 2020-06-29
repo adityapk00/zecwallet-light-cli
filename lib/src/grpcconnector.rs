@@ -1,11 +1,14 @@
 use log::{error};
 use zcash_primitives::transaction::{TxId};
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, 
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock,
                          TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tokio_rustls::{rustls::ClientConfig};
 use tonic::{Request};
+
+use threadpool::ThreadPool;
+use std::sync::mpsc::channel;
 
 use crate::PubCertificate;
 use crate::grpc_client::compact_tx_streamer_client::CompactTxStreamerClient;
@@ -56,7 +59,7 @@ pub fn get_info(uri: &http::Uri) -> Result<LightdInfo, String> {
 }
 
 
-async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, c: F) 
+async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, pool: ThreadPool, c: F) 
     -> Result<(), Box<dyn std::error::Error>> 
 where F : Fn(&[u8], u64) {
     let mut client = get_client(uri).await?;
@@ -66,19 +69,39 @@ where F : Fn(&[u8], u64) {
 
     let request = Request::new(BlockRange{ start: Some(bs), end: Some(be) });
 
+    // Channel where the blocks are sent. A None signifies end of all blocks
+    let (tx, rx) = channel::<Option<CompactBlock>>();
+
+    // Channel that the processor signals it is done, so the method can return
+    let (ftx, frx) = channel();
+
+    // The processor runs on a different thread, so that the network calls don't
+    // block on this
+    pool.execute(move || {
+        while let Some(block) = rx.recv().unwrap() {
+            use prost::Message;
+            let mut encoded_buf = vec![];
+
+            block.encode(&mut encoded_buf).unwrap();
+            c(&encoded_buf, block.height);
+        }
+        
+        ftx.send(Ok(())).unwrap();
+    });
+
     let mut response = client.get_block_range(request).await?.into_inner();
     while let Some(block) = response.message().await? {
-        use prost::Message;
-        let mut encoded_buf = vec![];
-
-        block.encode(&mut encoded_buf).unwrap();
-        c(&encoded_buf, block.height);
+        tx.send(Some(block)).unwrap();
     }
+    tx.send(None).unwrap();
+
+    // Wait for the processor to exit
+    frx.iter().take(1).collect::<Result<Vec<()>, String>>()?;
 
     Ok(())
 }
 
-pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, c: F) -> Result<(), String>
+pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, pool: ThreadPool, c: F) -> Result<(), String>
     where F : Fn(&[u8], u64)  {
     
     let mut rt = match tokio::runtime::Runtime::new() {
@@ -91,7 +114,7 @@ pub fn fetch_blocks<F : 'static + std::marker::Send>(uri: &http::Uri, start_heig
         }
     };
 
-    match rt.block_on(get_block_range(uri, start_height, end_height, c)) {
+    match rt.block_on(get_block_range(uri, start_height, end_height, pool, c)) {
         Ok(o) => Ok(o),
         Err(e) => {
             let e = format!("Error fetching blocks {:?}", e);
@@ -162,26 +185,26 @@ async fn get_transaction(uri: &http::Uri, txid: TxId)
     Ok(response.into_inner())
 }
 
-pub fn fetch_full_tx<F : 'static + std::marker::Send>(uri: &http::Uri, txid: TxId, c: F)
-        where F : Fn(&[u8]) {
+pub fn fetch_full_tx(uri: &http::Uri, txid: TxId) -> Result<Vec<u8>, String> {
     let mut rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
-            error!("Error creating runtime {}", e.to_string());
-            eprintln!("{}", e);
-            return;
+            let errstr = format!("Error creating runtime {}", e.to_string());
+            error!("{}", errstr);
+            eprintln!("{}", errstr);
+            return Err(errstr);
         }
     };
 
     match rt.block_on(get_transaction(uri, txid)) {
-        Ok(rawtx) => c(&rawtx.data),
+        Ok(rawtx) => Ok(rawtx.data.to_vec()),
         Err(e) => {
-            error!("Error in get_transaction runtime {}", e.to_string());
-            eprintln!("{}", e);
+            let errstr = format!("Error in get_transaction runtime {}", e.to_string());
+            error!("{}", errstr);
+            eprintln!("{}", errstr);
+            Err(errstr)
         }
-    }
-
-    
+    }    
 }
 
 // send_transaction GRPC call
@@ -222,22 +245,19 @@ async fn get_latest_block(uri: &http::Uri) -> Result<BlockId, Box<dyn std::error
     Ok(response.into_inner())
 }
 
-pub fn fetch_latest_block<F : 'static + std::marker::Send>(uri: &http::Uri, mut c : F) 
-    where F : FnMut(BlockId) {
+pub fn fetch_latest_block(uri: &http::Uri) -> Result<BlockId, String> {
     let mut rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
-            error!("Error creating runtime {}", e.to_string());
-            eprintln!("{}", e);
-            return;
+            let errstr = format!("Error creating runtime {}", e.to_string());
+            eprintln!("{}", errstr);
+            return Err(errstr);
         }
     };
 
-    match rt.block_on(get_latest_block(uri)) {
-        Ok(b) => c(b),
-        Err(e) => {
-            error!("Error getting latest block {}", e.to_string());
-            eprintln!("{}", e);
-        }
-    };
+    rt.block_on(get_latest_block(uri)).map_err(|e| {
+        let errstr = format!("Error getting latest block {}", e.to_string());
+        eprintln!("{}", errstr);
+        errstr
+    })
 }
