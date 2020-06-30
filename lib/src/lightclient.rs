@@ -1028,7 +1028,7 @@ impl LightClient {
         let new_address = {
             let wallet = self.wallet.write().unwrap();
 
-            match addr_type {
+            let addr = match addr_type {
                 "z" => wallet.add_zaddr(),
                 "t" => wallet.add_taddr(),
                 _   => {
@@ -1036,13 +1036,72 @@ impl LightClient {
                     error!("{}", e);
                     return Err(e);
                 }
+            };
+
+            if addr.starts_with("Error") {
+                let e = format!("Error creating new address: {}", addr);
+                    error!("{}", e);
+                    return Err(e);
             }
+
+            addr
         };
 
         self.do_save()?;
 
         Ok(array![new_address])
     }
+
+    /// Import a new private key
+    pub fn do_import_sk(&self, sk: String) -> Result<JsonValue, String> {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return Err("Wallet is locked".to_string());
+        }
+
+        let new_address = {
+            let wallet = self.wallet.write().unwrap();
+
+            let addr = wallet.add_imported_sk(sk);
+            if addr.starts_with("Error") {
+                let e = format!("Error creating new address{}", addr);
+                    error!("{}", e);
+                    return Err(e);
+            }
+
+            addr
+        };
+
+        self.do_save()?;
+
+        Ok(array![new_address])
+    }
+
+    /// Import a new viewing key
+    pub fn do_import_vk(&self, vk: String) -> Result<JsonValue, String> {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return Err("Wallet is locked".to_string());
+        }
+
+        let new_address = {
+            let wallet = self.wallet.write().unwrap();
+
+            let addr = wallet.add_imported_vk(vk);
+            if addr.starts_with("Error") {
+                let e = format!("Error creating new address{}", addr);
+                    error!("{}", e);
+                    return Err(e);
+            }
+
+            addr
+        };
+
+        self.do_save()?;
+
+        Ok(array![new_address])
+    }
+    
 
     pub fn clear_state(&self) {
         // First, clear the state from the wallet
@@ -1438,6 +1497,14 @@ pub mod tests {
         lc.wallet.write().unwrap().unlock("password".to_string()).unwrap();
         
         assert!(!lc.do_new_address("z").is_err());
+    }
+
+    #[test]
+    pub fn test_bad_import() {
+        let lc = super::LightClient::unconnected(TEST_SEED.to_string(), None).unwrap();
+        
+        assert!(lc.do_import_sk("bad_priv_key".to_string()).is_err());
+        assert!(lc.do_import_vk("bad_view_key".to_string()).is_err());
     }
 
     #[test]
