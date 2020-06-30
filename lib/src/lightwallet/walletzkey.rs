@@ -18,8 +18,8 @@ use crate::lightwallet::LightWallet;
 #[derive(PartialEq, Debug, Clone)]
 pub enum WalletZKeyType {
     HdKey = 0,
-    ImportedKey = 1,
-    ViewKey = 2
+    ImportedSpendingKey = 1,
+    ImportedViewKey = 2
 }
 
 // A struct that holds z-address private keys or view keys
@@ -76,7 +76,7 @@ impl WalletZKey {
       let zaddress = extfvk.default_address().unwrap().1;
 
       WalletZKey {
-          keytype: WalletZKeyType::ImportedKey,
+          keytype: WalletZKeyType::ImportedSpendingKey,
           locked: false,
           extsk: Some(isk),
           extfvk,
@@ -85,6 +85,21 @@ impl WalletZKey {
           enc_key: None,
           nonce: None,
       }
+  }
+
+  pub fn new_imported_viewkey(extfvk: ExtendedFullViewingKey) -> Self {
+    let zaddress = extfvk.default_address().unwrap().1;
+
+    WalletZKey {
+      keytype: WalletZKeyType::ImportedViewKey,
+      locked: false,
+      extsk: None,
+      extfvk,
+      zaddress,
+      hdkey_num: None,
+      enc_key: None,
+      nonce: None,
+    }
   }
 
   fn serialized_version() -> u8 {
@@ -97,8 +112,8 @@ impl WalletZKey {
 
     let keytype: WalletZKeyType = match inp.read_u32::<LittleEndian>()? {
       0 => Ok(WalletZKeyType::HdKey),
-      1 => Ok(WalletZKeyType::ImportedKey),
-      2 => Ok(WalletZKeyType::ViewKey),
+      1 => Ok(WalletZKeyType::ImportedSpendingKey),
+      2 => Ok(WalletZKeyType::ImportedViewKey),
       n => Err(io::Error::new(ErrorKind::InvalidInput, format!("Unknown zkey type {}", n)))
     }?;
 
@@ -156,7 +171,7 @@ impl WalletZKey {
             self.extsk = None;
             self.locked = true;
         },
-        WalletZKeyType::ImportedKey => {
+        WalletZKeyType::ImportedSpendingKey => {
             // For imported keys, encrypt the key into enckey
             // assert that we have the encrypted key. 
             if self.enc_key.is_none() {
@@ -165,8 +180,9 @@ impl WalletZKey {
             self.extsk = None;
             self.locked = true;
         },
-        WalletZKeyType::ViewKey => {
-            panic!("Not implemented");
+        WalletZKeyType::ImportedViewKey => {
+            // For viewing keys, there is nothing to lock, so just return true
+            self.locked = true;
         }
     }
 
@@ -191,7 +207,7 @@ impl WalletZKey {
 
         self.extsk = Some(extsk);
       },
-      WalletZKeyType::ImportedKey => {
+      WalletZKeyType::ImportedSpendingKey => {
         // For imported keys, we need to decrypt from the encrypted key
         let nonce = secretbox::Nonce::from_slice(&self.nonce.as_ref().unwrap()).unwrap();
         let extsk_bytes = match secretbox::open(&self.enc_key.as_ref().unwrap(), &nonce, &key) {
@@ -201,8 +217,8 @@ impl WalletZKey {
 
         self.extsk = Some(ExtendedSpendingKey::read(&extsk_bytes[..])?);
       },
-      WalletZKeyType::ViewKey => {
-        panic!("Not implemented");
+      WalletZKeyType::ImportedViewKey => {
+        // Viewing key unlocking is basically a no op
       }
     };
 
@@ -215,7 +231,7 @@ impl WalletZKey {
         WalletZKeyType::HdKey => {
             // For HD keys, we don't need to do anything, since the hdnum has all the info to recreate this key
         },
-        WalletZKeyType::ImportedKey => {
+        WalletZKeyType::ImportedSpendingKey => {
             // For imported keys, encrypt the key into enckey
             let nonce = secretbox::gen_nonce();
 
@@ -225,8 +241,8 @@ impl WalletZKey {
             self.enc_key = Some(secretbox::seal(&sk_bytes, &nonce, &key));
             self.nonce = Some(nonce.as_ref().to_vec());
         },
-        WalletZKeyType::ViewKey => {
-            panic!("Not implemented");
+        WalletZKeyType::ImportedViewKey => {
+            // Encrypting a viewing key is a no-op
         }
     }
 
@@ -244,13 +260,14 @@ impl WalletZKey {
           // For HD keys, we don't need to do anything, since the hdnum has all the info to recreate this key
           Ok(())
       },
-      WalletZKeyType::ImportedKey => {
+      WalletZKeyType::ImportedSpendingKey => {
           self.enc_key = None;
           self.nonce = None;
           Ok(())
       },
-      WalletZKeyType::ViewKey => {
-          panic!("Not implemented");
+      WalletZKeyType::ImportedViewKey => {
+          // Removing encryption is a no-op for viewing keys
+          Ok(())
       }
     }
   }
@@ -259,7 +276,7 @@ impl WalletZKey {
 #[cfg(test)]
 pub mod tests {
   use zcash_client_backend::{
-    encoding::{encode_payment_address, decode_extended_spending_key},
+    encoding::{encode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key},
   };
   use sodiumoxide::crypto::secretbox;
 
@@ -303,7 +320,7 @@ pub mod tests {
   }
 
   #[test]
-  fn test_encrypt_decrypt() {
+  fn test_encrypt_decrypt_sk() {
     let config = get_config();
 
     // Priv Key's address is "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv"
@@ -351,5 +368,54 @@ pub mod tests {
       assert_eq!(wzk.nonce, None);
     }
   }
+
+
+  #[test]
+  fn test_encrypt_decrypt_vk() {
+    let config = get_config();
+
+    // Priv Key's address is "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc" 
+    let viewkey = "zxviews1qvvx7cqdqyqqpqqte7292el2875kw2fgvnkmlmrufyszlcy8xgstwarnumqye3tr3d9rr3ydjm9zl9464majh4pa3ejkfy779dm38sfnkar67et7ykxkk0z9rfsmf9jclfj2k85xt2exkg4pu5xqyzyxzlqa6x3p9wrd7pwdq2uvyg0sal6zenqgfepsdp8shestvkzxuhm846r2h3m4jvsrpmxl8pfczxq87886k0wdasppffjnd2eh47nlmkdvrk6rgyyl0ekh3ycqtvvje";
+
+    let extfvk = decode_extended_full_viewing_key(config.hrp_sapling_viewing_key(), viewkey).unwrap().unwrap();
+    let mut wzk = WalletZKey::new_imported_viewkey(extfvk);
+    
+    assert_eq!(encode_payment_address(config.hrp_sapling_address(), &wzk.zaddress), "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc".to_string());
+
+    // Encryption key
+    let key = secretbox::Key::from_slice(&[0; 32]).unwrap();
+
+    // Encrypt
+    wzk.encrypt(&key).unwrap();
+    {
+      assert!(wzk.enc_key.is_none());
+      assert!(wzk.nonce.is_none());
+    }
+
+    // Now lock
+    assert!(wzk.lock().is_ok());
+    {
+      assert!(wzk.extsk.is_none());
+      assert_eq!(wzk.locked, true);
+      assert_eq!(wzk.zaddress, wzk.extfvk.default_address().unwrap().1);
+    }
+
+    // Can't remove encryption without unlocking
+    assert!(wzk.remove_encryption().is_err());
+
+    // Unlock
+    assert!(wzk.unlock(&config, &[], &key).is_ok());
+    {
+      assert_eq!(wzk.extsk, None);
+    }
+
+    // Remove encryption
+    assert!(wzk.remove_encryption().is_ok());
+    {
+      assert_eq!(wzk.enc_key, None);
+      assert_eq!(wzk.nonce, None);
+    }
+  }
+
 
 }

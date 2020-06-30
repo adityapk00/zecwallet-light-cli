@@ -269,6 +269,15 @@ impl LightClientConfig {
         }
     }
 
+    pub fn hrp_sapling_viewing_key(&self) -> &str {
+        match &self.chain_name[..] {
+            "main"    => mainnet::HRP_SAPLING_EXTENDED_FULL_VIEWING_KEY,
+            "test"    => testnet::HRP_SAPLING_EXTENDED_FULL_VIEWING_KEY,
+            "regtest" => regtest::HRP_SAPLING_EXTENDED_FULL_VIEWING_KEY,
+            c         => panic!("Unknown chain {}", c)
+        }
+    }
+
     pub fn base58_pubkey_address(&self) -> [u8; 2] {
         match &self.chain_name[..] {
             "main"    => mainnet::B58_PUBKEY_ADDRESS_PREFIX,
