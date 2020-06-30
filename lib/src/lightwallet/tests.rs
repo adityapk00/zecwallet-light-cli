@@ -5,7 +5,7 @@ use rand::{RngCore, rngs::OsRng};
 use ff::{Field, PrimeField};
 use pairing::bls12_381::Bls12;
 use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
-use zcash_client_backend::{encoding::{encode_payment_address},
+use zcash_client_backend::{encoding::{encode_payment_address, decode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key},
     proto::compact_formats::{
         CompactBlock, CompactOutput, CompactSpend, CompactTx,
     }
@@ -29,6 +29,7 @@ use sha2::{Sha256, Digest};
 
 use super::{LightWallet};
 use super::LightClientConfig;
+use crate::lightwallet::walletzkey::{WalletZKeyType};
 use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
 use crate::SaplingParams;
 
@@ -658,6 +659,23 @@ fn get_test_config() -> LightClientConfig {
         anchor_offset: 0,
         data_dir: None,
     }
+}
+
+
+fn get_main_config() -> LightClientConfig {
+    LightClientConfig {
+        server: "0.0.0.0:0".parse().unwrap(),
+        chain_name: "main".to_string(),
+        sapling_activation_height: 0,
+        consensus_branch_id: "000000".to_string(),
+        anchor_offset: 0,
+        data_dir: None,
+    }
+}
+
+fn get_main_wallet() -> LightWallet {
+    let config = get_main_config();
+    LightWallet::new(None, &config, 0).unwrap()
 }
 
 // Get a test wallet already setup with a single note
@@ -1815,6 +1833,10 @@ fn test_lock_unlock() {
     // Encrypting an already encrypted wallet should fail
     assert!(wallet.encrypt("somepassword".to_string()).is_err());
 
+    // Adding a new key while the wallet is locked is an error
+    assert!(wallet.add_taddr().starts_with("Error"));
+    assert!(wallet.add_zaddr().starts_with("Error"));
+
     // Serialize a locked wallet
     let mut serialized_data = vec![];
     wallet.write(&mut serialized_data).expect("Serialize wallet");
@@ -1903,6 +1925,86 @@ fn test_lock_unlock() {
     // Can't lock/unlock a wallet that's not encrypted
     assert!(wallet2.lock().is_err());
     assert!(wallet2.unlock("newpassword".to_string()).is_err());
+}
+
+#[test]
+fn test_import_sk() {
+    let mut wallet = get_main_wallet();
+
+    // Priv Key's address
+    let zaddr = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv".to_string();
+    let privkey = "secret-extended-key-main1q0p44m9zqqqqpqyxfvy5w2vq6ahvxyrwsk2w4h2zleun4cft4llmnsjlv77lhuuknv6x9jgu5g2clf3xq0wz9axxxq8klvv462r5pa32gjuj5uhxnvps6wsrdg6xll05unwks8qpgp4psmvy5e428uxaggn4l29duk82k3sv3njktaaj453fdmfmj2fup8rls4egqxqtj2p5a3yt4070khn99vzxj5ag5qjngc4v2kq0ctl9q2rpc2phu4p3e26egu9w88mchjf83sqgh3cev";
+
+    assert_eq!(wallet.add_imported_sk(privkey.to_string()), zaddr);
+    assert_eq!(wallet.get_all_zaddresses().len(), 2);
+    assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedSpendingKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
+
+    // Now, adding a new z address should create a new HD key
+    let new_zaddr = wallet.add_zaddr();
+    assert_eq!(wallet.get_all_zaddresses().len(), 3);
+    assert_eq!(wallet.get_all_zaddresses()[2], new_zaddr);
+    assert_eq!(wallet.zkeys.read().unwrap()[2].keytype, WalletZKeyType::HdKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[2].hdkey_num, Some(1));
+
+    // Encrypt it
+    let passwd = "password".to_string();
+    assert!(wallet.encrypt(passwd.clone()).is_ok());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, None);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
+    
+    // Unlock it 
+    assert!(wallet.unlock(passwd.clone()).is_ok());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, decode_extended_spending_key(wallet.config.hrp_sapling_private_key(), &privkey).unwrap());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
+
+    // Remove encryption
+    assert!(wallet.remove_encryption(passwd).is_ok());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, decode_extended_spending_key(wallet.config.hrp_sapling_private_key(), &privkey).unwrap());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
+}
+
+
+#[test]
+fn test_import_vk() {
+    let mut wallet = get_main_wallet();
+
+    // Priv Key's address
+    let zaddr= "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
+    let viewkey = "zxviews1qvvx7cqdqyqqpqqte7292el2875kw2fgvnkmlmrufyszlcy8xgstwarnumqye3tr3d9rr3ydjm9zl9464majh4pa3ejkfy779dm38sfnkar67et7ykxkk0z9rfsmf9jclfj2k85xt2exkg4pu5xqyzyxzlqa6x3p9wrd7pwdq2uvyg0sal6zenqgfepsdp8shestvkzxuhm846r2h3m4jvsrpmxl8pfczxq87886k0wdasppffjnd2eh47nlmkdvrk6rgyyl0ekh3ycqtvvje";
+
+    assert_eq!(wallet.add_imported_vk(viewkey.to_string()), zaddr);
+    assert_eq!(wallet.get_all_zaddresses().len(), 2);
+    assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedViewKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
+
+    // Now, adding a new z address should create a new HD key
+    let new_zaddr = wallet.add_zaddr();
+    assert_eq!(wallet.get_all_zaddresses().len(), 3);
+    assert_eq!(wallet.get_all_zaddresses()[2], new_zaddr);
+    assert_eq!(wallet.zkeys.read().unwrap()[2].keytype, WalletZKeyType::HdKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[2].hdkey_num, Some(1));
+
+    // Encrypt it
+    let passwd = "password".to_string();
+    assert!(wallet.encrypt(passwd.clone()).is_ok());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, None);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extfvk, decode_extended_full_viewing_key(wallet.config.hrp_sapling_viewing_key(), viewkey).unwrap().unwrap());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
+    
+    // Unlock it 
+    assert!(wallet.unlock(passwd.clone()).is_ok());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, None);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extfvk, decode_extended_full_viewing_key(wallet.config.hrp_sapling_viewing_key(), viewkey).unwrap().unwrap());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
+
+    // Remove encryption
+    assert!(wallet.remove_encryption(passwd).is_ok());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, None);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].extfvk, decode_extended_full_viewing_key(wallet.config.hrp_sapling_viewing_key(), viewkey).unwrap().unwrap());
+    assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
 }
 
 #[test]

@@ -26,7 +26,7 @@ use sha2::{Sha256, Digest};
 use sodiumoxide::crypto::secretbox;
 
 use zcash_client_backend::{
-    encoding::{encode_payment_address, encode_extended_spending_key},
+    encoding::{encode_payment_address, encode_extended_spending_key, decode_extended_spending_key, decode_extended_full_viewing_key},
     proto::compact_formats::{CompactBlock, CompactOutput},
     wallet::{WalletShieldedOutput, WalletShieldedSpend}
 };
@@ -512,7 +512,7 @@ impl LightWallet {
     /// NOTE: This does NOT rescan
     pub fn add_zaddr(&self) -> String {
         if !self.unlocked {
-            return "".to_string();
+            return "Error: Can't add key while wallet is locked".to_string();
         }
 
         // Find the highest pos we have
@@ -536,10 +536,10 @@ impl LightWallet {
 
     /// Add a new t address to the wallet. This will derive a new address from the seed
     /// at the next position.
-    /// NOTE: This is not rescan the wallet
+    /// NOTE: This will not rescan the wallet
     pub fn add_taddr(&self) -> String {
         if !self.unlocked {
-            return "".to_string();
+            return "Error: Can't add key while wallet is locked".to_string();
         }
 
         let pos = self.tkeys.read().unwrap().len() as u32;
@@ -552,6 +552,46 @@ impl LightWallet {
         self.taddresses.write().unwrap().push(address.clone());
 
         address
+    }
+
+    // Add a new imported spending key to the wallet
+    /// NOTE: This will not rescan the wallet
+    pub fn add_imported_sk(&self, sk: String) -> String {
+        if !self.unlocked {
+            return "Error: Can't add key while wallet is locked".to_string();
+        }
+
+        // First, try to interpret the key
+        let extsk = match decode_extended_spending_key(self.config.hrp_sapling_private_key(), &sk) {
+            Ok(Some(k)) => k,
+            Ok(None) => return format!("Error: Couldn't decode spending key"),
+            Err(e) => return format!("Error importing spending key: {}", e)
+        };
+
+        let newkey = WalletZKey::new_imported_sk(extsk);
+        self.zkeys.write().unwrap().push(newkey.clone());
+
+        encode_payment_address(self.config.hrp_sapling_address(), &newkey.zaddress)
+    }
+
+    // Add a new imported viewing key to the wallet
+    /// NOTE: This will not rescan the wallet
+    pub fn add_imported_vk(&self, vk: String) -> String {
+        if !self.unlocked {
+            return "Error: Can't add key while wallet is locked".to_string();
+        }
+
+        // First, try to interpret the key
+        let extfvk = match decode_extended_full_viewing_key(self.config.hrp_sapling_viewing_key(), &vk) {
+            Ok(Some(k)) => k,
+            Ok(None) => return format!("Error: Couldn't decode viewing key"),
+            Err(e) => return format!("Error importing viewing key: {}", e)
+        };
+
+        let newkey = WalletZKey::new_imported_viewkey(extfvk);
+        self.zkeys.write().unwrap().push(newkey.clone());
+
+        encode_payment_address(self.config.hrp_sapling_address(), &newkey.zaddress)
     }
 
     /// Clears all the downloaded blocks and resets the state back to the initial block.

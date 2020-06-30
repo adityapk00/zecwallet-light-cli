@@ -71,14 +71,14 @@ impl WalletZKey {
     }
   }
 
-  pub fn new_imported_sk(isk: ExtendedSpendingKey) -> Self {
-      let extfvk = ExtendedFullViewingKey::from(&isk);
+  pub fn new_imported_sk(extsk: ExtendedSpendingKey) -> Self {
+      let extfvk = ExtendedFullViewingKey::from(&extsk);
       let zaddress = extfvk.default_address().unwrap().1;
 
       WalletZKey {
           keytype: WalletZKeyType::ImportedSpendingKey,
           locked: false,
-          extsk: Some(isk),
+          extsk: Some(extsk),
           extfvk,
           zaddress,
           hdkey_num: None,
@@ -276,7 +276,7 @@ impl WalletZKey {
 #[cfg(test)]
 pub mod tests {
   use zcash_client_backend::{
-    encoding::{encode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key},
+    encoding::{encode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key}
   };
   use sodiumoxide::crypto::secretbox;
 
