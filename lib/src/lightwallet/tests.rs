@@ -1928,6 +1928,47 @@ fn test_lock_unlock() {
 }
 
 #[test]
+fn test_import_birthday_adjust() {
+    let config = LightClientConfig {
+        server: "0.0.0.0:0".parse().unwrap(),
+        chain_name: "main".to_string(),
+        sapling_activation_height: 5,
+        consensus_branch_id: "000000".to_string(),
+        anchor_offset: 0,
+        data_dir: None,
+    };
+
+    let privkey = "secret-extended-key-main1q0p44m9zqqqqpqyxfvy5w2vq6ahvxyrwsk2w4h2zleun4cft4llmnsjlv77lhuuknv6x9jgu5g2clf3xq0wz9axxxq8klvv462r5pa32gjuj5uhxnvps6wsrdg6xll05unwks8qpgp4psmvy5e428uxaggn4l29duk82k3sv3njktaaj453fdmfmj2fup8rls4egqxqtj2p5a3yt4070khn99vzxj5ag5qjngc4v2kq0ctl9q2rpc2phu4p3e26egu9w88mchjf83sqgh3cev";
+
+    {
+        let mut wallet = LightWallet::new(None, &config, 10).unwrap();
+        assert_eq!(wallet.birthday, 10);
+
+        // Import key with birthday after the current birthday
+        wallet.add_imported_sk(privkey.to_string(), 15);
+        assert_eq!(wallet.birthday, 10);
+    }
+
+    {
+        let mut wallet = LightWallet::new(None, &config, 10).unwrap();
+        assert_eq!(wallet.birthday, 10);
+
+        // Import key with birthday before the current birthday
+        wallet.add_imported_sk(privkey.to_string(), 7);
+        assert_eq!(wallet.birthday, 7);
+    }
+
+    {
+        let mut wallet = LightWallet::new(None, &config, 10).unwrap();
+        assert_eq!(wallet.birthday, 10);
+
+        // Import key with birthday before the sapling activation
+        wallet.add_imported_sk(privkey.to_string(), 3);
+        assert_eq!(wallet.birthday, 5);
+    }
+}
+
+#[test]
 fn test_import_sk() {
     let mut wallet = get_main_wallet();
 
@@ -1935,11 +1976,15 @@ fn test_import_sk() {
     let zaddr = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv".to_string();
     let privkey = "secret-extended-key-main1q0p44m9zqqqqpqyxfvy5w2vq6ahvxyrwsk2w4h2zleun4cft4llmnsjlv77lhuuknv6x9jgu5g2clf3xq0wz9axxxq8klvv462r5pa32gjuj5uhxnvps6wsrdg6xll05unwks8qpgp4psmvy5e428uxaggn4l29duk82k3sv3njktaaj453fdmfmj2fup8rls4egqxqtj2p5a3yt4070khn99vzxj5ag5qjngc4v2kq0ctl9q2rpc2phu4p3e26egu9w88mchjf83sqgh3cev";
 
-    assert_eq!(wallet.add_imported_sk(privkey.to_string()), zaddr);
+    assert_eq!(wallet.add_imported_sk(privkey.to_string(), 0), zaddr);
     assert_eq!(wallet.get_all_zaddresses().len(), 2);
     assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
     assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedSpendingKey);
     assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
+
+    // Importing it again should fail
+    assert!(wallet.add_imported_sk(privkey.to_string(), 0).starts_with("Error"));
+    assert_eq!(wallet.get_all_zaddresses().len(), 2);
 
     // Now, adding a new z address should create a new HD key
     let new_zaddr = wallet.add_zaddr();
@@ -1974,11 +2019,15 @@ fn test_import_vk() {
     let zaddr= "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
     let viewkey = "zxviews1qvvx7cqdqyqqpqqte7292el2875kw2fgvnkmlmrufyszlcy8xgstwarnumqye3tr3d9rr3ydjm9zl9464majh4pa3ejkfy779dm38sfnkar67et7ykxkk0z9rfsmf9jclfj2k85xt2exkg4pu5xqyzyxzlqa6x3p9wrd7pwdq2uvyg0sal6zenqgfepsdp8shestvkzxuhm846r2h3m4jvsrpmxl8pfczxq87886k0wdasppffjnd2eh47nlmkdvrk6rgyyl0ekh3ycqtvvje";
 
-    assert_eq!(wallet.add_imported_vk(viewkey.to_string()), zaddr);
+    assert_eq!(wallet.add_imported_vk(viewkey.to_string(), 0), zaddr);
     assert_eq!(wallet.get_all_zaddresses().len(), 2);
     assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
     assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedViewKey);
     assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
+
+    // Importing it again should fail
+    assert!(wallet.add_imported_sk(viewkey.to_string(), 0).starts_with("Error"));
+    assert_eq!(wallet.get_all_zaddresses().len(), 2);
 
     // Now, adding a new z address should create a new HD key
     let new_zaddr = wallet.add_zaddr();
@@ -2005,6 +2054,44 @@ fn test_import_vk() {
     assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, None);
     assert_eq!(wallet.zkeys.read().unwrap()[1].extfvk, decode_extended_full_viewing_key(wallet.config.hrp_sapling_viewing_key(), viewkey).unwrap().unwrap());
     assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
+}
+
+#[test]
+fn test_import_sk_upgrade_vk() {
+    // Test where we import the viewkey first, then upgrade it to the full spending key
+
+    let zaddr= "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
+    let viewkey = "zxviews1qvvx7cqdqyqqpqqte7292el2875kw2fgvnkmlmrufyszlcy8xgstwarnumqye3tr3d9rr3ydjm9zl9464majh4pa3ejkfy779dm38sfnkar67et7ykxkk0z9rfsmf9jclfj2k85xt2exkg4pu5xqyzyxzlqa6x3p9wrd7pwdq2uvyg0sal6zenqgfepsdp8shestvkzxuhm846r2h3m4jvsrpmxl8pfczxq87886k0wdasppffjnd2eh47nlmkdvrk6rgyyl0ekh3ycqtvvje";
+    let privkey = "secret-extended-key-main1qvvx7cqdqyqqpqqte7292el2875kw2fgvnkmlmrufyszlcy8xgstwarnumqye3tr3w3p4qn52e9htagqfejxlkq4m35wmfqvua7dxf8saqqhhfwvf0lqv27cz45uk5na9wwr27u607gu0x92phg6twpsm84pyyjnvtdqkggvq2uvyg0sal6zenqgfepsdp8shestvkzxuhm846r2h3m4jvsrpmxl8pfczxq87886k0wdasppffjnd2eh47nlmkdvrk6rgyyl0ekh3yccw7kmg";
+
+    let mut wallet = get_main_wallet();
+
+    assert_eq!(wallet.add_imported_vk(viewkey.to_string(), 0), zaddr);
+    assert_eq!(wallet.get_all_zaddresses().len(), 2);
+    assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedViewKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
+    assert!(wallet.zkeys.read().unwrap()[1].extsk.is_none());
+
+    // Importing it again should fail because it already exists
+    assert!(wallet.add_imported_sk(viewkey.to_string(), 0).starts_with("Error"));
+    assert_eq!(wallet.get_all_zaddresses().len(), 2);
+
+    // Now, adding a new z address should create a new HD key
+    let new_zaddr = wallet.add_zaddr();
+    assert_eq!(wallet.get_all_zaddresses().len(), 3);
+    assert_eq!(wallet.get_all_zaddresses()[2], new_zaddr);
+    assert_eq!(wallet.zkeys.read().unwrap()[2].keytype, WalletZKeyType::HdKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[2].hdkey_num, Some(1));
+
+    // Now import the privkey for the existing viewing key
+    assert_eq!(wallet.add_imported_sk(privkey.to_string(), 0), zaddr);
+    assert_eq!(wallet.get_all_zaddresses().len(), 3);
+    assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
+    // Should now be a spending key
+    assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedSpendingKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
+    assert!(wallet.zkeys.read().unwrap()[1].extsk.is_some());
 }
 
 #[test]

@@ -61,7 +61,7 @@ mod walletzkey;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 use extended_key::{KeyIndex, ExtendedPrivKey};
-use walletzkey::{WalletZKey};
+use walletzkey::{WalletZKey, WalletZKeyType};
 
 pub const MAX_REORG: usize = 100;
 pub const GAP_RULE_UNUSED_ADDRESSES: usize = 5;
@@ -556,7 +556,7 @@ impl LightWallet {
 
     // Add a new imported spending key to the wallet
     /// NOTE: This will not rescan the wallet
-    pub fn add_imported_sk(&self, sk: String) -> String {
+    pub fn add_imported_sk(&mut self, sk: String, birthday: u64) -> String {
         if !self.unlocked {
             return "Error: Can't add key while wallet is locked".to_string();
         }
@@ -568,15 +568,40 @@ impl LightWallet {
             Err(e) => return format!("Error importing spending key: {}", e)
         };
 
-        let newkey = WalletZKey::new_imported_sk(extsk);
-        self.zkeys.write().unwrap().push(newkey.clone());
+        // Make sure the key doesn't already exist
+        if self.zkeys.read().unwrap().iter().find(|&wk| wk.extsk.is_some() && wk.extsk.as_ref().unwrap() == &extsk.clone()).is_some() {
+            return "Error: Key already exists".to_string();
+        }
+        
+        let extfvk = ExtendedFullViewingKey::from(&extsk);
+        let zaddress = {
+            let mut zkeys = self.zkeys.write().unwrap();
+            let maybe_existing_zkey = zkeys.iter_mut().find(|wk| wk.extfvk == extfvk);
+        
+            // If the viewing key exists, and is now being upgraded to the spending key, replace it in-place
+            if maybe_existing_zkey.is_some() {
+                let mut existing_zkey = maybe_existing_zkey.unwrap();
+                existing_zkey.extsk = Some(extsk);
+                existing_zkey.keytype = WalletZKeyType::ImportedSpendingKey;
+                existing_zkey.zaddress.clone()
+            } else {
+                let newkey = WalletZKey::new_imported_sk(extsk);
+                zkeys.push(newkey.clone());
+                newkey.zaddress
+            }
+        };
 
-        encode_payment_address(self.config.hrp_sapling_address(), &newkey.zaddress)
+        // Adjust wallet birthday
+        if birthday < self.birthday {
+            self.birthday = if birthday < self.config.sapling_activation_height {self.config.sapling_activation_height} else {birthday};
+        }
+
+        encode_payment_address(self.config.hrp_sapling_address(), &zaddress)
     }
 
     // Add a new imported viewing key to the wallet
     /// NOTE: This will not rescan the wallet
-    pub fn add_imported_vk(&self, vk: String) -> String {
+    pub fn add_imported_vk(&mut self, vk: String, birthday: u64) -> String {
         if !self.unlocked {
             return "Error: Can't add key while wallet is locked".to_string();
         }
@@ -588,8 +613,18 @@ impl LightWallet {
             Err(e) => return format!("Error importing viewing key: {}", e)
         };
 
+        // Make sure the key doesn't already exist
+        if self.zkeys.read().unwrap().iter().find(|wk| wk.extfvk == extfvk.clone()).is_some() {
+            return "Error: Key already exists".to_string();
+        }
+
         let newkey = WalletZKey::new_imported_viewkey(extfvk);
         self.zkeys.write().unwrap().push(newkey.clone());
+
+        // Adjust wallet birthday
+        if birthday < self.birthday {
+            self.birthday = if birthday < self.config.sapling_activation_height {self.config.sapling_activation_height} else {birthday};
+        }
 
         encode_payment_address(self.config.hrp_sapling_address(), &newkey.zaddress)
     }

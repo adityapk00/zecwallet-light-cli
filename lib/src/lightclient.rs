@@ -1053,16 +1053,16 @@ impl LightClient {
     }
 
     /// Import a new private key
-    pub fn do_import_sk(&self, sk: String) -> Result<JsonValue, String> {
+    pub fn do_import_sk(&self, sk: String, birthday: u64) -> Result<JsonValue, String> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
             return Err("Wallet is locked".to_string());
         }
 
         let new_address = {
-            let wallet = self.wallet.write().unwrap();
+            let mut wallet = self.wallet.write().unwrap();
 
-            let addr = wallet.add_imported_sk(sk);
+            let addr = wallet.add_imported_sk(sk, birthday);
             if addr.starts_with("Error") {
                 let e = format!("Error creating new address{}", addr);
                     error!("{}", e);
@@ -1078,16 +1078,16 @@ impl LightClient {
     }
 
     /// Import a new viewing key
-    pub fn do_import_vk(&self, vk: String) -> Result<JsonValue, String> {
+    pub fn do_import_vk(&self, vk: String, birthday: u64) -> Result<JsonValue, String> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
             return Err("Wallet is locked".to_string());
         }
 
         let new_address = {
-            let wallet = self.wallet.write().unwrap();
+            let mut wallet = self.wallet.write().unwrap();
 
-            let addr = wallet.add_imported_vk(vk);
+            let addr = wallet.add_imported_vk(vk, birthday);
             if addr.starts_with("Error") {
                 let e = format!("Error creating new address{}", addr);
                     error!("{}", e);
@@ -1503,8 +1503,8 @@ pub mod tests {
     pub fn test_bad_import() {
         let lc = super::LightClient::unconnected(TEST_SEED.to_string(), None).unwrap();
         
-        assert!(lc.do_import_sk("bad_priv_key".to_string()).is_err());
-        assert!(lc.do_import_vk("bad_view_key".to_string()).is_err());
+        assert!(lc.do_import_sk("bad_priv_key".to_string(), 0).is_err());
+        assert!(lc.do_import_vk("bad_view_key".to_string(), 0).is_err());
     }
 
     #[test]
