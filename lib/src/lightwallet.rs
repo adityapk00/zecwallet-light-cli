@@ -26,7 +26,7 @@ use sha2::{Sha256, Digest};
 use sodiumoxide::crypto::secretbox;
 
 use zcash_client_backend::{
-    encoding::{encode_payment_address, encode_extended_spending_key, decode_extended_spending_key, decode_extended_full_viewing_key},
+    encoding::{encode_payment_address, encode_extended_spending_key, encode_extended_full_viewing_key, decode_extended_spending_key, decode_extended_full_viewing_key},
     proto::compact_formats::{CompactBlock, CompactOutput},
     wallet::{WalletShieldedOutput, WalletShieldedSpend}
 };
@@ -487,16 +487,20 @@ impl LightWallet {
             .unwrap_or(&cmp::max(self.birthday, self.config.sapling_activation_height))
     }
 
-    // Get all z-address private keys. Returns a Vector of (address, privatekey)
-    pub fn get_z_private_keys(&self) -> Vec<(String, String)> {
+    // Get all z-address private keys. Returns a Vector of (address, privatekey, viewkey)
+    pub fn get_z_private_keys(&self) -> Vec<(String, String, String)> {
         let keys = self.zkeys.read().unwrap().iter().map(|k| {
-            let pkey = k.extsk.clone().map(|extsk| encode_extended_spending_key(self.config.hrp_sapling_private_key(), &extsk));
+            let pkey = match k.extsk.clone().map(|extsk| encode_extended_spending_key(self.config.hrp_sapling_private_key(), &extsk)) {
+                Some(pk) => pk,
+                None => "".to_string()
+            };
 
-            (encode_payment_address(self.config.hrp_sapling_address(),&k.zaddress), pkey)
-        }).collect::<Vec<(String, Option<String>)>>();
+            let vkey = encode_extended_full_viewing_key(self.config.hrp_sapling_viewing_key(), &k.extfvk);
 
-        // Filter out keys that don't have a private key
-        keys.into_iter().filter(|(_a, k)| k.is_some()).map(|(a, k)| (a, k.unwrap())).collect()
+            (encode_payment_address(self.config.hrp_sapling_address(),&k.zaddress), pkey, vkey)
+        }).collect::<Vec<(String, String, String)>>();
+
+        keys
     }
 
     /// Get all t-address private keys. Returns a Vector of (address, secretkey)

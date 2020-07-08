@@ -629,7 +629,7 @@ fn test_multi_serialization() {
     let taddr1 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
     let taddr2 = wallet.add_taddr();
 
-    let (zaddr1, zpk1) = &wallet.get_z_private_keys()[0];
+    let (zaddr1, zpk1, zvk1) = &wallet.get_z_private_keys()[0];
     let zaddr2 = wallet.add_zaddr();
 
     let mut serialized_data = vec![];
@@ -642,10 +642,11 @@ fn test_multi_serialization() {
     assert_eq!(taddr1, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]));
     assert_eq!(taddr2, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[1]));
 
-    let (w2_zaddr1, w2_zpk1) = &wallet.get_z_private_keys()[0];
-    let (w2_zaddr2, _) = &wallet.get_z_private_keys()[1];
+    let (w2_zaddr1, w2_zpk1, w2_zvk1) = &wallet.get_z_private_keys()[0];
+    let (w2_zaddr2, _, _) = &wallet.get_z_private_keys()[1];
     assert_eq!(zaddr1, w2_zaddr1);
     assert_eq!(zpk1, w2_zpk1);
+    assert_eq!(zvk1, w2_zvk1);
     assert_eq!(zaddr2, *w2_zaddr2);
 
 }
@@ -1944,7 +1945,7 @@ fn test_rollback() {
 }
 
 #[test]
-fn test_t_derivation() {
+fn test_t_z_derivation() {
     let lc = LightClientConfig {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "main".to_string(),
@@ -1969,9 +1970,10 @@ fn test_t_derivation() {
     assert_eq!(taddr, "t1NoS6ZgaUTpmjkge2cVpXGcySasdYDrXqh");
     assert_eq!(pk, "KxdmS38pxskS6bbKX43zhTu8ppWckNmWjKsQFX1hwidvhRRgRd3c");
 
-    let (zaddr, sk) = &wallet.get_z_private_keys()[0];
+    let (zaddr, sk, vk) = &wallet.get_z_private_keys()[0];
     assert_eq!(zaddr, "zs1q6xk3q783t5k92kjqt2rkuuww8pdw2euzy5rk6jytw97enx8fhpazdv3th4xe7vsk6e9sfpawfg");
     assert_eq!(sk, "secret-extended-key-main1qvpa0qr8qqqqpqxn4l054nzxpxzp3a8r2djc7sekdek5upce8mc2j2z0arzps4zv940qeg706hd0wq6g5snzvhp332y6vhwyukdn8dhekmmsk7fzvzkqm6ypc99uy63tpesqwxhpre78v06cx8k5xpp9mrhtgqs5dvp68cqx2yrvthflmm2ynl8c0506dekul0f6jkcdmh0292lpphrksyc5z3pxwws97zd5els3l2mjt2s7hntap27mlmt6w0drtfmz36vz8pgu7ec0twfrq");
+    assert_eq!(vk, "zxviews1qvpa0qr8qqqqpqxn4l054nzxpxzp3a8r2djc7sekdek5upce8mc2j2z0arzps4zv9kdvg28gjzvxd47ant6jn4svln5psw3htx93cq93ahw4e7lptrtlq7he5r6p6rcm3s0z6l24ype84sgqfrmghu449htrjspfv6qg2zfx2yrvthflmm2ynl8c0506dekul0f6jkcdmh0292lpphrksyc5z3pxwws97zd5els3l2mjt2s7hntap27mlmt6w0drtfmz36vz8pgu7ecrxzsls");
 
     assert_eq!(seed_phrase, Some(wallet.get_seed_phrase()));
 }

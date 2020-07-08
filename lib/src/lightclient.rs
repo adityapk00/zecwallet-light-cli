@@ -626,11 +626,12 @@ impl LightClient {
         let wallet = self.wallet.read().unwrap();
         // Go over all z addresses
         let z_keys = wallet.get_z_private_keys().iter()
-            .filter( move |(addr, _)| address.is_none() || address.as_ref() == Some(addr))
-            .map( |(addr, pk)|
+            .filter( move |(addr, _, _)| address.is_none() || address.as_ref() == Some(addr))
+            .map( |(addr, pk, vk)|
                 object!{
                     "address"     => addr.clone(),
-                    "private_key" => pk.clone()
+                    "private_key" => pk.clone(),
+                    "viewing_key" => vk.clone(),
                 }
             ).collect::<Vec<JsonValue>>();
 
