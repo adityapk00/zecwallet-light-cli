@@ -143,7 +143,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 6;
+        return 7;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -293,8 +293,8 @@ impl LightWallet {
         let mut seed_bytes = [0u8; 32];
         reader.read_exact(&mut seed_bytes)?;
         
-        let zkeys = if version <= 5 {
-            // Up until version 5, the wallet keys were written out individually
+        let zkeys = if version <= 6 {
+            // Up until version 6, the wallet keys were written out individually
             // Read the spending keys
             let extsks = Vector::read(&mut reader, |r| ExtendedSpendingKey::read(r))?;
                     
@@ -342,7 +342,7 @@ impl LightWallet {
             // Convert vector of results into result of vector, returning an error if any one of the keys failed the checks above
             zkeys_result.into_iter().collect::<io::Result<_>>()?
         }  else {
-            // After version 5, we read the WalletZKey structs directly
+            // After version 6, we read the WalletZKey structs directly
             Vector::read(&mut reader, |r| WalletZKey::read(r))?
         };
         
