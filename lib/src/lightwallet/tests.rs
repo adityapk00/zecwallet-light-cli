@@ -790,6 +790,176 @@ fn test_z_spend_to_z() {
     }
 }
 
+
+#[test]
+fn test_self_txns_ttoz_withmemo() {
+    let mut rng = OsRng;
+    let secp = Secp256k1::new();
+
+    let (wallet, _txid1, block_hash) = get_test_wallet(0);
+
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+
+    const TAMOUNT1: u64 = 50000;
+
+    let mut tx = FakeTransaction::new(&mut rng);
+    tx.add_t_output(&pk, TAMOUNT1);
+    let txid1 = tx.get_tx().txid();
+
+    wallet.scan_full_tx(&tx.get_tx(), 1, 0); 
+
+    {
+        let txs = wallet.txs.read().unwrap();
+
+        // Now make sure the t addr was recieved
+        assert_eq!(txs[&txid1].utxos.len(), 1);
+        assert_eq!(txs[&txid1].utxos[0].address, taddr);
+        assert_eq!(txs[&txid1].utxos[0].value, TAMOUNT1);
+    }
+
+    // Create a new Tx, spending this taddr
+    const AMOUNT_SENT: u64 = 20;
+
+    let outgoing_memo = "Outgoing Memo".to_string();
+    let zaddr = wallet.add_zaddr();
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) =get_sapling_params().unwrap();
+
+    // Create a tx and send to address. This should consume both the UTXO and the note
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                            vec![(&zaddr, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(2, block_hash);
+    cb3.add_tx(&sent_tx);
+
+    // Scan the compact block and the full Tx
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+    wallet.scan_full_tx(&sent_tx, 2, 0);
+
+    {
+        let txs = wallet.txs.read().unwrap();
+
+        // Includes Outgoing meta data, since this is a wallet -> wallet tx with a memo
+        assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
+        assert_eq!(txs[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+    }
+}
+
+#[test]
+fn test_self_txns_ttoz_nomemo() {
+    let mut rng = OsRng;
+    let secp = Secp256k1::new();
+
+    let (wallet, _txid1, block_hash) = get_test_wallet(0);
+
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+
+    const TAMOUNT1: u64 = 50000;
+
+    let mut tx = FakeTransaction::new(&mut rng);
+    tx.add_t_output(&pk, TAMOUNT1);
+    let txid1 = tx.get_tx().txid();
+
+    wallet.scan_full_tx(&tx.get_tx(), 1, 0); 
+
+    {
+        let txs = wallet.txs.read().unwrap();
+
+        // Now make sure the t addr was recieved
+        assert_eq!(txs[&txid1].utxos.len(), 1);
+        assert_eq!(txs[&txid1].utxos[0].address, taddr);
+        assert_eq!(txs[&txid1].utxos[0].value, TAMOUNT1);
+    }
+
+    // Create a new Tx, spending this taddr
+    const AMOUNT_SENT: u64 = 20;
+
+    let zaddr = wallet.add_zaddr();
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) =get_sapling_params().unwrap();
+
+    // Create a tx and send to address. This should consume both the UTXO and the note
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                            vec![(&zaddr, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(2, block_hash);
+    cb3.add_tx(&sent_tx);
+
+    // Scan the compact block and the full Tx
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+    wallet.scan_full_tx(&sent_tx, 2, 0);
+
+    {
+        let txs = wallet.txs.read().unwrap();
+
+        // No Outgoing meta data, since this is a wallet -> wallet tx without a memo
+        assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 0);
+    }
+}
+
+#[test]
+fn test_self_txns_ztoz() {
+    const AMOUNT1: u64 = 50000;
+    let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT1);
+
+    let zaddr2 = wallet.add_zaddr();   // This is acually address #6, since there are 5 initial addresses in the wallet
+
+    const AMOUNT_SENT: u64 = 20;
+
+    let outgoing_memo = "Outgoing Memo".to_string();
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) =get_sapling_params().unwrap();
+
+    // Create a tx and send to address
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+                            vec![(&zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(2, block_hash);
+    cb3.add_tx(&sent_tx);
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+    wallet.scan_full_tx(&sent_tx, 2, 0);
+
+    {
+        let txs = wallet.txs.read().unwrap();
+
+        // Includes Outgoing meta data, since this is a wallet -> wallet tx with a memo
+        assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
+        assert_eq!(txs[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
+    }
+
+    // Another self tx, this time without a memo
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+        vec![(&zaddr2, AMOUNT_SENT, None)]).unwrap();
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
+    cb4.add_tx(&sent_tx);
+    wallet.scan_block(&cb4.as_bytes()).unwrap();
+    wallet.scan_full_tx(&sent_tx, 3, 0);
+
+    {
+        let txs = wallet.txs.read().unwrap();
+
+        // No Outgoing meta data, since this is a wallet -> wallet tx without a memo
+        assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 0);
+    }
+}
+
 #[test]
 fn test_multi_z() {
     const AMOUNT1: u64 = 50000;
@@ -848,12 +1018,13 @@ fn test_multi_z() {
         assert_eq!(txs[&sent_txid].notes[ext_note_number].is_change, false);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].spent, None);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].unconfirmed_spent, None);
-        assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[ext_note_number].memo), Some(outgoing_memo));
+        assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[ext_note_number].memo), Some(outgoing_memo.clone()));
 
         assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
 
-        // No Outgoing meta data, since this is a wallet -> wallet tx
-        assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 0);
+        // Includes Outgoing meta data, since this is a wallet -> wallet tx with a memo
+        assert_eq!(txs[&sent_txid].outgoing_metadata.len(), 1);
+        assert_eq!(txs[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
     }
 
     // Now spend the money, which should pick notes from both addresses

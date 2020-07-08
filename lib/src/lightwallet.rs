@@ -1090,8 +1090,8 @@ impl LightWallet {
                     None => continue,
                 };
 
-                {
-                    info!("A sapling note was sent in {}, getting memo", tx.txid());
+                if memo.to_utf8().is_some() {
+                    info!("A sapling note was sent to wallet in {} that had a memo", tx.txid());
                     
                     // Do it in a short scope because of the write lock.   
                     let mut txs = self.txs.write().unwrap();
@@ -1101,7 +1101,10 @@ impl LightWallet {
                         .and_then(|t| {
                             t.notes.iter_mut().find(|nd| nd.note == note)
                         }) {
-                            None => (),
+                            None => {
+                                info!("No txid matched for incoming sapling funds while updating memo"); 
+                                ()
+                            },
                             Some(nd) => {
                                 nd.memo = Some(memo)
                             }
@@ -1135,8 +1138,13 @@ impl LightWallet {
                             let address = encode_payment_address(self.config.hrp_sapling_address(), 
                                             &payment_address);
 
-                            // Check if this is a change address
-                            if z_addresses.contains(&address) {
+                            // Check if this is change, and if it also doesn't have a memo, don't add 
+                            // to the outgoing metadata. 
+                            // If this is change (i.e., funds sent to ourself) AND has a memo, then
+                            // presumably the users is writing a memo to themself, so we will add it to 
+                            // the outgoing metadata, even though it might be confusing in the UI, but hopefully
+                            // the user can make sense of it. 
+                            if z_addresses.contains(&address) && memo.to_utf8().is_none() {
                                 continue;
                             }
 
