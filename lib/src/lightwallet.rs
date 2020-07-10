@@ -1089,27 +1089,25 @@ impl LightWallet {
                     Some(ret) => ret,
                     None => continue,
                 };
+   
+                info!("A sapling note was sent to wallet in {}", tx.txid());
+                
+                // Do it in a short scope because of the write lock.   
+                let mut txs = self.txs.write().unwrap();
 
-                if memo.to_utf8().is_some() {
-                    info!("A sapling note was sent to wallet in {} that had a memo", tx.txid());
-                    
-                    // Do it in a short scope because of the write lock.   
-                    let mut txs = self.txs.write().unwrap();
-
-                    // Update memo if we have this Tx. 
-                    match txs.get_mut(&tx.txid())
-                        .and_then(|t| {
-                            t.notes.iter_mut().find(|nd| nd.note == note)
-                        }) {
-                            None => {
-                                info!("No txid matched for incoming sapling funds while updating memo"); 
-                                ()
-                            },
-                            Some(nd) => {
-                                nd.memo = Some(memo)
-                            }
+                // Update memo if we have this Tx. 
+                match txs.get_mut(&tx.txid())
+                    .and_then(|t| {
+                        t.notes.iter_mut().find(|nd| nd.note == note)
+                    }) {
+                        None => {
+                            info!("No txid matched for incoming sapling funds while updating memo"); 
+                            ()
+                        },
+                        Some(nd) => {
+                            nd.memo = Some(memo)
                         }
-                }
+                    }
             }
 
             // Also scan the output to see if it can be decoded with our OutgoingViewKey

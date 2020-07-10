@@ -633,8 +633,9 @@ impl Command for TransactionsCommand {
         let mut h = vec![];
         h.push("List all incoming and outgoing transactions from this wallet");
         h.push("Usage:");
-        h.push("list");
+        h.push("list [allmemos]");
         h.push("");
+        h.push("If you include the 'allmemos' argument, all memos are returned in their raw hex format");
 
         h.join("\n")
     }
@@ -643,8 +644,22 @@ impl Command for TransactionsCommand {
         "List all transactions in the wallet".to_string()
     }
 
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        format!("{}", lightclient.do_list_transactions().pretty(2))
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        if args.len() > 1 {
+            return format!("Didn't understand arguments\n{}", self.help());
+        }
+
+        let include_memo_hex = if args.len() == 1 {
+            if args[0] == "allmemos" || args[0] == "true" || args[0] == "yes" {
+                true
+            } else {
+                return format!("Couldn't understand first argument '{}'\n{}", args[0], self.help());
+            }
+        } else {
+            false
+        };
+
+        format!("{}", lightclient.do_list_transactions(include_memo_hex).pretty(2))
     }
 }
 

@@ -862,7 +862,7 @@ impl LightClient {
         }
     }
 
-    pub fn do_list_transactions(&self) -> JsonValue {
+    pub fn do_list_transactions(&self, include_memo_hex: bool) -> JsonValue {
         let wallet = self.wallet.read().unwrap();
 
         // Create a list of TransactionItems from wallet txns
@@ -882,11 +882,18 @@ impl LightClient {
 
                     // Collect outgoing metadata
                     let outgoing_json = v.outgoing_metadata.iter()
-                        .map(|om| 
-                            object!{
+                        .map(|om| {
+                            let mut o = object!{
                                 "address" => om.address.clone(),
                                 "value"   => om.value,
-                                "memo"    => LightWallet::memo_str(&Some(om.memo.clone())),
+                                "memo"    => LightWallet::memo_str(&Some(om.memo.clone()))
+                            };
+
+                            if include_memo_hex {
+                                o.insert("memohex", hex::encode(om.memo.as_bytes())).unwrap();
+                            }
+                            
+                            return o;
                         })
                         .collect::<Vec<JsonValue>>();                    
 
@@ -905,15 +912,25 @@ impl LightClient {
                 txns.extend(v.notes.iter()
                     .filter( |nd| !nd.is_change )
                     .enumerate()
-                    .map ( |(i, nd)| 
-                        object! {
+                    .map ( |(i, nd)| {
+                        let mut o = object! {
                             "block_height" => v.block,
                             "datetime"     => v.datetime,
                             "position"     => i,
                             "txid"         => format!("{}", v.txid),
                             "amount"       => nd.note.value as i64,
                             "address"      => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
-                            "memo"         => LightWallet::memo_str(&nd.memo),
+                            "memo"         => LightWallet::memo_str(&nd.memo)
+                        };
+
+                        if include_memo_hex {
+                            o.insert("memohex", match &nd.memo {
+                                Some(m) => hex::encode(m.as_bytes()),
+                                _ => "".to_string(),
+                            }).unwrap();
+                        }
+
+                        return o;
                     })
                 );
 
