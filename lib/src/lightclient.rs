@@ -1070,6 +1070,18 @@ impl LightClient {
         Ok(array![new_address])
     }
 
+    /// Convinence function to determine what type of key this is and import it
+    pub fn do_import_key(&self, key: String, birthday: u64) -> Result<JsonValue, String> {
+        if key.starts_with(self.config.hrp_sapling_private_key()) {
+            self.do_import_sk(key, birthday)
+        } else if key.starts_with(self.config.hrp_sapling_viewing_key()) {
+            self.do_import_vk(key, birthday)
+        } else {
+            Err(format!("'{}' was not recognized as either a spending key or a viewing key because it didn't start with either '{}' or '{}'", 
+                key, self.config.hrp_sapling_private_key(), self.config.hrp_sapling_viewing_key()))
+        }
+    }
+
     /// Import a new private key
     pub fn do_import_sk(&self, sk: String, birthday: u64) -> Result<JsonValue, String> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
