@@ -29,7 +29,7 @@ ring = "0.16.9"
 libflate = "0.1"
 subtle = "2"
 threadpool = "1.8.0"
-num_cpus = "1.13.0"
+num_cpus = "1.12.0"
 
 tonic = { version = "0.2.1", features = ["tls", "tls-roots"] }
 bytes = "0.4"
