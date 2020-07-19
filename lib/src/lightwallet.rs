@@ -1059,7 +1059,10 @@ impl LightWallet {
     // If one of the last 'n' zaddress was used, ensure we add the next HD zaddress to the wallet
     pub fn ensure_hd_zaddresses(&self, address: &String) {
         let last_addresses = {
-            self.zkeys.read().unwrap().iter().rev().take(GAP_RULE_UNUSED_ADDRESSES)
+            self.zkeys.read().unwrap().iter()
+                .filter(|zk| zk.keytype == WalletZKeyType::HdKey)
+                .rev()
+                .take(GAP_RULE_UNUSED_ADDRESSES)
                 .map(|s| encode_payment_address(self.config.hrp_sapling_address(), &s.zaddress))
                 .collect::<Vec<String>>()
         };
@@ -1681,7 +1684,8 @@ impl LightWallet {
                 // Create a single mutable slice of all the newly-added witnesses.
                 let mut witness_refs: Vec<_> = txs
                     .values_mut()
-                    .map(|tx| tx.notes.iter_mut().filter_map(|nd| nd.witnesses.last_mut()))
+                    .map(|tx| tx.notes.iter_mut().filter_map(
+                        |nd| if nd.spent.is_none() && nd.unconfirmed_spent.is_none() { nd.witnesses.last_mut() } else { None }))
                     .flatten()
                     .collect();
 
@@ -1854,12 +1858,16 @@ impl LightWallet {
             .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
             .flatten()
             .filter_map(|(txid, note)| {
-                // Get the spending key for the selected fvk, if we have it
-                let extsk = self.zkeys.read().unwrap().iter()
-                    .find(|zk| zk.extfvk == note.extfvk)
-                    .and_then(|zk| zk.extsk.clone());
-
-                SpendableNote::from(txid, note, anchor_offset, &extsk)
+                // Filter out notes that are already spent
+                if note.spent.is_some() || note.unconfirmed_spent.is_some() {
+                    None
+                } else {
+                    // Get the spending key for the selected fvk, if we have it
+                    let extsk = self.zkeys.read().unwrap().iter()
+                        .find(|zk| zk.extfvk == note.extfvk)
+                        .and_then(|zk| zk.extsk.clone());
+                    SpendableNote::from(txid, note, anchor_offset, &extsk)
+                }
             })
             .scan(0, |running_total, spendable| {
                 let value = spendable.note.value;
