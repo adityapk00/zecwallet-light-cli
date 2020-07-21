@@ -975,6 +975,7 @@ impl LightWallet {
                 if tx.block as u32 <= anchor_height {
                     tx.notes
                         .iter()
+                        .filter(|nd| nd.spent.is_none() && nd.unconfirmed_spent.is_none())
                         .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
                             match addr.clone() {
                                 Some(a) => a == encode_payment_address(
@@ -985,7 +986,48 @@ impl LightWallet {
                                 None    => true
                             }
                         })
-                        .map(|nd| if nd.spent.is_none() && nd.unconfirmed_spent.is_none() { nd.note.value } else { 0 })
+                        .map(|nd| nd.note.value)
+                        .sum::<u64>()
+                } else {
+                    0
+                }
+            })
+            .sum::<u64>()
+    }
+
+    pub fn spendable_zbalance(&self, addr: Option<String>) -> u64 {
+        let anchor_height = match self.get_target_height_and_anchor_offset() {
+            Some((height, anchor_offset)) => height - anchor_offset as u32 - 1,
+            None => return 0,
+        };
+
+        self.txs
+            .read()
+            .unwrap()
+            .values()
+            .map(|tx| {
+                if tx.block as u32 <= anchor_height {
+                    tx.notes
+                        .iter()
+                        .filter(|nd| nd.spent.is_none() && nd.unconfirmed_spent.is_none())
+                        .filter(|nd| {
+                            // Check to see if we have this note's spending key.
+                            match self.zkeys.read().unwrap().iter().find(|zk| zk.extfvk == nd.extfvk) {
+                                Some(zk) => zk.keytype == WalletZKeyType::HdKey || zk.keytype == WalletZKeyType::ImportedSpendingKey,
+                                _ => false
+                            }
+                        })
+                        .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
+                            match addr.clone() {
+                                Some(a) => a == encode_payment_address(
+                                                    self.config.hrp_sapling_address(),
+                                                    &nd.extfvk.fvk.vk
+                                                        .to_payment_address(nd.diversifier, &JUBJUB).unwrap()
+                                                ),
+                                None    => true
+                            }
+                        })
+                        .map(|nd| nd.note.value)
                         .sum::<u64>()
                 } else {
                     0

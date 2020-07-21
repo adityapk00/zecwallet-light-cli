@@ -728,6 +728,7 @@ fn test_z_spend_to_z() {
     {
         assert_eq!(wallet.zbalance(None), AMOUNT1);
         assert_eq!(wallet.verified_zbalance(None), AMOUNT1);
+        assert_eq!(wallet.spendable_zbalance(None), AMOUNT1);
     }
 
     // Create a tx and send to address
@@ -764,6 +765,7 @@ fn test_z_spend_to_z() {
         // The wallet should deduct this from the verified balance. The zbalance still includes it
         assert_eq!(wallet.zbalance(None), AMOUNT1);
         assert_eq!(wallet.verified_zbalance(None), 0);
+        assert_eq!(wallet.spendable_zbalance(None), 0);
     }
 
     let mut cb3 = FakeCompactBlock::new(2, block_hash);
@@ -808,7 +810,6 @@ fn test_z_spend_to_z() {
         assert_eq!(txs[&sent_txid].outgoing_metadata[0].memo.to_utf8().unwrap().unwrap(), outgoing_memo);
     }
 }
-
 
 #[test]
 fn test_self_txns_ttoz_withmemo() {
@@ -2261,6 +2262,7 @@ fn test_import_sk_upgrade_vk() {
     assert_eq!(wallet.add_imported_sk(privkey.to_string(), 0), zaddr);
     assert_eq!(wallet.get_all_zaddresses().len(), 3);
     assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
+
     // Should now be a spending key
     assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedSpendingKey);
     assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
