@@ -568,8 +568,8 @@ impl LightWallet {
     // Add a new imported spending key to the wallet
     /// NOTE: This will not rescan the wallet
     pub fn add_imported_sk(&mut self, sk: String, birthday: u64) -> String {
-        if !self.unlocked {
-            return "Error: Can't add key while wallet is locked".to_string();
+        if self.encrypted {
+            return "Error: Can't import spending key while wallet is encrypted".to_string();
         }
 
         // First, try to interpret the key
