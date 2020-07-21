@@ -1322,7 +1322,7 @@ fn test_z_incoming_hex_memo() {
     let (wallet, _txid1, block_hash) = get_test_wallet(AMOUNT1);
 
     let my_address = encode_payment_address(wallet.config.hrp_sapling_address(),
-                        &wallet.extfvks.read().unwrap()[0].default_address().unwrap().1);
+                        &wallet.zkeys.read().unwrap()[0].zaddress);
 
     let orig_memo = "hello world".to_string();    
     let memo = format!("0x{}", hex::encode(&orig_memo));
@@ -1350,7 +1350,7 @@ fn test_z_incoming_hex_memo() {
         
         assert_eq!(txs[&sent_txid].notes.len(), 1);
 
-        assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.extfvks.read().unwrap()[0]);
+        assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.zkeys.read().unwrap()[0].extfvk);
         assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - fee);
         assert_eq!(LightWallet::note_address(wallet.config.hrp_sapling_address(), &txs[&sent_txid].notes[0]), Some(my_address));
         assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[0].memo), Some(orig_memo));
