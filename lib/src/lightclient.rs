@@ -18,9 +18,7 @@ use threadpool::ThreadPool;
 
 use json::{object, array, JsonValue};
 use zcash_primitives::transaction::{TxId, Transaction};
-use zcash_client_backend::{
-    constants::testnet, constants::mainnet, constants::regtest, encoding::encode_payment_address,
-};
+use zcash_client_backend::{constants::testnet, constants::mainnet, constants::regtest,};
 
 use log::{info, warn, error, LevelFilter};
 use log4rs::append::rolling_file::RollingFileAppender;
@@ -175,6 +173,24 @@ impl LightClientConfig {
         zcash_data_location.into_boxed_path()
     }
 
+    pub fn get_zcash_params_path(&self) -> io::Result<Box<Path>> {
+        let mut zcash_params = self.get_zcash_data_path().into_path_buf();
+        zcash_params.push("..");
+        if cfg!(target_os="macos") || cfg!(target_os="windows") {
+            zcash_params.push("ZcashParams");
+        } else {
+            zcash_params.push(".zcash-params");
+        }
+
+        match std::fs::create_dir_all(zcash_params.clone()) {
+            Ok(_) => Ok(zcash_params.into_boxed_path()),
+            Err(e) => {
+                eprintln!("Couldn't create zcash params directory\n{}", e);
+                Err(e)
+            }
+        }
+    }
+
     pub fn get_wallet_path(&self) -> Box<Path> {
         let mut wallet_location = self.get_zcash_data_path().into_path_buf();
         wallet_location.push(WALLET_NAME);
@@ -253,6 +269,15 @@ impl LightClientConfig {
         }
     }
 
+    pub fn hrp_sapling_viewing_key(&self) -> &str {
+        match &self.chain_name[..] {
+            "main"    => mainnet::HRP_SAPLING_EXTENDED_FULL_VIEWING_KEY,
+            "test"    => testnet::HRP_SAPLING_EXTENDED_FULL_VIEWING_KEY,
+            "regtest" => regtest::HRP_SAPLING_EXTENDED_FULL_VIEWING_KEY,
+            c         => panic!("Unknown chain {}", c)
+        }
+    }
+
     pub fn base58_pubkey_address(&self) -> [u8; 2] {
         match &self.chain_name[..] {
             "main"    => mainnet::B58_PUBKEY_ADDRESS_PREFIX,
@@ -308,6 +333,17 @@ impl LightClient {
         };
     }
 
+    fn write_file_if_not_exists(dir: &Box<Path>, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let mut file_path = dir.to_path_buf();
+        file_path.push(name);
+        if !file_path.exists() {
+            let mut file = File::create(&file_path)?;
+            file.write_all(bytes)?;
+        }
+
+        Ok(())
+    }
+
     #[cfg(feature = "embed_params")]
     fn read_sapling_params(&mut self) {
         // Read Sapling Params
@@ -339,6 +375,25 @@ impl LightClient {
             self.sapling_spend.extend_from_slice(sapling_spend);
         }
 
+        // Ensure that the sapling params are stored on disk properly as well. 
+        match self.config.get_zcash_params_path() {
+            Ok(zcash_params_dir) => {
+                // Create the sapling output and spend params files
+                match LightClient::write_file_if_not_exists(&zcash_params_dir, "sapling-output.params", &self.sapling_output) {
+                    Ok(_) => {},
+                    Err(e) => eprintln!("Warning: Couldn't write the output params!\n{}", e)
+                };
+                
+                match LightClient::write_file_if_not_exists(&zcash_params_dir, "sapling-spend.params", &self.sapling_spend) {
+                    Ok(_) => {},
+                    Err(e) => eprintln!("Warning: Couldn't write the output params!\n{}", e)
+                }
+            },
+            Err(e) => {
+                eprintln!("{}", e);
+            }
+        };
+        
         Ok(())
     }
 
@@ -477,12 +532,6 @@ impl LightClient {
         info!("Read wallet with birthday {}", lc.wallet.read().unwrap().get_first_tx_block());
         info!("Created LightClient to {}", &config.server);
 
-        if crate::lightwallet::bugs::BugBip39Derivation::has_bug(&lc) {
-            let m = format!("WARNING!!!\nYour wallet has a bip39derivation bug that's showing incorrect addresses.\nPlease run 'fixbip39bug' to automatically fix the address derivation in your wallet!\nPlease see: https://github.com/adityapk00/zecwallet-light-cli/blob/master/bip39bug.md");
-             info!("{}", m);
-             println!("{}", m);
-        }
-
         Ok(lc)
     }
 
@@ -577,11 +626,12 @@ impl LightClient {
         let wallet = self.wallet.read().unwrap();
         // Go over all z addresses
         let z_keys = wallet.get_z_private_keys().iter()
-            .filter( move |(addr, _)| address.is_none() || address.as_ref() == Some(addr))
-            .map( |(addr, pk)|
+            .filter( move |(addr, _, _)| address.is_none() || address.as_ref() == Some(addr))
+            .map( |(addr, pk, vk)|
                 object!{
                     "address"     => addr.clone(),
-                    "private_key" => pk.clone()
+                    "private_key" => pk.clone(),
+                    "viewing_key" => vk.clone(),
                 }
             ).collect::<Vec<JsonValue>>();
 
@@ -609,9 +659,7 @@ impl LightClient {
         let wallet = self.wallet.read().unwrap();
 
         // Collect z addresses
-        let z_addresses = wallet.zaddress.read().unwrap().iter().map( |ad| {
-            encode_payment_address(self.config.hrp_sapling_address(), &ad)
-        }).collect::<Vec<String>>();
+        let z_addresses = wallet.get_all_zaddresses();
 
         // Collect t addresses
         let t_addresses = wallet.taddresses.read().unwrap().iter().map( |a| a.clone() )
@@ -627,12 +675,12 @@ impl LightClient {
         let wallet = self.wallet.read().unwrap();
 
         // Collect z addresses
-        let z_addresses = wallet.zaddress.read().unwrap().iter().map( |ad| {
-            let address = encode_payment_address(self.config.hrp_sapling_address(), &ad);
+        let z_addresses = wallet.get_all_zaddresses().iter().map(|zaddress| {
             object!{
-                "address" => address.clone(),
-                "zbalance" => wallet.zbalance(Some(address.clone())),
-                "verified_zbalance" => wallet.verified_zbalance(Some(address)),
+                "address" => zaddress.clone(),
+                "zbalance" => wallet.zbalance(Some(zaddress.clone())),
+                "verified_zbalance" => wallet.verified_zbalance(Some(zaddress.clone())),
+                "spendable_zbalance" => wallet.spendable_zbalance(Some(zaddress.clone()))
             }
         }).collect::<Vec<JsonValue>>();
 
@@ -650,6 +698,7 @@ impl LightClient {
         object!{
             "zbalance"           => wallet.zbalance(None),
             "verified_zbalance"  => wallet.verified_zbalance(None),
+            "spendable_zbalance" => wallet.spendable_zbalance(None),
             "tbalance"           => wallet.tbalance(None),
             "z_addresses"        => z_addresses,
             "t_addresses"        => t_addresses,
@@ -999,7 +1048,7 @@ impl LightClient {
         let new_address = {
             let wallet = self.wallet.write().unwrap();
 
-            match addr_type {
+            let addr = match addr_type {
                 "z" => wallet.add_zaddr(),
                 "t" => wallet.add_taddr(),
                 _   => {
@@ -1007,13 +1056,84 @@ impl LightClient {
                     error!("{}", e);
                     return Err(e);
                 }
+            };
+
+            if addr.starts_with("Error") {
+                let e = format!("Error creating new address: {}", addr);
+                    error!("{}", e);
+                    return Err(e);
             }
+
+            addr
         };
 
         self.do_save()?;
 
         Ok(array![new_address])
     }
+
+    /// Convinence function to determine what type of key this is and import it
+    pub fn do_import_key(&self, key: String, birthday: u64) -> Result<JsonValue, String> {
+        if key.starts_with(self.config.hrp_sapling_private_key()) {
+            self.do_import_sk(key, birthday)
+        } else if key.starts_with(self.config.hrp_sapling_viewing_key()) {
+            self.do_import_vk(key, birthday)
+        } else {
+            Err(format!("'{}' was not recognized as either a spending key or a viewing key because it didn't start with either '{}' or '{}'", 
+                key, self.config.hrp_sapling_private_key(), self.config.hrp_sapling_viewing_key()))
+        }
+    }
+
+    /// Import a new private key
+    pub fn do_import_sk(&self, sk: String, birthday: u64) -> Result<JsonValue, String> {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return Err("Wallet is locked".to_string());
+        }
+
+        let new_address = {
+            let mut wallet = self.wallet.write().unwrap();
+
+            let addr = wallet.add_imported_sk(sk, birthday);
+            if addr.starts_with("Error") {
+                let e = format!("Error creating new address{}", addr);
+                    error!("{}", e);
+                    return Err(e);
+            }
+
+            addr
+        };
+
+        self.do_save()?;
+
+        Ok(array![new_address])
+    }
+
+    /// Import a new viewing key
+    pub fn do_import_vk(&self, vk: String, birthday: u64) -> Result<JsonValue, String> {
+        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
+            error!("Wallet is locked");
+            return Err("Wallet is locked".to_string());
+        }
+
+        let new_address = {
+            let mut wallet = self.wallet.write().unwrap();
+
+            let addr = wallet.add_imported_vk(vk, birthday);
+            if addr.starts_with("Error") {
+                let e = format!("Error creating new address{}", addr);
+                    error!("{}", e);
+                    return Err(e);
+            }
+
+            addr
+        };
+
+        self.do_save()?;
+
+        Ok(array![new_address])
+    }
+    
 
     pub fn clear_state(&self) {
         // First, clear the state from the wallet
@@ -1409,6 +1529,14 @@ pub mod tests {
         lc.wallet.write().unwrap().unlock("password".to_string()).unwrap();
         
         assert!(!lc.do_new_address("z").is_err());
+    }
+
+    #[test]
+    pub fn test_bad_import() {
+        let lc = super::LightClient::unconnected(TEST_SEED.to_string(), None).unwrap();
+        
+        assert!(lc.do_import_sk("bad_priv_key".to_string(), 0).is_err());
+        assert!(lc.do_import_vk("bad_view_key".to_string(), 0).is_err());
     }
 
     #[test]

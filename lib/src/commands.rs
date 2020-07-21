@@ -308,16 +308,6 @@ impl Command for EncryptCommand {
             return self.help();
         }
 
-        // Refuse to encrypt if the bip39 bug has not been fixed
-        use crate::lightwallet::bugs::BugBip39Derivation;
-        if BugBip39Derivation::has_bug(lightclient) {
-            let mut h = vec![];
-            h.push("It looks like your wallet has the bip39bug. Please run 'fixbip39bug' to fix it");
-            h.push("before encrypting your wallet.");
-            h.push("ERROR: Cannot encrypt while wallet has the bip39bug.");
-            return h.join("\n");
-        }
-
         let passwd = args[0].to_string();
 
         match lightclient.wallet.write().unwrap().encrypt(passwd) {
@@ -663,13 +653,69 @@ impl Command for TransactionsCommand {
     }
 }
 
+struct ImportCommand {}
+impl Command for ImportCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Import an external spending or viewing key into the wallet");
+        h.push("Usage:");
+        h.push("import <spending_key | viewing_key> <birthday> [norescan]");
+        h.push("");
+        h.push("Birthday is the earliest block number that has transactions belonging to the imported key. Rescanning will start from this block. If not sure, you can specify '0', which will start rescanning from the first sapling block.");
+        h.push("Note that you can import only the full spending (private) key or the full viewing key.");
+
+        h.join("\n")
+    }
+
+
+    fn short_help(&self) -> String {
+        "Import spending or viewing keys into the wallet".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        if args.len() < 2 || args.len() > 3 {
+            return format!("Insufficient arguments\n\n{}", self.help());
+        }
+
+        let key = args[0];
+        let birthday = match args[1].parse::<u64>() {
+            Ok(b) => b,
+            Err(_) => return format!("Couldn't parse {} as birthday. Please specify an integer. Ok to use '0'", args[1]),
+        };
+
+        let rescan = if args.len() == 3 {
+            if args[2] == "norescan" || args[2] == "false" || args[2] == "no" { 
+                false 
+            } else {
+                return format!("Couldn't undestand the argument '{}'. Please pass 'norescan' to prevent rescanning the wallet", args[2]);
+            }
+        } else {
+            true
+        };
+
+        let r = match lightclient.do_import_key(key.to_string(), birthday) {
+            Ok(r) => r.pretty(2),
+            Err(e) => return format!("Error: {}", e),
+        };
+
+        if rescan {
+            match lightclient.do_rescan() {
+                Ok(_) => {},
+                Err(e) => return format!("Error: Rescan failed: {}", e),
+            };
+        }
+
+        return r;
+    }
+}
+
 struct HeightCommand {}
 impl Command for HeightCommand {
     fn help(&self)  -> String {
         let mut h = vec![];
         h.push("Get the latest block height that the wallet is at.");
         h.push("Usage:");
-        h.push("height [do_sync = true | false]");
+        h.push("height");
         h.push("");
         h.push("Pass 'true' (default) to sync to the server to get the latest block height. Pass 'false' to get the latest height in the wallet without checking with the server.");
 
@@ -680,11 +726,7 @@ impl Command for HeightCommand {
         "Get the latest block height that the wallet is at".to_string()
     }
 
-    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
-        if args.len() > 1 {
-            return format!("Didn't understand arguments\n{}", self.help());
-        }
-
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
         format!("{}", object! { "height" => lightclient.last_scanned_height()}.pretty(2))
     }
 }
@@ -757,29 +799,6 @@ impl Command for NotesCommand {
     }
 }
 
-struct FixBip39BugCommand {}
-impl Command for FixBip39BugCommand {
-    fn help(&self)  -> String {
-        let mut h = vec![];
-        h.push("Detect if the wallet has the Bip39 derivation bug, and fix it automatically");
-        h.push("Usage:");
-        h.push("fixbip39bug");
-        h.push("");
-
-        h.join("\n")
-    }
-
-    fn short_help(&self) -> String {
-        "Detect if the wallet has the Bip39 derivation bug, and fix it automatically".to_string()
-    }
-
-    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        use crate::lightwallet::bugs::BugBip39Derivation;
-
-        BugBip39Derivation::fix_bug(lightclient)
-    }
-}
-
 struct QuitCommand {}
 impl Command for QuitCommand {
     fn help(&self)  -> String {
@@ -816,6 +835,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("balance".to_string(),           Box::new(BalanceCommand{}));
     map.insert("addresses".to_string(),         Box::new(AddressCommand{}));
     map.insert("height".to_string(),            Box::new(HeightCommand{}));
+    map.insert("import".to_string(),            Box::new(ImportCommand{}));
     map.insert("export".to_string(),            Box::new(ExportCommand{}));
     map.insert("info".to_string(),              Box::new(InfoCommand{}));
     map.insert("send".to_string(),              Box::new(SendCommand{}));
@@ -829,7 +849,6 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("decrypt".to_string(),           Box::new(DecryptCommand{}));
     map.insert("unlock".to_string(),            Box::new(UnlockCommand{}));
     map.insert("lock".to_string(),              Box::new(LockCommand{}));
-    map.insert("fixbip39bug".to_string(),       Box::new(FixBip39BugCommand{}));
 
     Box::new(map)
 }
