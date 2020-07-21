@@ -1842,13 +1842,26 @@ impl LightWallet {
             // Compute memo if it exists
             let encoded_memo = match memo {
                 None => None,
-                Some(s) => match Memo::from_bytes(s.as_bytes()) {
-                    None => {
-                        let e = format!("Error creating output. Memo {:?} is too long", s);
-                        error!("{}", e);
-                        return Err(e);
-                    },
-                    Some(m) => Some(m)
+                Some(s) => {
+                    // If the string starts with an "0x", and contains only hex chars ([a-f0-9]+) then
+                    // interpret it as a hex
+                    let s_bytes = if s.to_lowercase().starts_with("0x") {
+                        match hex::decode(&s[2..s.len()]) {
+                            Ok(data) => data,
+                            Err(_) => Vec::from(s.as_bytes())
+                        }
+                    } else {
+                        Vec::from(s.as_bytes())
+                    };
+
+                    match Memo::from_bytes(&s_bytes) {
+                        None => {
+                            let e = format!("Error creating output. Memo {:?} is too long", s);
+                            error!("{}", e);
+                            return Err(e);
+                        },
+                        Some(m) => Some(m)
+                    }
                 }
             };
             
