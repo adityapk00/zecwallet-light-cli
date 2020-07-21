@@ -143,7 +143,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 7;
+        return 8;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -379,7 +379,7 @@ impl LightWallet {
 
         let birthday = reader.read_u64::<LittleEndian>()?;
 
-        Ok(LightWallet{
+        let lw = LightWallet{
             encrypted:   encrypted,
             unlocked:    !encrypted, // When reading from disk, if wallet is encrypted, it starts off locked. 
             enc_seed:    enc_seed,
@@ -394,7 +394,14 @@ impl LightWallet {
             config:      config.clone(),
             birthday,
             total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)])),
-        })
+        };
+
+        // Do a one-time fix of the spent_at_height for older wallets
+        if version <= 7 {
+            lw.fix_spent_at_height();
+        }
+
+        Ok(lw)
     }
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
@@ -1686,6 +1693,16 @@ impl LightWallet {
             // Create a write lock 
             let mut txs = self.txs.write().unwrap();
 
+            // Trim the older witnesses
+            txs.values_mut().for_each(|wtx| {
+                wtx.notes
+                    .iter_mut()
+                    .filter(|nd| nd.spent.is_some() && nd.spent_at_height.is_some() && nd.spent_at_height.unwrap() < height - (MAX_REORG as i32) - 1)
+                    .for_each(|nd| {
+                        nd.witnesses.clear()
+                    })
+            });
+
             // Create a Vec containing all unspent nullifiers.
             // Include only the confirmed spent nullifiers, since unconfirmed ones still need to be included
             // during scan_block below.
@@ -1723,11 +1740,22 @@ impl LightWallet {
                 let nf_refs = nfs.iter().map(|(nf, account, _)| (nf.to_vec(), *account)).collect::<Vec<_>>();
                 let extfvks: Vec<ExtendedFullViewingKey> = self.zkeys.read().unwrap().iter().map(|zk| zk.extfvk.clone()).collect();
 
-                // Create a single mutable slice of all the newly-added witnesses.
+                // Create a single mutable slice of all the wallet's note's witnesses.
                 let mut witness_refs: Vec<_> = txs
                     .values_mut()
-                    .map(|tx| tx.notes.iter_mut().filter_map(
-                        |nd| if nd.spent.is_none() && nd.unconfirmed_spent.is_none() { nd.witnesses.last_mut() } else { None }))
+                    .map(|tx| 
+                        tx.notes.iter_mut()
+                            .filter_map(|nd| 
+                                // Note was not spent 
+                                if nd.spent.is_none() && nd.unconfirmed_spent.is_none() {
+                                    nd.witnesses.last_mut() 
+                                } else if nd.spent.is_some() && nd.spent_at_height.is_some() && nd.spent_at_height.unwrap() < height - (MAX_REORG as i32) - 1 {
+                                   // Note was spent in the last 100 blocks
+                                    nd.witnesses.last_mut() 
+                                } else { 
+                                    // If note was old (spent NOT in the last 100 blocks)
+                                    None 
+                                }))
                     .flatten()
                     .collect();
 
@@ -1780,6 +1808,7 @@ impl LightWallet {
                 // Mark the note as spent, and remove the unconfirmed part of it
                 info!("Marked a note as spent");
                 spent_note.spent = Some(tx.txid);
+                spent_note.spent_at_height = Some(height);
                 spent_note.unconfirmed_spent = None::<TxId>;
 
                 total_shielded_value_spent += spent_note.note.value;
@@ -1840,6 +1869,22 @@ impl LightWallet {
         }
 
         Ok(all_txs)
+    }
+
+    // Add the spent_at_height for each sapling note that has been spent. This field was added in wallet version 8, 
+    // so for older wallets, it will need to be added
+    pub fn fix_spent_at_height(&self) {
+        // First, build an index of all the txids and the heights at which they were spent. 
+        let spent_txid_map: HashMap<_, _> = self.txs.read().unwrap().iter().map(|(txid, wtx)| (txid.clone(), wtx.block)).collect();
+        
+        // Go over all the sapling notes that might need updating
+        self.txs.write().unwrap().values_mut().for_each(|wtx| {
+            wtx.notes.iter_mut()
+                .filter(|nd| nd.spent.is_some() && nd.spent_at_height.is_none())
+                .for_each(|nd| {
+                    nd.spent_at_height = spent_txid_map.get(&nd.spent.unwrap()).map(|b| *b);
+                })
+        });
     }
 
     pub fn send_to_address(

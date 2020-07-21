@@ -65,9 +65,10 @@ pub struct SaplingNoteData {
     pub(super) extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here.
     pub diversifier: Diversifier,
     pub note: Note<Bls12>,
-    pub(super) witnesses: Vec<IncrementalWitness<Node>>,
+    pub witnesses: Vec<IncrementalWitness<Node>>,
     pub(super) nullifier: [u8; 32],
     pub spent: Option<TxId>,             // If this note was confirmed spent
+    pub spent_at_height: Option<i32>,        // The height at which this note was spent
     pub unconfirmed_spent: Option<TxId>, // If this note was spent in a send, but has not yet been confirmed.
     pub memo:  Option<Memo>,
     pub is_change: bool,
@@ -106,7 +107,7 @@ pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
 
 impl SaplingNoteData {
     fn serialized_version() -> u64 {
-        1
+        2
     }
 
     pub fn new(
@@ -132,6 +133,7 @@ impl SaplingNoteData {
             witnesses: vec![witness],
             nullifier: nf,
             spent: None,
+            spent_at_height: None,
             unconfirmed_spent: None,
             memo: None,
             is_change: output.is_change,
@@ -140,7 +142,7 @@ impl SaplingNoteData {
 
     // Reading a note also needs the corresponding address to read from.
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
-        let _version = reader.read_u64::<LittleEndian>()?;
+        let version = reader.read_u64::<LittleEndian>()?;
 
         let account = reader.read_u64::<LittleEndian>()? as usize;
         
@@ -175,6 +177,12 @@ impl SaplingNoteData {
             Ok(TxId{0: txid_bytes})
         })?;
 
+        let spent_at_height = if version >=2 {
+            Optional::read(&mut reader, |r| r.read_i32::<LittleEndian>())?
+        } else {
+            None
+        };
+
         let memo = Optional::read(&mut reader, |r| {
             let mut memo_bytes = [0u8; 512];
             r.read_exact(&mut memo_bytes)?;
@@ -194,6 +202,7 @@ impl SaplingNoteData {
             witnesses,
             nullifier,
             spent,
+            spent_at_height,
             unconfirmed_spent: None,
             memo,
             is_change,
@@ -220,6 +229,8 @@ impl SaplingNoteData {
 
         writer.write_all(&self.nullifier)?;
         Optional::write(&mut writer, &self.spent, |w, t| w.write_all(&t.0))?;
+
+        Optional::write(&mut writer, &self.spent_at_height, |w, h| w.write_i32::<LittleEndian>(*h))?;
 
         Optional::write(&mut writer, &self.memo, |w, m| w.write_all(m.as_bytes()))?;
 
