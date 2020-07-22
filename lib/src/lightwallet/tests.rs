@@ -708,6 +708,81 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
 }
 
 #[test]
+fn test_witness_updates() {
+    const AMOUNT1: u64 = 50000;
+    let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
+    let mut phash = block_hash;
+
+    // 2 blocks, so 2 witnesses to start with
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 2);
+
+    // Add 2 new blocks
+    for i in 2..4 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+
+    // 2 blocks, so now 4 total witnesses
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 4);
+
+    // Now add a 100 new blocks, the witness size should max out at 100
+    for i in 4..104 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 100);
+
+    // Now spend the funds
+    let fvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+    let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
+                        &fvk.default_address().unwrap().1);
+    const AMOUNT_SENT: u64 = 20;
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) = get_sapling_params().unwrap();
+
+    // Create a tx and send to address
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+        vec![(&ext_address, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(104, phash);
+    cb3.add_tx(&sent_tx);
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+    phash = cb3.hash();
+
+    // Now this new Spent tx should be in, so the note should be marked confirmed spent
+    {
+        let txs = wallet.txs.read().unwrap();
+        assert_eq!(txs[&txid1].notes.len(), 1);
+        assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
+        assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
+        assert_eq!(txs[&txid1].notes[0].spent_at_height, Some(104));
+    }
+
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 100);
+    
+    // Add new blocks, but the witness should still get updated
+    for i in 105..110 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 100);
+
+    // And after a 100 new blocks, now the witness should be empty
+    for i in 110..210 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 0);
+}
+
+#[test]
 fn test_z_spend_to_z() {
     const AMOUNT1: u64 = 50000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
@@ -2224,6 +2299,43 @@ fn test_import_sk() {
     assert!(wallet.remove_encryption(passwd).is_ok());
     assert_eq!(wallet.zkeys.read().unwrap()[1].extsk, decode_extended_spending_key(wallet.config.hrp_sapling_private_key(), &privkey).unwrap());
     assert_eq!(wallet.zkeys.read().unwrap()[1].zaddress, decode_payment_address(wallet.config.hrp_sapling_address(), &zaddr).unwrap().unwrap());
+}
+
+
+#[test]
+fn test_import_sk_while_encrypted() {
+    let mut wallet = get_main_wallet();
+
+    // Priv Key's address
+    let zaddr = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv".to_string();
+    let privkey = "secret-extended-key-main1q0p44m9zqqqqpqyxfvy5w2vq6ahvxyrwsk2w4h2zleun4cft4llmnsjlv77lhuuknv6x9jgu5g2clf3xq0wz9axxxq8klvv462r5pa32gjuj5uhxnvps6wsrdg6xll05unwks8qpgp4psmvy5e428uxaggn4l29duk82k3sv3njktaaj453fdmfmj2fup8rls4egqxqtj2p5a3yt4070khn99vzxj5ag5qjngc4v2kq0ctl9q2rpc2phu4p3e26egu9w88mchjf83sqgh3cev";
+
+    
+    // Encrypt it
+    let passwd = "password".to_string();
+    assert!(wallet.encrypt(passwd.clone()).is_ok());
+
+    // Importing it should fail, because we can't import into an encrypted wallet
+    assert!(wallet.add_imported_sk(privkey.to_string(), 0).starts_with("Error"));
+    assert_eq!(wallet.get_all_zaddresses().len(), 1);
+    
+    // Unlock it 
+    assert!(wallet.unlock(passwd.clone()).is_ok());
+    
+    // Importing it should still fail, as even an unlocked wallet can't import a private key
+    assert!(wallet.add_imported_sk(privkey.to_string(), 0).starts_with("Error"));
+    assert_eq!(wallet.get_all_zaddresses().len(), 1);
+    
+    // Remove encryption
+    assert!(wallet.remove_encryption(passwd).is_ok());
+    
+    // Now, import should work.
+    assert_eq!(wallet.add_imported_sk(privkey.to_string(), 0), zaddr);
+    assert_eq!(wallet.get_all_zaddresses().len(), 2);
+    assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedSpendingKey);
+    assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
+
 }
 
 
