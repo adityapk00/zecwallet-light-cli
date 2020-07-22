@@ -65,7 +65,7 @@ pub struct SaplingNoteData {
     pub(super) extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here.
     pub diversifier: Diversifier,
     pub note: Note<Bls12>,
-    pub witnesses: Vec<IncrementalWitness<Node>>,
+    pub(super) witnesses: Vec<IncrementalWitness<Node>>,
     pub(super) nullifier: [u8; 32],
     pub spent: Option<TxId>,             // If this note was confirmed spent
     pub spent_at_height: Option<i32>,        // The height at which this note was spent
