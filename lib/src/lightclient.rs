@@ -1538,11 +1538,15 @@ pub mod tests {
         assert!(!lc.do_export(None).is_err());
         assert!(!lc.do_seed_phrase().is_err());
 
-        // This will lock the wallet again, so after this, we'll need to unlock again
-        assert!(!lc.do_new_address("t").is_err());
-        lc.wallet.write().unwrap().unlock("password".to_string()).unwrap();
+        // Can't add keys while unlocked but encrypted
+        assert!(lc.do_new_address("t").is_err());
+        assert!(lc.do_new_address("z").is_err());
+
+        // Remove encryption, which will allow adding 
+        lc.wallet.write().unwrap().remove_encryption("password".to_string()).unwrap();
         
-        assert!(!lc.do_new_address("z").is_err());
+        assert!(lc.do_new_address("t").is_ok());
+        assert!(lc.do_new_address("z").is_ok());
     }
 
     #[test]
