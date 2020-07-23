@@ -2503,6 +2503,9 @@ fn test_encrypted_zreceive() {
     // Second z address
     let zaddr2 = wallet.add_zaddr();    // This is address number 6
 
+    // Second z address
+    let zaddr2 = wallet.add_zaddr();    // This is address number 6
+
     // Now that we have the transaction, we'll encrypt the wallet
     wallet.encrypt(password.clone()).unwrap();
     {
@@ -2619,6 +2622,9 @@ fn test_encrypted_treceive() {
 
     let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
                                         vec![(&taddr, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+
+    // Second T address
+    let taddr2 = wallet.add_taddr();
 
     // Second T address
     let taddr2 = wallet.add_taddr();
