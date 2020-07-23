@@ -143,9 +143,10 @@ impl WalletTKey {
 
     let sk_bytes = &self.tkey.unwrap()[..];
 
-    self.tkey = None;
     self.enc_key = Some(secretbox::seal(&sk_bytes, &nonce, &key));
     self.nonce = Some(nonce.as_ref().to_vec());
+
+    self.tkey = None;
 
     // Also lock after encrypt
     self.lock()
