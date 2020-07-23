@@ -13,7 +13,153 @@ use zcash_primitives::{
 };
 
 use crate::lightclient::{LightClientConfig};
-use crate::lightwallet::LightWallet;
+use crate::lightwallet::{LightWallet, utils};
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum WalletTKeyType {
+  HdKey = 0,
+  ImportedKey = 1,
+}
+
+
+// A struct that holds z-address private keys or view keys
+#[derive(Clone, Debug, PartialEq)]
+pub struct WalletTKey {
+  pub(super) keytype: WalletTKeyType,
+  locked: bool,
+  pub(super) address: String,
+  pub(super) tkey: Option<secp256k1::SecretKey>,
+
+  // If locked, the encrypted key is here
+  enc_key: Option<Vec<u8>>,
+  nonce: Option<Vec<u8>>,
+}
+
+impl WalletTKey {
+  pub fn new_hdkey(key: secp256k1::SecretKey, address: String) -> Self {
+    WalletTKey {
+      keytype: WalletTKeyType::HdKey,
+      locked: false,
+      address,
+      tkey: Some(key),
+
+      enc_key: None,
+      nonce: None,
+    }
+  }
+
+  fn serialized_version() -> u8 {
+    return 1;
+  }
+
+  pub fn read<R: Read>(mut inp: R) -> io::Result<Self> {
+    let version = inp.read_u8()?;
+    assert!(version <= Self::serialized_version());
+
+    let keytype: WalletTKeyType = match inp.read_u32::<LittleEndian>()? {
+      0 => Ok(WalletTKeyType::HdKey),
+      1 => Ok(WalletTKeyType::ImportedKey),
+      n => Err(io::Error::new(ErrorKind::InvalidInput, format!("Unknown tkey type {}", n)))
+    }?;
+
+    let locked = inp.read_u8()? > 0;
+
+    let address = utils::read_string(&mut inp)?;
+    let tkey = Optional::read(&mut inp, |r| {
+      let mut tpk_bytes = [0u8; 32];
+      r.read_exact(&mut tpk_bytes)?;
+      secp256k1::SecretKey::from_slice(&tpk_bytes).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+    })?;
+    
+    let enc_key = Optional::read(&mut inp, |r| 
+        Vector::read(r, |r| r.read_u8()))?;
+    let nonce = Optional::read(&mut inp, |r| 
+        Vector::read(r, |r| r.read_u8()))?;
+
+    Ok(WalletTKey {
+      keytype,
+      locked,
+      address,
+      tkey,
+      enc_key,
+      nonce,
+    })
+  }
+
+  pub fn write<W: Write>(&self, mut out: W) -> io::Result<()> {
+    out.write_u8(Self::serialized_version())?;
+
+    out.write_u32::<LittleEndian>(self.keytype.clone() as u32)?;
+
+    out.write_u8(self.locked as u8)?;
+
+    utils::write_string(&mut out, &self.address)?;
+    Optional::write(&mut out, &self.tkey, |w, pk| 
+      w.write_all(&pk[..])
+    )?;
+    
+    // Write enc_key
+    Optional::write(&mut out, &self.enc_key, |o, v| 
+        Vector::write(o, v, |o,n| o.write_u8(*n)))?;
+
+    // Write nonce
+    Optional::write(&mut out, &self.nonce, |o, v| 
+        Vector::write(o, v, |o,n| o.write_u8(*n)))
+  }
+
+  
+  pub fn lock(&mut self) -> io::Result<()> {
+    // For keys, encrypt the key into enckey
+    // assert that we have the encrypted key. 
+    if self.enc_key.is_none() {
+      return Err(Error::new(ErrorKind::InvalidInput, "Can't lock when imported key is not encrypted"));
+    }
+    self.tkey = None;
+    self.locked = true;
+    
+
+    Ok(())
+  }
+
+  pub fn unlock(&mut self, key: &secretbox::Key) -> io::Result<()> {
+    // For imported keys, we need to decrypt from the encrypted key
+    let nonce = secretbox::Nonce::from_slice(&self.nonce.as_ref().unwrap()).unwrap();
+    let sk_bytes = match secretbox::open(&self.enc_key.as_ref().unwrap(), &nonce, &key) {
+        Ok(s) => s,
+        Err(_) => {return Err(io::Error::new(ErrorKind::InvalidData, "Decryption failed. Is your password correct?"));}
+    };
+
+    self.tkey = Some(secp256k1::SecretKey::from_slice(&sk_bytes[..]).map_err(|e| 
+      io::Error::new(ErrorKind::InvalidData, format!("{}", e))
+    )?);
+
+    self.locked = false;
+    Ok(())
+  }
+
+  pub fn encrypt(&mut self, key: &secretbox::Key) -> io::Result<()> {
+    // For keys, encrypt the key into enckey
+    let nonce = secretbox::gen_nonce();
+
+    let sk_bytes = &self.tkey.unwrap()[..];
+
+    self.enc_key = Some(secretbox::seal(&sk_bytes, &nonce, &key));
+    self.nonce = Some(nonce.as_ref().to_vec());
+
+    // Also lock after encrypt
+    self.lock()
+  }
+
+  pub fn remove_encryption(&mut self) -> io::Result<()> {
+    if self.locked {
+      return Err(Error::new(ErrorKind::InvalidInput, "Can't remove encryption while locked"));
+    }
+
+    self.enc_key = None;
+    self.nonce = None;
+    Ok(())
+  }
+}
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum WalletZKeyType {

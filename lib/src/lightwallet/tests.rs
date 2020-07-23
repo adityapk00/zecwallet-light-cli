@@ -384,8 +384,8 @@ fn test_t_receive_spend() {
 
     let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
-    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
-    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0].tkey.unwrap());
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
 
     const AMOUNT1: u64 = 20;
 
@@ -450,8 +450,8 @@ fn test_t_receive_spend_among_tadds() {
 
     let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
 
-    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
-    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0].tkey.unwrap());
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
 
     let non_wallet_sk = &SecretKey::from_slice(&[1u8; 32]).unwrap();
     let non_wallet_pk = PublicKey::from_secret_key(&secp, &non_wallet_sk);
@@ -533,8 +533,8 @@ fn test_serialization() {
     assert_eq!(wallet.zbalance(None), AMOUNT1);
 
     // Add a t input at the Tx
-    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
-    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0].tkey.unwrap());
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
 
     const TAMOUNT1: u64 = 20;
 
@@ -626,7 +626,7 @@ fn test_multi_serialization() {
 
     let wallet = LightWallet::new(None, &config, 0).unwrap();
 
-    let taddr1 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let taddr1 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
     let taddr2 = wallet.add_taddr();
 
     let (zaddr1, zpk1, zvk1) = &wallet.get_z_private_keys()[0];
@@ -639,8 +639,8 @@ fn test_multi_serialization() {
     assert_eq!(wallet2.tkeys.read().unwrap().len(), 2);
     assert_eq!(wallet2.zkeys.read().unwrap().len(), 2);
     
-    assert_eq!(taddr1, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]));
-    assert_eq!(taddr2, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[1]));
+    assert_eq!(taddr1, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap()));
+    assert_eq!(taddr2, wallet.address_from_sk(&wallet.tkeys.read().unwrap()[1].tkey.unwrap()));
 
     let (w2_zaddr1, w2_zpk1, w2_zvk1) = &wallet.get_z_private_keys()[0];
     let (w2_zaddr2, _, _) = &wallet.get_z_private_keys()[1];
@@ -893,8 +893,8 @@ fn test_self_txns_ttoz_withmemo() {
 
     let (wallet, _txid1, block_hash) = get_test_wallet(0);
 
-    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
-    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0].tkey.unwrap());
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
 
     const TAMOUNT1: u64 = 50000;
 
@@ -952,8 +952,8 @@ fn test_self_txns_ttoz_nomemo() {
 
     let (wallet, _txid1, block_hash) = get_test_wallet(0);
 
-    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
-    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0].tkey.unwrap());
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
 
     const TAMOUNT1: u64 = 50000;
 
@@ -1257,8 +1257,8 @@ fn test_t_spend_to_z() {
     const AMOUNT_T: u64 = 40000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT_Z);
 
-    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
-    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0].tkey.unwrap());
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
 
     let mut tx = FakeTransaction::new(&mut rng);
     tx.add_t_output(&pk, AMOUNT_T);
@@ -1465,10 +1465,10 @@ fn test_add_new_zt_hd_after_incoming() {
     let mut rng = OsRng;
     let secp = Secp256k1::new();
     // Send a fake transaction to the last taddr
-    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap().last().unwrap());
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap().last().unwrap().tkey.unwrap());
 
     // Start with 1 taddr
-    assert_eq!(wallet.taddresses.read().unwrap().len(), 1); 
+    assert_eq!(wallet.tkeys.read().unwrap().len(), 1); 
 
     // Send a Tx to the last address
     let mut tx = FakeTransaction::new(&mut rng);
@@ -1476,7 +1476,7 @@ fn test_add_new_zt_hd_after_incoming() {
     wallet.scan_full_tx(&tx.get_tx(), 3, 0);  
 
     // Now, 5 new addresses should be created. 
-    assert_eq!(wallet.taddresses.read().unwrap().len(), 1+5); 
+    assert_eq!(wallet.tkeys.read().unwrap().len(), 1+5); 
 }
 
 #[test]
@@ -1485,7 +1485,7 @@ fn test_z_to_t_withinwallet() {
     const AMOUNT_SENT: u64 = 20000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT);
 
-    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let taddr = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
 
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
@@ -2109,7 +2109,7 @@ fn test_lock_unlock() {
     let zaddr1 = wallet.add_zaddr(); // This is actually address at index 6
     let zaddr2 = wallet.add_zaddr(); // This is actually address at index 7
 
-    let taddr0 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0]);
+    let taddr0 = wallet.address_from_sk(&wallet.tkeys.read().unwrap()[0].tkey.unwrap());
     let taddr1 = wallet.add_taddr();
     let taddr2 = wallet.add_taddr();
 
@@ -2152,9 +2152,9 @@ fn test_lock_unlock() {
         assert_eq!(zaddr2, encode_payment_address(config.hrp_sapling_address(), 
                                 &ExtendedFullViewingKey::from(&extsks[7]).default_address().unwrap().1));
 
-        assert_eq!(taddr0, wallet.address_from_sk(&tkeys[0]));
-        assert_eq!(taddr1, wallet.address_from_sk(&tkeys[1]));
-        assert_eq!(taddr2, wallet.address_from_sk(&tkeys[2]));
+        assert_eq!(taddr0, wallet.address_from_sk(&tkeys[0].tkey.unwrap()));
+        assert_eq!(taddr1, wallet.address_from_sk(&tkeys[1].tkey.unwrap()));
+        assert_eq!(taddr2, wallet.address_from_sk(&tkeys[2].tkey.unwrap()));
     }
 
     // Unlocking an already unlocked wallet should fail
@@ -2188,9 +2188,9 @@ fn test_lock_unlock() {
         assert_eq!(zaddr2, encode_payment_address(wallet2.config.hrp_sapling_address(), 
                                 &ExtendedFullViewingKey::from(&extsks[7]).default_address().unwrap().1));
 
-        assert_eq!(taddr0, wallet2.address_from_sk(&tkeys[0]));
-        assert_eq!(taddr1, wallet2.address_from_sk(&tkeys[1]));
-        assert_eq!(taddr2, wallet2.address_from_sk(&tkeys[2]));
+        assert_eq!(taddr0, wallet2.address_from_sk(&tkeys[0].tkey.unwrap()));
+        assert_eq!(taddr1, wallet2.address_from_sk(&tkeys[1].tkey.unwrap()));
+        assert_eq!(taddr2, wallet2.address_from_sk(&tkeys[2].tkey.unwrap()));
     }
 
     // Remove encryption from a unlocked wallet should succeed
