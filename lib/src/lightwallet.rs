@@ -532,6 +532,10 @@ impl LightWallet {
             return "Error: Can't add key while wallet is locked".to_string();
         }
 
+        if self.encrypted {
+            return "Error: Can't add key while wallet is encrypted".to_string();
+        }
+
         // Find the highest pos we have
         let pos = self.zkeys.read().unwrap().iter()
             .filter(|zk| zk.hdkey_num.is_some())
@@ -557,6 +561,10 @@ impl LightWallet {
     pub fn add_taddr(&self) -> String {
         if !self.unlocked {
             return "Error: Can't add key while wallet is locked".to_string();
+        }
+        
+        if self.encrypted {
+            return "Error: Can't add key while wallet is encrypted".to_string();
         }
 
         let pos = self.tkeys.read().unwrap().len() as u32;
@@ -888,7 +896,6 @@ impl LightWallet {
         // we need to get the 64 byte bip39 entropy
         let bip39_seed = bip39::Seed::new(&Mnemonic::from_entropy(&seed, Language::English).unwrap(), "");
 
-        
         // Go over the tkeys, and add the  keys again
         self.tkeys.write().unwrap().iter_mut().map(|tk| {
             tk.unlock(&key)
