@@ -2490,8 +2490,16 @@ fn test_encrypted_zreceive() {
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
                             vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
+    // Second z address
+    let zaddr2 = wallet.add_zaddr();    // This is address number 6
+
     // Now that we have the transaction, we'll encrypt the wallet
     wallet.encrypt(password.clone()).unwrap();
+    {
+        // Make sure the t and z keys were removed
+        wallet.tkeys.read().unwrap().iter().for_each(|tk| assert!(tk.tkey.is_none()));
+        wallet.zkeys.read().unwrap().iter().for_each(|zk| assert!(zk.extsk.is_none()));
+    }
 
     // Scan the tx and make sure it gets added
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
@@ -2535,9 +2543,12 @@ fn test_encrypted_zreceive() {
 
     // unlock the wallet so we can spend to the second z address
     wallet.unlock(password.clone()).unwrap();
-
-    // Second z address
-    let zaddr2 = wallet.add_zaddr();    // This is address number 6
+    {
+        // Make sure the t and z keys were added back after the unlock
+        wallet.tkeys.read().unwrap().iter().for_each(|tk| assert!(tk.tkey.is_some()));
+        wallet.zkeys.read().unwrap().iter().for_each(|zk| assert!(zk.extsk.is_some()));
+    }
+   
     const ZAMOUNT2:u64 = 30;
     let outgoing_memo2 = "Outgoing Memo2".to_string();
 
@@ -2599,8 +2610,16 @@ fn test_encrypted_treceive() {
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
                                         vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
 
+    // Second T address
+    let taddr2 = wallet.add_taddr();
+
     // Now that we have the transaction, we'll encrypt the wallet
     wallet.encrypt(password.clone()).unwrap();
+    {
+        // Make sure the t and z keys were removed
+        wallet.tkeys.read().unwrap().iter().for_each(|tk| assert!(tk.tkey.is_none()));
+        wallet.zkeys.read().unwrap().iter().for_each(|zk| assert!(zk.extsk.is_none()));
+    }
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -2638,8 +2657,6 @@ fn test_encrypted_treceive() {
     // unlock the wallet so we can spend to the second z address
     wallet.unlock(password.clone()).unwrap();
 
-    // Second z address
-    let taddr2 = wallet.add_taddr();
     const TAMOUNT2:u64 = 50;
 
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
