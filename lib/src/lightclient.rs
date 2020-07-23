@@ -662,7 +662,7 @@ impl LightClient {
         let z_addresses = wallet.get_all_zaddresses();
 
         // Collect t addresses
-        let t_addresses = wallet.taddresses.read().unwrap().iter().map( |a| a.clone() )
+        let t_addresses = wallet.get_all_taddresses().iter().map( |a| a.clone() )
                             .collect::<Vec<String>>();
 
         object!{
@@ -685,7 +685,7 @@ impl LightClient {
         }).collect::<Vec<JsonValue>>();
 
         // Collect t addresses
-        let t_addresses = wallet.taddresses.read().unwrap().iter().map( |address| {
+        let t_addresses =  wallet.get_all_taddresses().iter().map( |address| {
             // Get the balance for this address
             let balance = wallet.tbalance(Some(address.clone()));
             
@@ -1359,8 +1359,9 @@ impl LightClient {
             // We'll also fetch all the txids that our transparent addresses are involved with
             {
                 // Copy over addresses so as to not lock up the wallet, which we'll use inside the callback below. 
-                let addresses = self.wallet.read().unwrap()
-                                    .taddresses.read().unwrap().iter().map(|a| a.clone())
+                let addresses =  self.wallet.read().unwrap()
+                                    .get_all_taddresses().iter()
+                                    .map(|a| a.clone())
                                     .collect::<Vec<String>>();
                 
                 // Create a channel so the fetch_transparent_txids can send the results back
