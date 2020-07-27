@@ -817,6 +817,8 @@ impl LightClient {
         let mut unspent_notes: Vec<JsonValue> = vec![];
         let mut spent_notes  : Vec<JsonValue> = vec![];
         let mut pending_notes: Vec<JsonValue> = vec![];
+        
+        let anchor_height: i32 = self.wallet.read().unwrap().get_anchor_height() as i32;
 
         {
             // Collect Sapling notes
@@ -834,6 +836,7 @@ impl LightClient {
                                 "value"              => nd.note.value,
                                 "is_change"          => nd.is_change,
                                 "address"            => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
+                                "spendable"          => wtx.block <= anchor_height && nd.spent.is_none() && nd.unconfirmed_spent.is_none(),
                                 "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
                                 "spent_at_height"    => nd.spent_at_height.map(|h| format!("{}", h)),
                                 "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),

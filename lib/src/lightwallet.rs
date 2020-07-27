@@ -733,6 +733,14 @@ impl LightWallet {
         }
     }
 
+    /// Get the height of the anchor block
+    pub fn get_anchor_height(&self) -> u32 {
+        match self.get_target_height_and_anchor_offset() {
+            Some((height, anchor_offset)) => height - anchor_offset as u32 - 1,
+            None => return 0,
+        }
+    }
+
     pub fn memo_str(memo: &Option<Memo>) -> Option<String> {
         match memo {
             Some(memo) => {
@@ -1003,10 +1011,7 @@ impl LightWallet {
     }
 
     pub fn spendable_zbalance(&self, addr: Option<String>) -> u64 {
-        let anchor_height = match self.get_target_height_and_anchor_offset() {
-            Some((height, anchor_offset)) => height - anchor_offset as u32 - 1,
-            None => return 0,
-        };
+        let anchor_height = self.get_anchor_height();
 
         self.txs
             .read()
