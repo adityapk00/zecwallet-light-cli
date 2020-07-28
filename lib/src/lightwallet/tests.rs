@@ -1412,6 +1412,16 @@ fn test_z_incoming_hex_memo() {
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
+    // Make sure it is in the mempool properly
+    {
+        let mempool = wallet.mempool_txs.read().unwrap();
+        
+        let wtx = mempool.get(&sent_txid).unwrap();
+        assert_eq!(wtx.outgoing_metadata.get(0).unwrap().address, my_address);
+        assert_eq!(wtx.outgoing_metadata.get(0).unwrap().value, AMOUNT1 - fee);
+        assert_eq!(wtx.outgoing_metadata.get(0).unwrap().memo.to_utf8().unwrap().unwrap(), orig_memo);
+    }
+
     // Add it to a block
     let mut cb3 = FakeCompactBlock::new(2, block_hash);
     cb3.add_tx(&sent_tx);
