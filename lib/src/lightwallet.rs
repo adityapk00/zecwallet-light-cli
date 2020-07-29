@@ -1946,7 +1946,9 @@ impl LightWallet {
         // Select notes to cover the target value
         println!("{}: Selecting notes", now() - start_time);
         let target_value = Amount::from_u64(total_value).unwrap() + DEFAULT_FEE ;
-        let notes: Vec<_> = self.txs.read().unwrap().iter()
+
+        // Select the candidate notes that are eligible to be spent
+        let mut candidate_notes: Vec<_> = self.txs.read().unwrap().iter()
             .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
             .flatten()
             .filter_map(|(txid, note)| {
@@ -1960,7 +1962,13 @@ impl LightWallet {
                         .and_then(|zk| zk.extsk.clone());
                     SpendableNote::from(txid, note, anchor_offset, &extsk)
                 }
-            })
+            }).collect();
+
+        // Sort by highest value-notes first.
+        candidate_notes.sort_by(|a, b| b.note.value.cmp(&a.note.value));
+
+        // Select the minimum number of notes required to satisfy the target value
+        let notes: Vec<_> = candidate_notes.iter()
             .scan(0, |running_total, spendable| {
                 let value = spendable.note.value;
                 let ret = if *running_total < u64::from(target_value) {
