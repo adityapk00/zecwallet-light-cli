@@ -1015,11 +1015,18 @@ impl LightClient {
 
             // Collect outgoing metadata
             let outgoing_json = wtx.outgoing_metadata.iter()
-                .map(|om| 
-                    object!{
+                .map(|om| {
+                    let mut o = object!{
                         "address" => om.address.clone(),
                         "value"   => om.value,
                         "memo"    => LightWallet::memo_str(&Some(om.memo.clone())),
+                    };
+
+                    if include_memo_hex {
+                        o.insert("memohex", hex::encode(om.memo.as_bytes())).unwrap();
+                    }
+
+                    return o;
                 }).collect::<Vec<JsonValue>>();                    
 
             object! {
