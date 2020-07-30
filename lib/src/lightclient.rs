@@ -1,7 +1,5 @@
 use crate::lightwallet::LightWallet;
 
-use rand::{rngs::OsRng, seq::SliceRandom};
-
 use std::sync::{Arc, RwLock, Mutex, mpsc::channel};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
@@ -1356,53 +1354,16 @@ impl LightClient {
             // So, reset the total_reorg
             total_reorg = 0;
 
+            // If this is the first pass after a retry, fetch older t address txids too, becuse
+            // they might have been missed last time.
+            let transparent_start_height = if pass == 1 && retry_count > 0 {
+                start_height - scan_batch_size
+            } else {
+                start_height
+            };
+
             // We'll also fetch all the txids that our transparent addresses are involved with
-            {
-                // Copy over addresses so as to not lock up the wallet, which we'll use inside the callback below. 
-                let addresses =  self.wallet.read().unwrap()
-                                    .get_all_taddresses().iter()
-                                    .map(|a| a.clone())
-                                    .collect::<Vec<String>>();
-                
-                // Create a channel so the fetch_transparent_txids can send the results back
-                let (ctx, crx) = channel();
-                let num_addresses = addresses.len();
-
-                for address in addresses {
-                    let wallet = self.wallet.clone();
-                    let block_times_inner = block_times.clone();
-
-                    // If this is the first pass after a retry, fetch older t address txids too, becuse
-                    // they might have been missed last time.
-                    let transparent_start_height = if pass == 1 && retry_count > 0 {
-                        start_height - scan_batch_size
-                    } else {
-                        start_height
-                    };
-
-                    let pool = pool.clone();
-                    let server_uri = self.get_server_uri();
-                    let ctx = ctx.clone();
-
-                    pool.execute(move || {
-                        // Fetch the transparent transactions for this address, and send the results 
-                        // via the channel
-                        let r = fetch_transparent_txids(&server_uri, address, transparent_start_height, end_height,
-                            move |tx_bytes: &[u8], height: u64| {
-                                let tx = Transaction::read(tx_bytes).unwrap();
-
-                                // Scan this Tx for transparent inputs and outputs
-                                let datetime = block_times_inner.read().unwrap().get(&height).map(|v| *v).unwrap_or(0);
-                                wallet.read().unwrap().scan_full_tx(&tx, height as i32, datetime as u64); 
-                        });
-                        ctx.send(r).unwrap();
-                    });
-                }
-
-                // Collect all results from the transparent fetches, and make sure everything was OK. 
-                // If it was not, we return an error, which will go back to the retry
-                crx.iter().take(num_addresses).collect::<Result<Vec<()>, String>>()?;
-            }           
+            self.scan_taddress_txids(&pool, block_times, transparent_start_height, end_height)?;
             
             // Do block height accounting
             last_scanned_height = end_height;
@@ -1428,7 +1389,60 @@ impl LightClient {
         }
 
         // Get the Raw transaction for all the wallet transactions
+        {
+            let decoy_txids = all_new_txs.read().unwrap();
+            match self.scan_fill_fulltxs(&pool, decoy_txids.to_vec()) {
+                Ok(_) => Ok(object!{
+                    "result" => "success",
+                    "latest_block" => latest_block,
+                    "downloaded_bytes" => bytes_downloaded.load(Ordering::SeqCst)
+                }),
+                Err(e) => Err(format!("Error fetching all txns for memos: {}", e))
+            }        
+        }
+    }
 
+    fn scan_taddress_txids(&self, pool: &ThreadPool, block_times: Arc<RwLock<HashMap<u64, u32>>>, start_height: u64, end_height: u64) -> Result<Vec<()>, String> {
+        // Copy over addresses so as to not lock up the wallet, which we'll use inside the callback below. 
+        let addresses =  self.wallet.read().unwrap()
+            .get_all_taddresses().iter()
+            .map(|a| a.clone())
+            .collect::<Vec<String>>();
+
+        // Create a channel so the fetch_transparent_txids can send the results back
+        let (ctx, crx) = channel();
+        let num_addresses = addresses.len();
+
+        for address in addresses {
+            let wallet = self.wallet.clone();
+
+            let pool = pool.clone();
+            let server_uri = self.get_server_uri();
+            let ctx = ctx.clone();
+
+            let block_times = block_times.clone();
+
+            pool.execute(move || {
+                // Fetch the transparent transactions for this address, and send the results 
+                // via the channel
+                let r = fetch_transparent_txids(&server_uri, address, start_height, end_height,
+                move |tx_bytes: &[u8], height: u64| {
+                    let tx = Transaction::read(tx_bytes).unwrap();
+
+                    // Scan this Tx for transparent inputs and outputs
+                    let datetime = block_times.read().unwrap().get(&height).map(|v| *v).unwrap_or(0);
+                    wallet.read().unwrap().scan_full_tx(&tx, height as i32, datetime as u64); 
+                });
+                ctx.send(r).unwrap();
+            });
+        }
+
+        // Collect all results from the transparent fetches, and make sure everything was OK. 
+        // If it was not, we return an error, which will go back to the retry
+        crx.iter().take(num_addresses).collect::<Result<Vec<()>, String>>()
+    } 
+
+    fn scan_fill_fulltxs(&self, pool: &ThreadPool, decoy_txids: Vec<(TxId, i32)>) -> Result<Vec<()>, String> {
         // We need to first copy over the Txids from the wallet struct, because
         // we need to free the read lock from here (Because we'll self.wallet.txs later)
         let mut txids_to_fetch: Vec<(TxId, i32)> = self.wallet.read().unwrap().txs.read().unwrap().values()
@@ -1436,13 +1450,11 @@ impl LightClient {
                                                         .map(|wtx| (wtx.txid.clone(), wtx.block))
                                                         .collect::<Vec<(TxId, i32)>>();
 
-        info!("Fetching {} new txids, total {} with decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
-        txids_to_fetch.extend_from_slice(&all_new_txs.read().unwrap()[..]);
+
+        info!("Fetching {} new txids, total {} with decoy", txids_to_fetch.len(), decoy_txids.len());
+        txids_to_fetch.extend_from_slice(&decoy_txids[..]);
         txids_to_fetch.sort();
         txids_to_fetch.dedup();
-
-        let mut rng = OsRng;        
-        txids_to_fetch.shuffle(&mut rng);
 
         let num_fetches = txids_to_fetch.len();
         let (ctx, crx) = channel();
@@ -1472,15 +1484,7 @@ impl LightClient {
         };
 
         // Wait for all the fetches to finish.
-        let result = crx.iter().take(num_fetches).collect::<Result<Vec<()>, String>>();
-        match result {
-            Ok(_) => Ok(object!{
-                "result" => "success",
-                "latest_block" => latest_block,
-                "downloaded_bytes" => bytes_downloaded.load(Ordering::SeqCst)
-            }),
-            Err(e) => Err(format!("Error fetching all txns for memos: {}", e))
-        }        
+        crx.iter().take(num_fetches).collect::<Result<Vec<()>, String>>()
     }
 
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
