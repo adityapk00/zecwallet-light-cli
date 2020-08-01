@@ -2623,12 +2623,6 @@ fn test_encrypted_treceive() {
     // Second T address
     let taddr2 = wallet.add_taddr();
 
-    // Second T address
-    let taddr2 = wallet.add_taddr();
-
-    // Second T address
-    let taddr2 = wallet.add_taddr();
-
     // Now that we have the transaction, we'll encrypt the wallet
     wallet.encrypt(password.clone()).unwrap();
     {
