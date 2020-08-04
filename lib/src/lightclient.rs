@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock, Mutex, mpsc::channel};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
 use std::fs::File;
-use std::collections::HashMap;
+use std::collections::{HashSet, HashMap};
 use std::cmp::{max, min};
 use std::io;
 use std::io::prelude::*;
@@ -821,22 +821,35 @@ impl LightClient {
         let anchor_height: i32 = self.wallet.read().unwrap().get_anchor_height() as i32;
 
         {
-            // Collect Sapling notes
             let wallet = self.wallet.read().unwrap();
+
+            // First, collect all extfvk's that are spendable (i.e., we have the private key)
+            let spendable_address: HashSet<String> = wallet.get_all_zaddresses().iter()
+                .filter(|address| wallet.have_spending_key_for_zaddress(address))
+                .map(|address| address.clone())
+                .collect();
+
+            // Collect Sapling notes
             wallet.txs.read().unwrap().iter()
                 .flat_map( |(txid, wtx)| {
+                    let spendable_address = spendable_address.clone();
                     wtx.notes.iter().filter_map(move |nd| 
                         if !all_notes && nd.spent.is_some() {
                             None
                         } else {
+                            let address = LightWallet::note_address(self.config.hrp_sapling_address(), nd);
+                            let spendable = address.is_some() && 
+                                                    spendable_address.contains(&address.clone().unwrap()) && 
+                                                    wtx.block <= anchor_height && nd.spent.is_none() && nd.unconfirmed_spent.is_none();
+
                             Some(object!{
                                 "created_in_block"   => wtx.block,
                                 "datetime"           => wtx.datetime,
                                 "created_in_txid"    => format!("{}", txid),
                                 "value"              => nd.note.value,
                                 "is_change"          => nd.is_change,
-                                "address"            => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
-                                "spendable"          => wtx.block <= anchor_height && nd.spent.is_none() && nd.unconfirmed_spent.is_none(),
+                                "address"            => address,
+                                "spendable"          => spendable,
                                 "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
                                 "spent_at_height"    => nd.spent_at_height.map(|h| format!("{}", h)),
                                 "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),

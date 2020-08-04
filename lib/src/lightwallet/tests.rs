@@ -813,6 +813,8 @@ fn test_z_spend_to_z() {
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
+    assert_eq!(wallet.have_spending_key_for_zaddress(wallet.get_all_zaddresses().get(0).unwrap()), true);
+
     // Now, the note should be unconfirmed spent
     {
         let txs = wallet.txs.read().unwrap();
@@ -2363,6 +2365,8 @@ fn test_import_vk() {
     assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedViewKey);
     assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
 
+    assert_eq!(wallet.have_spending_key_for_zaddress(&zaddr.to_string()), false);
+
     // Importing it again should fail
     assert!(wallet.add_imported_sk(viewkey.to_string(), 0).starts_with("Error"));
     assert_eq!(wallet.get_all_zaddresses().len(), 2);
@@ -2411,6 +2415,8 @@ fn test_import_sk_upgrade_vk() {
     assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
     assert!(wallet.zkeys.read().unwrap()[1].extsk.is_none());
 
+    assert_eq!(wallet.have_spending_key_for_zaddress(&zaddr.to_string()), false);
+
     // Importing it again should fail because it already exists
     assert!(wallet.add_imported_sk(viewkey.to_string(), 0).starts_with("Error"));
     assert_eq!(wallet.get_all_zaddresses().len(), 2);
@@ -2431,6 +2437,8 @@ fn test_import_sk_upgrade_vk() {
     assert_eq!(wallet.zkeys.read().unwrap()[1].keytype, WalletZKeyType::ImportedSpendingKey);
     assert_eq!(wallet.zkeys.read().unwrap()[1].hdkey_num, None);
     assert!(wallet.zkeys.read().unwrap()[1].extsk.is_some());
+
+    assert_eq!(wallet.have_spending_key_for_zaddress(&zaddr.to_string()), true);
 }
 
 #[test]
@@ -2500,8 +2508,12 @@ fn test_encrypted_zreceive() {
     let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
                             vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
 
+    assert_eq!(wallet.have_spending_key_for_zaddress(wallet.get_all_zaddresses().get(0).unwrap()), true);
+
     // Now that we have the transaction, we'll encrypt the wallet
     wallet.encrypt(password.clone()).unwrap();
+
+    assert_eq!(wallet.have_spending_key_for_zaddress(wallet.get_all_zaddresses().get(0).unwrap()), true);
 
     // Scan the tx and make sure it gets added
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();

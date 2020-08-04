@@ -1024,10 +1024,7 @@ impl LightWallet {
                         .filter(|nd| nd.spent.is_none() && nd.unconfirmed_spent.is_none())
                         .filter(|nd| {
                             // Check to see if we have this note's spending key.
-                            match self.zkeys.read().unwrap().iter().find(|zk| zk.extfvk == nd.extfvk) {
-                                Some(zk) => zk.keytype == WalletZKeyType::HdKey || zk.keytype == WalletZKeyType::ImportedSpendingKey,
-                                _ => false
-                            }
+                            self.have_spendingkey_for_extfvk(&nd.extfvk)
                         })
                         .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
                             match addr.clone() {
@@ -1046,6 +1043,22 @@ impl LightWallet {
                 }
             })
             .sum::<u64>()
+    }
+
+    pub fn have_spendingkey_for_extfvk(&self, extfvk: &ExtendedFullViewingKey) -> bool {
+        match self.zkeys.read().unwrap().iter().find(|zk| zk.extfvk == *extfvk) {
+            None => false,
+            Some(zk) => zk.have_spending_key()
+        }
+    }
+
+    pub fn have_spending_key_for_zaddress(&self, address: &String) -> bool {
+        match self.zkeys.read().unwrap().iter()
+            .find(|zk| encode_payment_address(self.config.hrp_sapling_address(), &zk.zaddress) == *address) 
+            {
+                None => false,
+                Some(zk) => zk.have_spending_key()
+            }            
     }
 
     fn add_toutput_to_wtx(&self, height: i32, timestamp: u64, txid: &TxId, vout: &TxOut, n: u64) {
