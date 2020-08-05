@@ -1836,12 +1836,18 @@ fn test_bad_send() {
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
                                         vec![(&ext_taddr, AMOUNT1 + 10, None)], |_| Ok(' '.to_string()));
     assert!(raw_tx.err().unwrap().contains("Insufficient verified funds"));
-
+    assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
 
     // No addresses
     let raw_tx = wallet.send_to_address(branch_id, &ss, &so, vec![], |_| Ok(' '.to_string()));
     assert!(raw_tx.err().unwrap().contains("at least one"));
+    assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
 
+    // Broadcast error
+    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+        vec![(&ext_taddr, 10, None)], |_| Err("broadcast failed".to_string()));
+    assert!(raw_tx.err().unwrap().contains("broadcast failed"));
+    assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
 }
 
 #[test]
@@ -1862,6 +1868,9 @@ fn test_duplicate_outputs() {
              (&ext_taddr, 0, Some("Second memo".to_string())),
              (&ext_taddr, 0, Some("Third memo".to_string()))], |_| Ok(' '.to_string()));
     assert!(raw_tx.is_ok());
+
+    // Make sure they are in the mempool
+    assert_eq!(wallet.mempool_txs.read().unwrap().len(), 1);
 }
 
 #[test]
