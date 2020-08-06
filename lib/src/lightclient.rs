@@ -679,8 +679,9 @@ impl LightClient {
             object!{
                 "address" => zaddress.clone(),
                 "zbalance" => wallet.zbalance(Some(zaddress.clone())),
-                "verified_zbalance" => wallet.verified_zbalance(Some(zaddress.clone())),
-                "spendable_zbalance" => wallet.spendable_zbalance(Some(zaddress.clone()))
+                "verified_zbalance"  => wallet.verified_zbalance(Some(zaddress.clone())),
+                "spendable_zbalance" => wallet.spendable_zbalance(Some(zaddress.clone())),
+                "unconfirmed_zbalance"   => wallet.unconfirmed_zbalance(Some(zaddress.clone()))
             }
         }).collect::<Vec<JsonValue>>();
 
@@ -699,6 +700,7 @@ impl LightClient {
             "zbalance"           => wallet.zbalance(None),
             "verified_zbalance"  => wallet.verified_zbalance(None),
             "spendable_zbalance" => wallet.spendable_zbalance(None),
+            "unconfirmed_zbalance"   => wallet.unconfirmed_zbalance(None),
             "tbalance"           => wallet.tbalance(None),
             "z_addresses"        => z_addresses,
             "t_addresses"        => t_addresses,

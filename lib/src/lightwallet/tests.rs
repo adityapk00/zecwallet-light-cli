@@ -699,12 +699,89 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
     }
 
     assert_eq!(wallet.verified_zbalance(None), amount);
+    assert_eq!(wallet.unconfirmed_zbalance(None), 0);
 
     // Create a new block so that the note is now verified to be spent
     let cb2 = FakeCompactBlock::new(1, cb1.hash());
     wallet.scan_block(&cb2.as_bytes()).unwrap();
 
     (wallet, txid1, cb2.hash())
+}
+
+#[test]
+fn test_unconfirmed_txns() {
+    let config = LightClientConfig {
+        server: "0.0.0.0:0".parse().unwrap(),
+        chain_name: "test".to_string(),
+        sapling_activation_height: 0,
+        consensus_branch_id: "000000".to_string(),
+        anchor_offset: 5, // offset = 5
+        data_dir: None,
+    };
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) = get_sapling_params().unwrap();
+
+    let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+    let amount = 50000;
+    let wallet = LightWallet::new(None, &config, 0).unwrap();
+
+    let mut block = FakeCompactBlock::new(0, BlockHash([0; 32]));
+    let (_, _txid) = block.add_tx_paying(wallet.zkeys.read().unwrap()[0].extfvk.clone(), amount);
+    wallet.scan_block(&block.as_bytes()).unwrap();
+
+    // Construct 5 blocks so that we can get started
+    for i in 0..5 {
+        block = FakeCompactBlock::new(1+i, block.hash());
+        wallet.scan_block(&block.as_bytes()).unwrap();
+    }
+
+    // Make sure the starting balances are correct
+    assert_eq!(wallet.verified_zbalance(None), amount);
+    assert_eq!(wallet.unconfirmed_zbalance(None), 0);
+
+    // Now spend some of the money, paying our own address
+    let zaddr1 = encode_payment_address(wallet.config.hrp_sapling_address(), &wallet.zkeys.read().unwrap().get(0).unwrap().zaddress);
+    let zaddr2 = wallet.add_zaddr();
+    const AMOUNT_SENT: u64 = 50;
+    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
+        vec![(&zaddr2, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+
+    block = FakeCompactBlock::new(6, block.hash());
+    block.add_tx(&sent_tx);
+    wallet.scan_block(&block.as_bytes()).unwrap();
+    
+    // pending tx
+    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr1.clone())), amount - AMOUNT_SENT - fee);
+    assert_eq!(wallet.verified_zbalance(Some(zaddr1.clone())), 0);
+    assert_eq!(wallet.spendable_zbalance(Some(zaddr1.clone())), 0);
+
+    assert_eq!(wallet.unconfirmed_zbalance(None), amount - fee);
+    assert_eq!(wallet.verified_zbalance(None), 0);
+    assert_eq!(wallet.spendable_zbalance(None), 0);
+    
+    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr2.clone())), AMOUNT_SENT);
+    assert_eq!(wallet.verified_zbalance(Some(zaddr2.clone())), 0);
+    assert_eq!(wallet.spendable_zbalance(Some(zaddr2.clone())), 0);
+
+    // Mine 5 blocks, so it becomes confirmed
+    for i in 0..5 {
+        block = FakeCompactBlock::new(7+i, block.hash());
+        wallet.scan_block(&block.as_bytes()).unwrap();
+    }
+    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr1.clone())), 0);
+    assert_eq!(wallet.verified_zbalance(Some(zaddr1.clone())), amount - AMOUNT_SENT - fee);
+    assert_eq!(wallet.spendable_zbalance(Some(zaddr1.clone())), amount - AMOUNT_SENT - fee);
+
+    assert_eq!(wallet.unconfirmed_zbalance(None), 0);
+    assert_eq!(wallet.verified_zbalance(None), amount - fee);
+    assert_eq!(wallet.spendable_zbalance(None), amount - fee);
+
+    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr2.clone())), 0);
+    assert_eq!(wallet.verified_zbalance(Some(zaddr2.clone())), AMOUNT_SENT);
+    assert_eq!(wallet.spendable_zbalance(Some(zaddr2.clone())), AMOUNT_SENT);
 }
 
 #[test]
