@@ -976,7 +976,7 @@ impl LightWallet {
             .sum::<u64>()
     }
 
-    pub fn unconfirmed_zbalance(&self, addr: Option<String>) -> u64 {
+    pub fn unverified_zbalance(&self, addr: Option<String>) -> u64 {
         let anchor_height = match self.get_target_height_and_anchor_offset() {
             Some((height, anchor_offset)) => height - anchor_offset as u32 - 1,
             None => return 0,
@@ -990,6 +990,10 @@ impl LightWallet {
                 tx.notes
                     .iter()
                     .filter(|nd| nd.spent.is_none() && nd.unconfirmed_spent.is_none())
+                    .filter(|nd| {
+                        // Check to see if we have this note's spending key.
+                        self.have_spendingkey_for_extfvk(&nd.extfvk)
+                    })
                     .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
                         match addr.clone() {
                             Some(a) => a == encode_payment_address(

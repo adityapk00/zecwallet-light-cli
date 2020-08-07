@@ -699,7 +699,7 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
     }
 
     assert_eq!(wallet.verified_zbalance(None), amount);
-    assert_eq!(wallet.unconfirmed_zbalance(None), 0);
+    assert_eq!(wallet.unverified_zbalance(None), 0);
 
     // Create a new block so that the note is now verified to be spent
     let cb2 = FakeCompactBlock::new(1, cb1.hash());
@@ -738,7 +738,7 @@ fn test_unconfirmed_txns() {
 
     // Make sure the starting balances are correct
     assert_eq!(wallet.verified_zbalance(None), amount);
-    assert_eq!(wallet.unconfirmed_zbalance(None), 0);
+    assert_eq!(wallet.unverified_zbalance(None), 0);
 
     // Now spend some of the money, paying our own address
     let zaddr1 = encode_payment_address(wallet.config.hrp_sapling_address(), &wallet.zkeys.read().unwrap().get(0).unwrap().zaddress);
@@ -754,15 +754,15 @@ fn test_unconfirmed_txns() {
     wallet.scan_block(&block.as_bytes()).unwrap();
     
     // pending tx
-    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr1.clone())), amount - AMOUNT_SENT - fee);
+    assert_eq!(wallet.unverified_zbalance(Some(zaddr1.clone())), amount - AMOUNT_SENT - fee);
     assert_eq!(wallet.verified_zbalance(Some(zaddr1.clone())), 0);
     assert_eq!(wallet.spendable_zbalance(Some(zaddr1.clone())), 0);
 
-    assert_eq!(wallet.unconfirmed_zbalance(None), amount - fee);
+    assert_eq!(wallet.unverified_zbalance(None), amount - fee);
     assert_eq!(wallet.verified_zbalance(None), 0);
     assert_eq!(wallet.spendable_zbalance(None), 0);
     
-    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr2.clone())), AMOUNT_SENT);
+    assert_eq!(wallet.unverified_zbalance(Some(zaddr2.clone())), AMOUNT_SENT);
     assert_eq!(wallet.verified_zbalance(Some(zaddr2.clone())), 0);
     assert_eq!(wallet.spendable_zbalance(Some(zaddr2.clone())), 0);
 
@@ -771,15 +771,15 @@ fn test_unconfirmed_txns() {
         block = FakeCompactBlock::new(7+i, block.hash());
         wallet.scan_block(&block.as_bytes()).unwrap();
     }
-    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr1.clone())), 0);
+    assert_eq!(wallet.unverified_zbalance(Some(zaddr1.clone())), 0);
     assert_eq!(wallet.verified_zbalance(Some(zaddr1.clone())), amount - AMOUNT_SENT - fee);
     assert_eq!(wallet.spendable_zbalance(Some(zaddr1.clone())), amount - AMOUNT_SENT - fee);
 
-    assert_eq!(wallet.unconfirmed_zbalance(None), 0);
+    assert_eq!(wallet.unverified_zbalance(None), 0);
     assert_eq!(wallet.verified_zbalance(None), amount - fee);
     assert_eq!(wallet.spendable_zbalance(None), amount - fee);
 
-    assert_eq!(wallet.unconfirmed_zbalance(Some(zaddr2.clone())), 0);
+    assert_eq!(wallet.unverified_zbalance(Some(zaddr2.clone())), 0);
     assert_eq!(wallet.verified_zbalance(Some(zaddr2.clone())), AMOUNT_SENT);
     assert_eq!(wallet.spendable_zbalance(Some(zaddr2.clone())), AMOUNT_SENT);
 }
