@@ -143,7 +143,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 8;
+        return 9;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -368,7 +368,7 @@ impl LightWallet {
 
             Ok((TxId{0: txid_bytes}, WalletTx::read(r).unwrap()))
         })?;
-        let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
+        let mut txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
 
         let chain_name = utils::read_string(&mut reader)?;
 
@@ -378,6 +378,19 @@ impl LightWallet {
         }
 
         let birthday = reader.read_u64::<LittleEndian>()?;
+
+        // If version <= 8, adjust the "is_spendable" status of each note data
+        if version <= 8 {
+            // Collect all spendable keys
+            let spendable_keys: Vec<_> = zkeys.iter()
+                .filter(|zk| zk.have_spending_key()).map(|zk| zk.extfvk.clone())
+                .collect();
+            txs.values_mut().for_each(|tx| {
+                tx.notes.iter_mut().for_each(|nd| {
+                    nd.is_spendable = spendable_keys.contains(&nd.extfvk)
+                })
+            });
+        }
 
         let lw = LightWallet{
             encrypted:   encrypted,
@@ -1753,7 +1766,8 @@ impl LightWallet {
             // Create a write lock 
             let mut txs = self.txs.write().unwrap();
 
-            // Trim the older witnesses
+            // Remove the older witnesses from the SaplingNoteData, so that we don't save them 
+            // in the wallet, taking up unnecessary space
             txs.values_mut().for_each(|wtx| {
                 wtx.notes
                     .iter_mut()
@@ -1785,14 +1799,16 @@ impl LightWallet {
             for tx in txs.values_mut() {
                 for nd in tx.notes.iter_mut() {
                     // Duplicate the most recent witness
-                    if let Some(witness) = nd.witnesses.last() {
-                        let clone = witness.clone();
-                        nd.witnesses.push(clone);
+                    if nd.is_spendable {
+                        if let Some(witness) = nd.witnesses.last() {
+                            let clone = witness.clone();
+                            nd.witnesses.push(clone);
+                        }
+                        // Trim the oldest witnesses
+                        nd.witnesses = nd
+                            .witnesses
+                            .split_off(nd.witnesses.len().saturating_sub(100));
                     }
-                    // Trim the oldest witnesses
-                    nd.witnesses = nd
-                        .witnesses
-                        .split_off(nd.witnesses.len().saturating_sub(100));
                 }
             }
 
@@ -1806,13 +1822,16 @@ impl LightWallet {
                     .map(|tx| 
                         tx.notes.iter_mut()
                             .filter_map(|nd| 
-                                // Note was not spent 
-                                if nd.spent.is_none() && nd.unconfirmed_spent.is_none() {
+                                if !nd.is_spendable { 
+                                    // If the note is not spendable, then no point updating it
+                                    None
+                                } else if nd.spent.is_none() && nd.unconfirmed_spent.is_none() {
+                                    // Note was not spent 
                                     nd.witnesses.last_mut() 
                                 } else if nd.spent.is_some() && nd.spent_at_height.is_some() && nd.spent_at_height.unwrap() < height - (MAX_REORG as i32) - 1 {
                                    // Note was spent in the last 100 blocks
                                     nd.witnesses.last_mut() 
-                                } else { 
+                                } else {
                                     // If note was old (spent NOT in the last 100 blocks)
                                     None 
                                 }))
@@ -1885,7 +1904,7 @@ impl LightWallet {
             // Save notes.
             for output in tx.shielded_outputs
             {
-                let new_note = SaplingNoteData::new(&self.zkeys.read().unwrap()[output.account].extfvk, output);
+                let new_note = SaplingNoteData::new(&self.zkeys.read().unwrap()[output.account], output);
                 match LightWallet::note_address(self.config.hrp_sapling_address(), &new_note) {
                     Some(a) => {
                         info!("Received sapling output to {}", a);

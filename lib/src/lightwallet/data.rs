@@ -22,6 +22,7 @@ use zcash_primitives::{
     }
 };
 use zcash_primitives::zip32::ExtendedSpendingKey;
+use super::walletzkey::WalletZKey;
 
 
 pub struct BlockData {
@@ -68,10 +69,11 @@ pub struct SaplingNoteData {
     pub(super) witnesses: Vec<IncrementalWitness<Node>>,
     pub(super) nullifier: [u8; 32],
     pub spent: Option<TxId>,             // If this note was confirmed spent
-    pub spent_at_height: Option<i32>,        // The height at which this note was spent
+    pub spent_at_height: Option<i32>,    // The height at which this note was spent
     pub unconfirmed_spent: Option<TxId>, // If this note was spent in a send, but has not yet been confirmed.
     pub memo:  Option<Memo>,
     pub is_change: bool,
+    pub is_spendable: bool,              // If the spending key is available in the wallet (i.e., whether to keep witness up-to-date)
     // TODO: We need to remove the unconfirmed_spent (i.e., set it to None) if the Tx has expired
 }
 
@@ -107,27 +109,30 @@ pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
 
 impl SaplingNoteData {
     fn serialized_version() -> u64 {
-        2
+        3
     }
 
     pub fn new(
-        extfvk: &ExtendedFullViewingKey,
+        walletkey: &WalletZKey,
         output: zcash_client_backend::wallet::WalletShieldedOutput
     ) -> Self {
         let witness = output.witness;
+
+        let is_spendable = walletkey.have_spending_key();
+
         let nf = {
             let mut nf = [0; 32];
             nf.copy_from_slice(
                 &output
                     .note
-                    .nf(&extfvk.fvk.vk, witness.position() as u64, &JUBJUB),
+                    .nf(&walletkey.extfvk.fvk.vk, witness.position() as u64, &JUBJUB),
             );
             nf
         };
 
         SaplingNoteData {
             account: output.account,
-            extfvk: extfvk.clone(),
+            extfvk: walletkey.extfvk.clone(),
             diversifier: *output.to.diversifier(),
             note: output.note,
             witnesses: vec![witness],
@@ -137,6 +142,7 @@ impl SaplingNoteData {
             unconfirmed_spent: None,
             memo: None,
             is_change: output.is_change,
+            is_spendable,
         }
     }
 
@@ -194,6 +200,12 @@ impl SaplingNoteData {
 
         let is_change: bool = reader.read_u8()? > 0;
 
+        let is_spendable = if version <= 2 {
+            true // Will get populated in the lightwallet::read() method, for now assume true
+        } else {
+            reader.read_u8()? > 0
+        };
+
         Ok(SaplingNoteData {
             account,
             extfvk,
@@ -206,6 +218,7 @@ impl SaplingNoteData {
             unconfirmed_spent: None,
             memo,
             is_change,
+            is_spendable,
         })
     }
 
@@ -235,6 +248,8 @@ impl SaplingNoteData {
         Optional::write(&mut writer, &self.memo, |w, m| w.write_all(m.as_bytes()))?;
 
         writer.write_u8(if self.is_change {1} else {0})?;
+
+        writer.write_u8(if self.is_spendable {1} else {0})?;
 
         // Note that we don't write the unconfirmed_spent field, because if the wallet is restarted,
         // we don't want to be beholden to any expired txns
