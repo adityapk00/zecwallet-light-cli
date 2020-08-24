@@ -387,7 +387,10 @@ impl LightWallet {
                 .collect();
             txs.values_mut().for_each(|tx| {
                 tx.notes.iter_mut().for_each(|nd| {
-                    nd.is_spendable = spendable_keys.contains(&nd.extfvk)
+                    nd.is_spendable = spendable_keys.contains(&nd.extfvk);
+                    if !nd.is_spendable {
+                        nd.witnesses.clear();
+                    }
                 })
             });
         }
