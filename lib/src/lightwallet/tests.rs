@@ -785,6 +785,54 @@ fn test_unconfirmed_txns() {
 }
 
 #[test]
+fn test_witness_vk_noupdate() {
+    let mut wallet = get_main_wallet();
+    const AMOUNT: u64 = 50000;
+    let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+
+    // Priv Key's address
+    let zaddr= "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
+    let viewkey = "zxviews1qvvx7cqdqyqqpqqte7292el2875kw2fgvnkmlmrufyszlcy8xgstwarnumqye3tr3d9rr3ydjm9zl9464majh4pa3ejkfy779dm38sfnkar67et7ykxkk0z9rfsmf9jclfj2k85xt2exkg4pu5xqyzyxzlqa6x3p9wrd7pwdq2uvyg0sal6zenqgfepsdp8shestvkzxuhm846r2h3m4jvsrpmxl8pfczxq87886k0wdasppffjnd2eh47nlmkdvrk6rgyyl0ekh3ycqtvvje";
+
+    assert_eq!(wallet.add_imported_vk(viewkey.to_string(), 0), zaddr);
+    assert_eq!(wallet.get_all_zaddresses()[1], zaddr);
+
+    let mut cb0 = FakeCompactBlock::new(0, BlockHash([0; 32]));
+    let (_, _txid1) = cb0.add_tx_paying(wallet.zkeys.read().unwrap()[0].extfvk.clone(), AMOUNT);
+    wallet.scan_block(&cb0.as_bytes()).unwrap();
+
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+    let (ss, so) = get_sapling_params().unwrap();
+
+    // Pay the imported view key
+    let amount_sent: u64 = AMOUNT - fee;
+    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
+        vec![(&zaddr, amount_sent, None)], |_| Ok(' '.to_string())).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+
+    let mut cb1 = FakeCompactBlock::new(1, cb0.hash());
+    cb1.add_tx(&sent_tx);
+    wallet.scan_block(&cb1.as_bytes()).unwrap();
+
+    // Assert no witnesses are present in the imported view key
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].is_spendable, false);
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].is_change, false);
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].witnesses.len(), 0);
+
+    // Add 2 new blocks
+    let mut phash = cb1.hash();
+    for i in 2..4 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+
+    // Assert no witnesses are present in the imported view key
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].witnesses.len(), 0);
+}
+
+#[test]
 fn test_witness_updates() {
     const AMOUNT1: u64 = 50000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);

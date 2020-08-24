@@ -135,7 +135,7 @@ impl SaplingNoteData {
             extfvk: walletkey.extfvk.clone(),
             diversifier: *output.to.diversifier(),
             note: output.note,
-            witnesses: vec![witness],
+            witnesses: if is_spendable {vec![witness]} else {vec![]},
             nullifier: nf,
             spent: None,
             spent_at_height: None,
