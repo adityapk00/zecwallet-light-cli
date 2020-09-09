@@ -1,5 +1,4 @@
 use std::convert::TryInto;
-use std::io::{Error};
 use rand::{RngCore, rngs::OsRng};
 
 use ff::{Field, PrimeField};
@@ -33,18 +32,20 @@ use crate::lightwallet::walletzkey::{WalletZKeyType};
 use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
 use crate::SaplingParams;
 
-fn get_sapling_params() -> Result<(Vec<u8>, Vec<u8>), Error> {
-    // Read Sapling Params
-    let mut sapling_output = vec![];
-    sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
-    println!("Read output {}", sapling_output.len());
+use lazy_static::lazy_static;
+lazy_static!(
+    static ref SO: Vec<u8> = {
+        let mut sapling_output = vec![];
+        sapling_output.extend_from_slice(SaplingParams::get("sapling-output.params").unwrap().as_ref());
+        sapling_output
+    };
 
-    let mut sapling_spend = vec![];
-    sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
-    println!("Read output {}", sapling_spend.len());
-
-    Ok((sapling_spend, sapling_output))
-}
+    static ref SS: Vec<u8> = {
+        let mut sapling_spend = vec![];
+        sapling_spend.extend_from_slice(SaplingParams::get("sapling-spend.params").unwrap().as_ref());
+        sapling_spend
+    };
+);
 
 struct FakeCompactBlock {
     block: CompactBlock,
@@ -708,6 +709,13 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
     (wallet, txid1, cb2.hash())
 }
 
+// A test helper method to send a transaction
+fn test_send_to_address(wallet: &LightWallet, tos: Vec<(&str, u64, Option<String>)>) -> Result<(String, Vec<u8>), String> {
+    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
+
+    wallet.send_to_address(branch_id, &SS, &SO, tos, |_| Ok(' '.to_string()))
+}
+
 #[test]
 fn test_unconfirmed_txns() {
     let config = LightClientConfig {
@@ -718,9 +726,6 @@ fn test_unconfirmed_txns() {
         anchor_offset: 5, // offset = 5
         data_dir: None,
     };
-
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
 
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
     let amount = 50000;
@@ -744,8 +749,8 @@ fn test_unconfirmed_txns() {
     let zaddr1 = encode_payment_address(wallet.config.hrp_sapling_address(), &wallet.zkeys.read().unwrap().get(0).unwrap().zaddress);
     let zaddr2 = wallet.add_zaddr();
     const AMOUNT_SENT: u64 = 50;
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-        vec![(&zaddr2, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+        vec![(&zaddr2, AMOUNT_SENT, None)]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
 
@@ -801,13 +806,10 @@ fn test_witness_vk_noupdate() {
     let (_, _txid1) = cb0.add_tx_paying(wallet.zkeys.read().unwrap()[0].extfvk.clone(), AMOUNT);
     wallet.scan_block(&cb0.as_bytes()).unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Pay the imported view key
     let amount_sent: u64 = AMOUNT - fee;
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-        vec![(&zaddr, amount_sent, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+        vec![(&zaddr, amount_sent, None)]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
 
@@ -864,12 +866,10 @@ fn test_witness_updates() {
     let ext_address = encode_payment_address(wallet.config.hrp_sapling_address(),
                         &fvk.default_address().unwrap().1);
     const AMOUNT_SENT: u64 = 20;
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
+    
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-        vec![(&ext_address, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+        vec![(&ext_address, AMOUNT_SENT, None)]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -921,9 +921,6 @@ fn test_z_spend_to_z() {
     let outgoing_memo = "Outgoing Memo".to_string();
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Make sure that the balance exists 
     {
         assert_eq!(wallet.zbalance(None), AMOUNT1);
@@ -932,8 +929,8 @@ fn test_z_spend_to_z() {
     }
 
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -1046,12 +1043,9 @@ fn test_self_txns_ttoz_withmemo() {
     let outgoing_memo = "Outgoing Memo".to_string();
     let zaddr = wallet.add_zaddr();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) =get_sapling_params().unwrap();
-
     // Create a tx and send to address. This should consume both the UTXO and the note
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&zaddr, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&zaddr, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -1104,12 +1098,9 @@ fn test_self_txns_ttoz_nomemo() {
 
     let zaddr = wallet.add_zaddr();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) =get_sapling_params().unwrap();
-
     // Create a tx and send to address. This should consume both the UTXO and the note
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&zaddr, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&zaddr, AMOUNT_SENT, None)]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -1140,12 +1131,9 @@ fn test_self_txns_ztoz() {
 
     let outgoing_memo = "Outgoing Memo".to_string();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) =get_sapling_params().unwrap();
-
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -1164,8 +1152,8 @@ fn test_self_txns_ztoz() {
     }
 
     // Another self tx, this time without a memo
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-        vec![(&zaddr2, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+        vec![(&zaddr2, AMOUNT_SENT, None)]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
@@ -1193,13 +1181,9 @@ fn test_multi_z() {
 
     let outgoing_memo = "Outgoing Memo".to_string();
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
-
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) =get_sapling_params().unwrap();
-
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&zaddr2, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -1253,8 +1237,8 @@ fn test_multi_z() {
     let amount_all:u64 = (AMOUNT1 - AMOUNT_SENT - fee) + (AMOUNT_SENT) - fee;
     let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
 
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                                        vec![(&taddr, amount_all, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                                        vec![(&taddr, amount_all, None)]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_ext_txid = sent_tx.txid();
 
@@ -1288,15 +1272,12 @@ fn test_z_spend_to_taddr() {
     const AMOUNT1: u64 = 50000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
     const AMOUNT_SENT: u64 = 30;
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                                        vec![(&taddr, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                                        vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
@@ -1343,8 +1324,8 @@ fn test_z_spend_to_taddr() {
     }
 
     // Create a new Tx, but this time with a memo.
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-        vec![(&taddr, AMOUNT_SENT, Some("T address memo".to_string()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+        vec![(&taddr, AMOUNT_SENT, Some("T address memo".to_string()))]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid2 = sent_tx.txid();
 
@@ -1414,12 +1395,9 @@ fn test_t_spend_to_z() {
     let outgoing_memo = "Outgoing Memo".to_string();
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) =get_sapling_params().unwrap();
-
     // Create a tx and send to address. This should consume both the UTXO and the note
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -1488,12 +1466,9 @@ fn test_z_incoming_memo() {
     let memo = "Incoming Memo".to_string();
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&my_address, AMOUNT1 - fee, Some(memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&my_address, AMOUNT1 - fee, Some(memo.clone()))]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
@@ -1530,12 +1505,9 @@ fn test_z_incoming_hex_memo() {
     let memo = format!("0x{}", hex::encode(&orig_memo));
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&my_address, AMOUNT1 - fee, Some(memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&my_address, AMOUNT1 - fee, Some(memo.clone()))]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
@@ -1581,14 +1553,11 @@ fn test_add_new_zt_hd_after_incoming() {
 
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     assert_eq!(wallet.zkeys.read().unwrap().len(), 6);   // Starts with 1+5 addresses
 
     // Create a tx and send to the last address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&my_address, AMOUNT1 - fee, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&my_address, AMOUNT1 - fee, None)]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
 
     // Add it to a block
@@ -1626,12 +1595,9 @@ fn test_z_to_t_withinwallet() {
 
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&taddr, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
@@ -1686,12 +1652,9 @@ fn test_multi_t() {
 
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Create a Tx and send to the second t address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&taddr2, AMOUNT_SENT1, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&taddr2, AMOUNT_SENT1, None)]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid1 = sent_tx.txid();
 
@@ -1734,8 +1697,8 @@ fn test_multi_t() {
     let taddr3 = wallet.add_taddr();
 
     // Create a Tx and send to the second t address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&taddr3, AMOUNT_SENT2, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&taddr3, AMOUNT_SENT2, None)]).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid2 = sent_tx.txid();
 
@@ -1771,8 +1734,8 @@ fn test_multi_t() {
     let outgoing_memo = "Outgoing Memo".to_string();
 
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&ext_address, AMOUNT_SENT_EXT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&ext_address, AMOUNT_SENT_EXT, Some(outgoing_memo.clone()))]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid3 = sent_tx.txid();
@@ -1821,15 +1784,13 @@ fn test_multi_spends() {
 
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
 
     let tos = vec![ (zaddr2.as_str(), ZAMOUNT2, Some(outgoing_memo2.clone())),
                     (zaddr3.as_str(), ZAMOUNT3, Some(outgoing_memo3.clone())),
                     (taddr2.as_str(), TAMOUNT2, None),
                     (taddr3.as_str(), TAMOUNT3, None) ];
     
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so, tos, |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet,  tos).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
@@ -1901,7 +1862,7 @@ fn test_multi_spends() {
 
     let tos = vec![ (ext_address.as_str(), EXT_ZADDR_AMOUNT, Some(ext_memo.clone())),
                     (ext_taddr.as_str(), ext_taddr_amount, None)];
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so, tos, |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet,  tos).unwrap();
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid2 = sent_tx.txid();
 
@@ -1949,27 +1910,26 @@ fn test_bad_send() {
     let (wallet, _txid1, _block_hash) = get_test_wallet(AMOUNT1);
 
     let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
     let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());       
 
     // Bad address
-    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                        vec![(&"badaddress", 10, None)], |_| Ok(' '.to_string()));
+    let raw_tx = test_send_to_address(&wallet, 
+                                        vec![(&"badaddress", 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Invalid recipient address"));
 
     // Insufficient funds
-    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
-                                        vec![(&ext_taddr, AMOUNT1 + 10, None)], |_| Ok(' '.to_string()));
+    let raw_tx = test_send_to_address(&wallet, 
+                                        vec![(&ext_taddr, AMOUNT1 + 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Insufficient verified funds"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
 
     // No addresses
-    let raw_tx = wallet.send_to_address(branch_id, &ss, &so, vec![], |_| Ok(' '.to_string()));
+    let raw_tx = test_send_to_address(&wallet,  vec![]);
     assert!(raw_tx.err().unwrap().contains("at least one"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
 
     // Broadcast error
-    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+    let raw_tx = wallet.send_to_address(branch_id, &SS, &SO,
         vec![(&ext_taddr, 10, None)], |_| Err("broadcast failed".to_string()));
     assert!(raw_tx.err().unwrap().contains("broadcast failed"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
@@ -1983,15 +1943,13 @@ fn test_duplicate_outputs() {
 
     let (wallet, _txid1, _block_hash) = get_test_wallet(AMOUNT1);
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
     let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());  
      
     // Duplicated addresses with memos are fine too
-    let raw_tx = wallet.send_to_address(branch_id, &ss, &so,
+    let raw_tx = test_send_to_address(&wallet, 
         vec![(&ext_taddr, 100, Some("First memo".to_string())),
              (&ext_taddr, 0, Some("Second memo".to_string())),
-             (&ext_taddr, 0, Some("Third memo".to_string()))], |_| Ok(' '.to_string()));
+             (&ext_taddr, 0, Some("Third memo".to_string()))]);
     assert!(raw_tx.is_ok());
 
     // Make sure they are in the mempool
@@ -2039,12 +1997,9 @@ fn test_z_mempool_expiry() {
 
     let outgoing_memo = "Outgoing Memo".to_string();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -2154,14 +2109,11 @@ fn test_rollback() {
     // Now do a Tx
     let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Create a tx and send to address
     const AMOUNT_SENT: u64 = 30000;
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&taddr, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
@@ -2635,12 +2587,9 @@ fn test_encrypted_zreceive() {
     let outgoing_memo = "Outgoing Memo".to_string();
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     // Create a tx and send to address
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&ext_address, AMOUNT_SENT, Some(outgoing_memo.clone()))]).unwrap();
 
     assert_eq!(wallet.have_spending_key_for_zaddress(wallet.get_all_zaddresses().get(0).unwrap()), true);
 
@@ -2686,8 +2635,8 @@ fn test_encrypted_zreceive() {
     }
 
     // Trying to spend from a locked wallet is an error
-    assert!(wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&ext_address, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).is_err());
+    assert!(test_send_to_address(&wallet, 
+                            vec![(&ext_address, AMOUNT_SENT, None)]).is_err());
 
     // unlock the wallet so we can spend to the second z address
     wallet.unlock(password.clone()).unwrap();
@@ -2697,8 +2646,8 @@ fn test_encrypted_zreceive() {
     const ZAMOUNT2:u64 = 30;
     let outgoing_memo2 = "Outgoing Memo2".to_string();
 
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&zaddr2, ZAMOUNT2, Some(outgoing_memo2.clone()))], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&zaddr2, ZAMOUNT2, Some(outgoing_memo2.clone()))]).unwrap();
 
     // Now lock the wallet again
     wallet.lock().unwrap();
@@ -2745,15 +2694,12 @@ fn test_encrypted_treceive() {
     let password: String = "password".to_string();
     let (mut wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
 
-    let branch_id = u32::from_str_radix("2bb40e60", 16).unwrap();
-    let (ss, so) = get_sapling_params().unwrap();
-
     let taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());
     const AMOUNT_SENT: u64 = 30;
     let fee: u64 = DEFAULT_FEE.try_into().unwrap();
 
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                                        vec![(&taddr, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                                        vec![(&taddr, AMOUNT_SENT, None)]).unwrap();
 
     // Now that we have the transaction, we'll encrypt the wallet
     wallet.encrypt(password.clone()).unwrap();
@@ -2788,8 +2734,8 @@ fn test_encrypted_treceive() {
     }
 
     // Trying to spend from a locked wallet is an error
-    assert!(wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&taddr, AMOUNT_SENT, None)], |_| Ok(' '.to_string())).is_err());
+    assert!(test_send_to_address(&wallet, 
+                            vec![(&taddr, AMOUNT_SENT, None)]).is_err());
 
     // unlock the wallet so we can spend to the second z address
     wallet.unlock(password.clone()).unwrap();
@@ -2798,8 +2744,8 @@ fn test_encrypted_treceive() {
     let taddr2 = wallet.add_taddr();
     const TAMOUNT2:u64 = 50;
 
-    let (_, raw_tx) = wallet.send_to_address(branch_id, &ss, &so,
-                            vec![(&taddr2, TAMOUNT2, None)], |_| Ok(' '.to_string())).unwrap();
+    let (_, raw_tx) = test_send_to_address(&wallet, 
+                            vec![(&taddr2, TAMOUNT2, None)]).unwrap();
 
     // Now lock the wallet again
     wallet.lock().unwrap();
