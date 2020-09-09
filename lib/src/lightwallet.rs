@@ -1974,6 +1974,7 @@ impl LightWallet {
         consensus_branch_id: u32,
         spend_params: &[u8],
         output_params: &[u8],
+        transparent_only: bool,
         tos: Vec<(&str, u64, Option<String>)>,
         broadcast_fn: F
     ) -> Result<(String, Vec<u8>), String> 
@@ -2028,21 +2029,25 @@ impl LightWallet {
         let target_value = Amount::from_u64(total_value).unwrap() + DEFAULT_FEE ;
 
         // Select the candidate notes that are eligible to be spent
-        let mut candidate_notes: Vec<_> = self.txs.read().unwrap().iter()
-            .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
-            .flatten()
-            .filter_map(|(txid, note)| {
-                // Filter out notes that are already spent
-                if note.spent.is_some() || note.unconfirmed_spent.is_some() {
-                    None
-                } else {
-                    // Get the spending key for the selected fvk, if we have it
-                    let extsk = self.zkeys.read().unwrap().iter()
-                        .find(|zk| zk.extfvk == note.extfvk)
-                        .and_then(|zk| zk.extsk.clone());
-                    SpendableNote::from(txid, note, anchor_offset, &extsk)
-                }
-            }).collect();
+        let mut candidate_notes: Vec<_> = if transparent_only {
+            vec![]
+        } else {
+            self.txs.read().unwrap().iter()
+                .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
+                .flatten()
+                .filter_map(|(txid, note)| {
+                    // Filter out notes that are already spent
+                    if note.spent.is_some() || note.unconfirmed_spent.is_some() {
+                        None
+                    } else {
+                        // Get the spending key for the selected fvk, if we have it
+                        let extsk = self.zkeys.read().unwrap().iter()
+                            .find(|zk| zk.extfvk == note.extfvk)
+                            .and_then(|zk| zk.extsk.clone());
+                        SpendableNote::from(txid, note, anchor_offset, &extsk)
+                    }
+                }).collect()
+        };
 
         // Sort by highest value-notes first.
         candidate_notes.sort_by(|a, b| b.note.value.cmp(&a.note.value));
