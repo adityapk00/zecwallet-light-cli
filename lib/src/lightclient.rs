@@ -1506,6 +1506,34 @@ impl LightClient {
         }        
     }
 
+    pub fn do_shield(&self, address: Option<String>) -> Result<String, String> {
+        use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
+        use std::convert::TryInto;
+
+        let fee = DEFAULT_FEE.try_into().unwrap();
+        let tbal = self.wallet.read().unwrap().tbalance(None);
+
+        // Make sure there is a balance, and it is greated than the amount
+        if tbal <= fee {
+            return Err(format!("Not enough transparent balance to shield. Have {} zats, need more than {} zats to cover tx fee", tbal, fee));
+        }
+
+        let addr = address.or(self.wallet.read().unwrap().get_all_zaddresses().get(0).map(|s| s.clone())).unwrap();
+        
+        let result = {
+            let _lock = self.sync_lock.lock().unwrap();
+            self.wallet.read().unwrap().send_to_address(
+                u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(), 
+                &self.sapling_spend, &self.sapling_output, 
+                true, 
+                vec![(&addr, tbal - fee, None)],
+                |txbytes| broadcast_raw_tx(&self.get_server_uri(), txbytes)
+            )
+        };
+
+        result.map(|(txid, _)| txid)
+    }
+
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");

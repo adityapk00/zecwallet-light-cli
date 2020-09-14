@@ -440,6 +440,41 @@ impl Command for LockCommand {
     }
 }
 
+struct ShieldCommand {}
+impl Command for ShieldCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Shield all your transparent funds");
+        h.push("Usage:");
+        h.push("shield [optional address]");
+        h.push("");
+        h.push("NOTE: The fee required to send this transaction (currently ZEC 0.0001) is additionally deducted from your balance.");
+        h.push("Example:");
+        h.push("shield");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Shield your transparent ZEC into a sapling address".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        // Parse the address or amount
+        let address = if args.len() > 0 {
+            Some(args[0].to_string())
+        } else {
+            None
+        };
+
+        match lightclient.do_shield(address) {
+            Ok(txid) => { object!{ "txid" => txid } },
+            Err(e)   => { object!{ "error" => e } }
+        }.pretty(2)
+    }
+}
+
 
 struct SendCommand {}
 impl Command for SendCommand {
@@ -451,7 +486,7 @@ impl Command for SendCommand {
         h.push("OR");
         h.push("send '[{'address': <address>, 'amount': <amount in zatoshis>, 'memo': <optional memo>}, ...]'");
         h.push("");
-        h.push("NOTE: The fee required to send this transaction (currently ZEC 0.0001) is additionally detected from your balance.");
+        h.push("NOTE: The fee required to send this transaction (currently ZEC 0.0001) is additionally deducted from your balance.");
         h.push("Example:");
         h.push("send ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d 200000 \"Hello from the command line\"");
         h.push("");
@@ -543,17 +578,12 @@ impl Command for SendCommand {
             return self.help()
         };
 
-        match lightclient.do_sync(true) {
-            Ok(_) => {
-                // Convert to the right format. String -> &str.
-                let tos = send_args.iter().map(|(a, v, m)| (a.as_str(), *v, m.clone()) ).collect::<Vec<_>>();
-                match lightclient.do_send(tos) {
-                    Ok(txid) => { object!{ "txid" => txid } },
-                    Err(e)   => { object!{ "error" => e } }
-                }.pretty(2)
-            },
-            Err(e) => e
-        }
+        // Convert to the right format. String -> &str.
+        let tos = send_args.iter().map(|(a, v, m)| (a.as_str(), *v, m.clone()) ).collect::<Vec<_>>();
+        match lightclient.do_send(tos) {
+            Ok(txid) => { object!{ "txid" => txid } },
+            Err(e)   => { object!{ "error" => e } }
+        }.pretty(2)
     }
 }
 
@@ -868,6 +898,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("export".to_string(),            Box::new(ExportCommand{}));
     map.insert("info".to_string(),              Box::new(InfoCommand{}));
     map.insert("send".to_string(),              Box::new(SendCommand{}));
+    map.insert("shield".to_string(),            Box::new(ShieldCommand{}));
     map.insert("save".to_string(),              Box::new(SaveCommand{}));
     map.insert("quit".to_string(),              Box::new(QuitCommand{}));
     map.insert("list".to_string(),              Box::new(TransactionsCommand{}));
