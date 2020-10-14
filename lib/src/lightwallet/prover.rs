@@ -1,17 +1,15 @@
 //! Abstractions over the proving system and parameters for ease of use.
-
+use bls12_381::Bls12;
 use bellman::groth16::{prepare_verifying_key, Parameters, PreparedVerifyingKey};
-use pairing::bls12_381::{Bls12, Fr};
 use zcash_primitives::{
-    jubjub::{edwards, fs::Fs, Unknown},
-    primitives::{Diversifier, PaymentAddress, ProofGenerationKey},
+    primitives::{Diversifier, PaymentAddress, ProofGenerationKey, Rseed},
     redjubjub::{PublicKey, Signature},
     transaction::components::Amount
 };
 use zcash_primitives::{
     merkle_tree::{MerklePath},
     prover::TxProver, sapling::Node,
-    transaction::components::GROTH_PROOF_SIZE, JUBJUB,
+    transaction::components::GROTH_PROOF_SIZE,
 };
 use zcash_proofs::sapling::SaplingProvingContext;
 
@@ -52,32 +50,27 @@ impl TxProver for InMemTxProver {
     fn spend_proof(
         &self,
         ctx: &mut Self::SaplingProvingContext,
-        proof_generation_key: ProofGenerationKey<Bls12>,
+        proof_generation_key: ProofGenerationKey,
         diversifier: Diversifier,
-        rcm: Fs,
-        ar: Fs,
+        rseed: Rseed,
+        ar: jubjub::Fr,
         value: u64,
-        anchor: Fr,
+        anchor: bls12_381::Scalar,
         witness: MerklePath<Node>,
     ) -> Result<
-        (
-            [u8; GROTH_PROOF_SIZE],
-            edwards::Point<Bls12, Unknown>,
-            PublicKey<Bls12>,
-        ),
+        ([u8; GROTH_PROOF_SIZE], jubjub::ExtendedPoint, PublicKey),
         (),
     > {
         let (proof, cv, rk) = ctx.spend_proof(
             proof_generation_key,
             diversifier,
-            rcm,
+            rseed,
             ar,
             value,
             anchor,
             witness,
             &self.spend_params,
             &self.spend_vk,
-            &JUBJUB,
         )?;
 
         let mut zkproof = [0u8; GROTH_PROOF_SIZE];
@@ -91,18 +84,17 @@ impl TxProver for InMemTxProver {
     fn output_proof(
         &self,
         ctx: &mut Self::SaplingProvingContext,
-        esk: Fs,
-        payment_address: PaymentAddress<Bls12>,
-        rcm: Fs,
+        esk: jubjub::Fr,
+        payment_address: PaymentAddress,
+        rcm: jubjub::Fr,
         value: u64,
-    ) -> ([u8; GROTH_PROOF_SIZE], edwards::Point<Bls12, Unknown>) {
+    ) -> ([u8; GROTH_PROOF_SIZE], jubjub::ExtendedPoint) {
         let (proof, cv) = ctx.output_proof(
             esk,
             payment_address,
             rcm,
             value,
-            &self.output_params,
-            &JUBJUB,
+            &self.output_params
         );
 
         let mut zkproof = [0u8; GROTH_PROOF_SIZE];
@@ -119,6 +111,6 @@ impl TxProver for InMemTxProver {
         value_balance: Amount,
         sighash: &[u8; 32],
     ) -> Result<Signature, ()> {
-        ctx.binding_sig(value_balance, sighash, &JUBJUB)
+        ctx.binding_sig(value_balance, sighash)
     }
 }

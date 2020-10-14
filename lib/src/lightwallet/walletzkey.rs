@@ -2,7 +2,6 @@ use std::io::{self, Read, Write};
 use std::io::{Error, ErrorKind};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use pairing::bls12_381::{Bls12};
 
 use sodiumoxide::crypto::secretbox;
 
@@ -29,7 +28,7 @@ pub struct WalletZKey {
   locked: bool,
   pub(super) extsk: Option<ExtendedSpendingKey>,
   pub(super) extfvk: ExtendedFullViewingKey,
-  pub(super) zaddress: PaymentAddress<Bls12>,
+  pub(super) zaddress: PaymentAddress,
 
   // If this is a HD key, what is the key number
   pub(super) hdkey_num: Option<u32>,
