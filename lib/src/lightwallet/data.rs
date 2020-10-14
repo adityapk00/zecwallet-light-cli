@@ -157,7 +157,7 @@ impl SaplingNoteData {
 
         // To recover the note, read the value and r, and then use the payment address
         // to recreate the note
-        let (value, rseed) = if version < 3 {
+        let (value, rseed) = if version <= 3 {
             let value = reader.read_u64::<LittleEndian>()?;
 
             let mut r_bytes: [u8; 32] = [0; 32];

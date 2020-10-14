@@ -92,7 +92,7 @@ impl ToBase58Check for [u8] {
         payload.extend_from_slice(self);
         payload.extend_from_slice(suffix);
 
-        let mut checksum = double_sha256(&payload);
+        let checksum = double_sha256(&payload);
         payload.append(&mut checksum[..4].to_vec());
         payload.to_base58()
     }
