@@ -48,16 +48,19 @@ bls12_381 = "0.3.1"
 group = "0.8"
 
 [dependencies.zcash_client_backend]
-path = "../../librustzcash/zcash_client_backend"
+git = "https://github.com/adityapk00/librustzcash"
+rev = "34ef7fd2d6e9e5ccc2c03243d73b4b8c5a7fd0b1"
 default-features = false
 
 [dependencies.zcash_primitives]
-path = "../../librustzcash/zcash_primitives"
+git = "https://github.com/adityapk00/librustzcash"
+rev = "34ef7fd2d6e9e5ccc2c03243d73b4b8c5a7fd0b1"
 default-features = false
 features = ["transparent-inputs"]
 
 [dependencies.zcash_proofs]
-path = "../../librustzcash/zcash_proofs"
+git = "https://github.com/adityapk00/librustzcash"
+rev = "34ef7fd2d6e9e5ccc2c03243d73b4b8c5a7fd0b1"
 default-features = false
 
 
