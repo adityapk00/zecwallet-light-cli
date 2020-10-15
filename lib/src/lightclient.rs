@@ -18,7 +18,7 @@ use threadpool::ThreadPool;
 
 use json::{object, array, JsonValue};
 use zcash_primitives::transaction::{TxId, Transaction};
-use zcash_client_backend::{constants::testnet, constants::mainnet, constants::regtest,};
+use zcash_primitives::{constants::testnet, constants::mainnet, constants::regtest,};
 
 use log::{info, warn, error, LevelFilter};
 use log4rs::append::rolling_file::RollingFileAppender;

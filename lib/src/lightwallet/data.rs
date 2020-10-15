@@ -1,8 +1,6 @@
 use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use pairing::bls12_381::{Bls12};
-use ff::{PrimeField};
 
 use zcash_primitives::{
     block::BlockHash,
@@ -15,11 +13,7 @@ use zcash_primitives::{
     },
     note_encryption::{Memo,},
     zip32::{ExtendedFullViewingKey,},
-    JUBJUB,
-    primitives::{Diversifier, Note,},
-    jubjub::{
-        fs::{Fs, FsRepr},
-    }
+    primitives::{Diversifier, Note, Rseed},
 };
 use zcash_primitives::zip32::ExtendedSpendingKey;
 use super::walletzkey::WalletZKey;
@@ -65,7 +59,7 @@ pub struct SaplingNoteData {
     pub(super) account: usize,
     pub(super) extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here.
     pub diversifier: Diversifier,
-    pub note: Note<Bls12>,
+    pub note: Note,
     pub(super) witnesses: Vec<IncrementalWitness<Node>>,
     pub(super) nullifier: [u8; 32],
     pub spent: Option<TxId>,             // If this note was confirmed spent
@@ -77,39 +71,42 @@ pub struct SaplingNoteData {
     // TODO: We need to remove the unconfirmed_spent (i.e., set it to None) if the Tx has expired
 }
 
-
-/// Reads an FsRepr from [u8] of length 32
-/// This will panic (abort) if length provided is
-/// not correct
-/// TODO: This is duplicate from rustzcash.rs
-fn read_fs(from: &[u8]) -> FsRepr {
-    assert_eq!(from.len(), 32);
-
-    let mut f = FsRepr::default();
-    f.0.copy_from_slice(&from);
-
-    f
-}
-
 // Reading a note also needs the corresponding address to read from.
-pub fn read_note<R: Read>(mut reader: R) -> io::Result<(u64, Fs)> {
-    let value = reader.read_u64::<LittleEndian>()?;
-
+fn read_rseed<R: Read>(mut reader: R) -> io::Result<Rseed> {
+    let note_type = reader.read_u8()?;
+    
     let mut r_bytes: [u8; 32] = [0; 32];
     reader.read_exact(&mut r_bytes)?;
 
-    let r = match Fs::from_repr(read_fs(&r_bytes)) {
-        Some(r) => r,
-        None => return Err(io::Error::new(
-            io::ErrorKind::InvalidInput, "Couldn't parse randomness"))
+    let r = match note_type {
+        1 => {
+            Rseed::BeforeZip212(jubjub::Fr::from_bytes(&r_bytes).unwrap())
+        },
+        2 => {
+            Rseed::AfterZip212(r_bytes)
+        }
+        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Bad note type"))
     };
 
-    Ok((value, r))
+    Ok(r)
+}
+
+fn write_rseed<W: Write>(mut writer: W, rseed: &Rseed) -> io::Result<()> {
+    let note_type = match rseed {
+        Rseed::BeforeZip212(_) => 1,
+        Rseed::AfterZip212(_) => 2,
+    };
+    writer.write_u8(note_type)?;
+
+    match rseed {
+        Rseed::BeforeZip212(fr) => writer.write_all(&fr.to_bytes()),
+        Rseed::AfterZip212(b) => writer.write_all(b)
+    }
 }
 
 impl SaplingNoteData {
     fn serialized_version() -> u64 {
-        3
+        4
     }
 
     pub fn new(
@@ -125,7 +122,7 @@ impl SaplingNoteData {
             nf.copy_from_slice(
                 &output
                     .note
-                    .nf(&walletkey.extfvk.fvk.vk, witness.position() as u64, &JUBJUB),
+                    .nf(&walletkey.extfvk.fvk.vk, witness.position() as u64),
             );
             nf
         };
@@ -160,9 +157,23 @@ impl SaplingNoteData {
 
         // To recover the note, read the value and r, and then use the payment address
         // to recreate the note
-        let (value, r) = read_note(&mut reader)?; // TODO: This method is in a different package, because of some fields that are private
+        let (value, rseed) = if version <= 3 {
+            let value = reader.read_u64::<LittleEndian>()?;
 
-        let maybe_note = extfvk.fvk.vk.to_payment_address(diversifier, &JUBJUB).unwrap().create_note(value, r, &JUBJUB);
+            let mut r_bytes: [u8; 32] = [0; 32];
+            reader.read_exact(&mut r_bytes)?;
+        
+            let r = jubjub::Fr::from_bytes(&r_bytes).unwrap();
+        
+            (value, Rseed::BeforeZip212(r))
+        } else {
+            let value = reader.read_u64::<LittleEndian>()?;
+            let rseed = read_rseed(&mut reader)?;
+
+            (value, rseed)
+        };
+        
+        let maybe_note = extfvk.fvk.vk.to_payment_address(diversifier).unwrap().create_note(value, rseed);
 
         let note = match maybe_note {
             Some(n)  => Ok(n),
@@ -236,7 +247,7 @@ impl SaplingNoteData {
         // from these 2 values and the Payment address.
         writer.write_u64::<LittleEndian>(self.note.value)?;
 
-        writer.write_all(&self.note.r.to_repr().0)?;
+        write_rseed(&mut writer, &self.note.rseed)?;
 
         Vector::write(&mut writer, &self.witnesses, |wr, wi| wi.write(wr) )?;
 
@@ -504,7 +515,7 @@ pub struct SpendableNote {
     pub txid: TxId,
     pub nullifier: [u8; 32],
     pub diversifier: Diversifier,
-    pub note: Note<Bls12>,
+    pub note: Note,
     pub witness: IncrementalWitness<Node>,
     pub extsk: ExtendedSpendingKey,
 }

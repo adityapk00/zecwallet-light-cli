@@ -1,8 +1,8 @@
 use std::convert::TryInto;
 use rand::{RngCore, rngs::OsRng};
 
-use ff::{Field, PrimeField};
-use pairing::bls12_381::Bls12;
+use ff::{PrimeField, Field};
+use group::GroupEncoding;
 use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
 use zcash_client_backend::{encoding::{encode_payment_address, decode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key},
     proto::compact_formats::{
@@ -11,9 +11,8 @@ use zcash_client_backend::{encoding::{encode_payment_address, decode_payment_add
 };
 use zcash_primitives::{
     block::BlockHash,
-    jubjub::fs::Fs,
     note_encryption::{Memo, SaplingNoteEncryption},
-    primitives::{Note, PaymentAddress},
+    primitives::{Note, PaymentAddress, Rseed},
     legacy::{Script, TransparentAddress,},
     transaction::{
         TxId, Transaction, TransactionData,
@@ -21,7 +20,6 @@ use zcash_primitives::{
         components::amount::DEFAULT_FEE,
     },
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
-    JUBJUB,
 };
 
 use sha2::{Sha256, Digest};
@@ -89,10 +87,10 @@ impl FakeCompactBlock {
             let mut c_out = CompactOutput::default();
 
             let mut cmu_bytes = vec![];
-            cmu_bytes.extend_from_slice(&o.cmu.to_repr().0);
+            cmu_bytes.extend_from_slice(&o.cmu.to_repr());
 
             let mut epk_bytes = vec![];
-            o.ephemeral_key.write(&mut epk_bytes).unwrap();
+            epk_bytes.extend_from_slice(&o.ephemeral_key.to_bytes());
 
             c_out.set_cmu(cmu_bytes);
             c_out.set_epk(epk_bytes);
@@ -128,22 +126,22 @@ impl FakeCompactBlock {
         // Create a fake Note for the account
         let mut rng = OsRng;
         let note = Note {
-            g_d: to.diversifier().g_d::<Bls12>(&JUBJUB).unwrap(),
+            g_d: to.diversifier().g_d().unwrap(),
             pk_d: to.pk_d().clone(),
             value: value.into(),
-            r: Fs::random(&mut rng),
+            rseed: Rseed::BeforeZip212(jubjub::Fr::random(rng)),
         };
         let encryptor = SaplingNoteEncryption::new(
-            extfvk.fvk.ovk,
+            Some(extfvk.fvk.ovk),
             note.clone(),
             to.clone(),
             Memo::default(),
             &mut rng,
         );
         let mut cmu = vec![];
-        cmu.extend_from_slice(&note.cm(&JUBJUB).to_repr().0);
+        cmu.extend_from_slice(&note.cmu().to_repr());
         let mut epk = vec![];
-        encryptor.epk().write(&mut epk).unwrap();
+        epk.extend_from_slice(&encryptor.epk().to_bytes());
         let enc_ciphertext = encryptor.encrypt_note_plaintext();
 
         // Create a fake CompactBlock containing the note
@@ -158,13 +156,13 @@ impl FakeCompactBlock {
         ctx.outputs.push(cout);
         
         self.block.vtx.push(ctx);
-        (note.nf(&extfvk.fvk.vk, 0, &JUBJUB), TxId(txid[..].try_into().unwrap()))
+        (note.nf(&extfvk.fvk.vk, 0), TxId(txid[..].try_into().unwrap()))
     }
 
     fn add_tx_spending(&mut self, 
                         (nf, in_value): (Vec<u8>, u64),
                         extfvk: ExtendedFullViewingKey,
-                        to: PaymentAddress<Bls12>,
+                        to: PaymentAddress,
                         value: u64) -> TxId {
         let mut rng = OsRng;
 
@@ -183,22 +181,22 @@ impl FakeCompactBlock {
         // Create a fake Note for the payment
         ctx.outputs.push({
             let note = Note {
-                g_d: to.diversifier().g_d::<Bls12>(&JUBJUB).unwrap(),
+                g_d: to.diversifier().g_d().unwrap(),
                 pk_d: to.pk_d().clone(),
                 value: value.into(),
-                r: Fs::random(&mut rng),
+                rseed: Rseed::BeforeZip212(jubjub::Fr::random(rng)),
             };
             let encryptor = SaplingNoteEncryption::new(
-                extfvk.fvk.ovk,
+                Some(extfvk.fvk.ovk),
                 note.clone(),
                 to,
                 Memo::default(),
                 &mut rng,
             );
             let mut cmu = vec![];
-            cmu.extend_from_slice(&note.cm(&JUBJUB).to_repr().0);
+            cmu.extend_from_slice(&note.cmu().to_repr());
             let mut epk = vec![];
-            encryptor.epk().write(&mut epk).unwrap();
+            epk.extend_from_slice(&encryptor.epk().to_bytes());
             let enc_ciphertext = encryptor.encrypt_note_plaintext();
 
             let mut cout = CompactOutput::new();
@@ -212,22 +210,22 @@ impl FakeCompactBlock {
         ctx.outputs.push({
             let change_addr = extfvk.default_address().unwrap().1;
             let note = Note {
-                g_d: change_addr.diversifier().g_d::<Bls12>(&JUBJUB).unwrap(),
+                g_d: change_addr.diversifier().g_d().unwrap(),
                 pk_d: change_addr.pk_d().clone(),
                 value: (in_value - value).into(),
-                r: Fs::random(&mut rng),
+                rseed: Rseed::BeforeZip212(jubjub::Fr::random(rng)),
             };
             let encryptor = SaplingNoteEncryption::new(
-                extfvk.fvk.ovk,
+                Some(extfvk.fvk.ovk),
                 note.clone(),
                 change_addr,
                 Memo::default(),
                 &mut rng,
             );
             let mut cmu = vec![];
-            cmu.extend_from_slice(&note.cm(&JUBJUB).to_repr().0);
+            cmu.extend_from_slice(&note.cmu().to_repr());
             let mut epk = vec![];
-            encryptor.epk().write(&mut epk).unwrap();
+            epk.extend_from_slice(&encryptor.epk().to_bytes());
             let enc_ciphertext = encryptor.encrypt_note_plaintext();
 
             let mut cout = CompactOutput::new();

@@ -18,7 +18,7 @@ protobuf = "2"
 byteorder = "1"
 json = "0.12.0"
 tiny-bip39 = "0.6.2"
-secp256k1 = "=0.15.0"
+secp256k1 = "=0.19.0"
 sha2 = "0.8.0"
 ripemd160 = "0.8.0"
 lazy_static = "1.2.0"
@@ -40,39 +40,33 @@ tokio-rustls = { version = "0.13.0" }
 webpki = "0.21.0"
 webpki-roots = "0.18.0"
 
-[dependencies.bellman]
-git = "https://github.com/adityapk00/librustzcash.git"
-rev = "ff0ffc3d1b8bc36a0ad4b6b0f06aa3ca5900d3e4"
-default-features = false
-features = ["groth16"]
-
-[dependencies.pairing]
-git = "https://github.com/adityapk00/librustzcash.git"
-rev = "ff0ffc3d1b8bc36a0ad4b6b0f06aa3ca5900d3e4"
+bellman = { version = "0.8", default-features = false, features = ["groth16"] }
+pairing = "0.18.0"
+ff = "0.8"
+jubjub = "0.5.1"
+bls12_381 = "0.3.1"
+group = "0.8"
 
 [dependencies.zcash_client_backend]
-git = "https://github.com/adityapk00/librustzcash.git"
-rev = "ff0ffc3d1b8bc36a0ad4b6b0f06aa3ca5900d3e4"
+git = "https://github.com/adityapk00/librustzcash"
+rev = "34ef7fd2d6e9e5ccc2c03243d73b4b8c5a7fd0b1"
 default-features = false
 
 [dependencies.zcash_primitives]
-git = "https://github.com/adityapk00/librustzcash.git"
-rev = "ff0ffc3d1b8bc36a0ad4b6b0f06aa3ca5900d3e4"
+git = "https://github.com/adityapk00/librustzcash"
+rev = "34ef7fd2d6e9e5ccc2c03243d73b4b8c5a7fd0b1"
 default-features = false
 features = ["transparent-inputs"]
 
 [dependencies.zcash_proofs]
-git = "https://github.com/adityapk00/librustzcash.git"
-rev = "ff0ffc3d1b8bc36a0ad4b6b0f06aa3ca5900d3e4"
+git = "https://github.com/adityapk00/librustzcash"
+rev = "34ef7fd2d6e9e5ccc2c03243d73b4b8c5a7fd0b1"
 default-features = false
 
-[dependencies.ff]
-git = "https://github.com/adityapk00/librustzcash.git"
-rev = "ff0ffc3d1b8bc36a0ad4b6b0f06aa3ca5900d3e4"
-features = ["ff_derive"]
 
 [build-dependencies]
 tonic-build = "0.1.1"
 
 [dev-dependencies]
 tempdir = "0.3.7"
+
