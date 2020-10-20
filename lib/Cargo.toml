@@ -62,6 +62,7 @@ features = ["transparent-inputs"]
 git = "https://github.com/adityapk00/librustzcash"
 rev = "f125836e0b2e4aaa959ab60b0edd5071fbdece07"
 default-features = false
+features = ["multicore"]
 
 
 [build-dependencies]
