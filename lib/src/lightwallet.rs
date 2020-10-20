@@ -7,6 +7,7 @@ use std::io::{Error, ErrorKind};
 use std::convert::TryFrom;
 
 use threadpool::ThreadPool;
+use zcash_proofs::prover::LocalTxProver;
 use std::sync::mpsc::{channel};
 
 use rand::{Rng, rngs::OsRng};
@@ -53,7 +54,6 @@ mod data;
 mod extended_key;
 mod utils;
 mod address;
-mod prover;
 mod walletzkey;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
@@ -2192,7 +2192,7 @@ impl LightWallet {
         println!("{}: Building transaction", now() - start_time);
         let (tx, _) = match builder.build(
             BranchId::try_from(consensus_branch_id).unwrap(),
-            &prover::InMemTxProver::new(spend_params, output_params),
+            &LocalTxProver::from_bytes(spend_params, output_params),
         ) {
             Ok(res) => res,
             Err(e) => {
