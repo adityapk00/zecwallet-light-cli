@@ -24,7 +24,7 @@ use zcash_primitives::{
 
 use sha2::{Sha256, Digest};
 
-use super::{LightWallet};
+use super::{ENC_CIPHERTEXT_SIZE, LightWallet};
 use super::LightClientConfig;
 use crate::lightwallet::walletzkey::{WalletZKeyType};
 use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
@@ -288,6 +288,91 @@ impl FakeTransaction {
             sequence: 0,
         });
     }
+}
+
+
+
+#[test]
+fn enc_test() {
+    let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
+    wallet.add_zaddr();
+
+    let ivk = wallet.zkeys.read().unwrap().get(1).unwrap().extfvk.fvk.vk.ivk();
+    let to = wallet.zkeys.read().unwrap().get(1).unwrap().zaddress.clone();
+
+    let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
+
+    let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
+    let (dec, addr) = wallet.decrypt_message(ivk, epk, cmu, enc).unwrap();
+
+    assert_eq!(dec, msg);
+    assert_eq!(addr, to);
+}
+
+
+#[test]
+fn enc_test_bad_ivk() {
+    let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
+    wallet.add_zaddr();
+
+    let to = wallet.zkeys.read().unwrap().get(1).unwrap().zaddress.clone();
+
+    // The ivk and "to" are different, so decryption should fail 
+    let ivk_bad = wallet.zkeys.read().unwrap().get(0).unwrap().extfvk.fvk.vk.ivk();
+    // This is the correct IVK for the "to" address
+    let ivk_good = wallet.zkeys.read().unwrap().get(1).unwrap().extfvk.fvk.vk.ivk();
+    
+    let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
+
+    let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
+    let dec_success = wallet.decrypt_message(ivk_bad, epk, cmu, enc.clone());
+    assert!(dec_success.is_none());
+
+    let dec_success = wallet.decrypt_message(ivk_good, epk, cmu, enc.clone());
+    assert!(dec_success.is_some());
+    assert_eq!(dec_success.unwrap().0, msg);
+}
+
+#[test]
+fn enc_test_bad_epk_cmu() {
+    let mut rng = OsRng;
+
+    let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
+    wallet.add_zaddr();
+
+    let to = wallet.zkeys.read().unwrap().get(1).unwrap().zaddress.clone();
+    // This is the correct IVK for the "to" address
+    let ivk = wallet.zkeys.read().unwrap().get(1).unwrap().extfvk.fvk.vk.ivk();
+    
+    let msg_str = "Hello World with some value!";
+    let msg = Memo::from_bytes(msg_str.to_string().as_bytes()).unwrap();
+
+    let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
+
+    // Create a new, random EPK
+    let note = to.create_note(0,  Rseed::BeforeZip212(jubjub::Fr::random(&mut rng))).unwrap();
+    let esk = note.generate_or_derive_esk(&mut rng);
+    let epk_bad: jubjub::ExtendedPoint = (note.g_d * esk).into();
+
+    let dec_success = wallet.decrypt_message(ivk, epk_bad.to_bytes(), cmu, enc.clone());
+    assert!(dec_success.is_none());
+
+    // Bad CMU should fail
+    let dec_success = wallet.decrypt_message(ivk, epk, [1u8; 32], enc.clone());
+    assert!(dec_success.is_none());
+    
+    // Bad EPK and CMU should fail
+    let dec_success = wallet.decrypt_message(ivk, [0u8; 32], [1u8; 32], enc.clone());
+    assert!(dec_success.is_none());
+
+    // Bad payload
+    let dec_success = wallet.decrypt_message(ivk, epk, cmu, [0u8; ENC_CIPHERTEXT_SIZE].to_vec());
+    assert!(dec_success.is_none());
+
+    // This should finally work.
+    let dec_success = wallet.decrypt_message(ivk, epk, cmu, enc.clone());
+    assert!(dec_success.is_some());
+    assert_eq!(dec_success.unwrap().0.to_utf8().unwrap().unwrap(), msg_str);
 }
 
 #[test]

@@ -6,10 +6,13 @@ use std::sync::{Arc, RwLock};
 use std::io::{Error, ErrorKind};
 use std::convert::TryFrom;
 
+use ff::Field;
+use group::GroupEncoding;
+use jubjub::Fr;
 use threadpool::ThreadPool;
 use std::sync::mpsc::{channel};
 
-use rand::{Rng, rngs::OsRng};
+use rand::{CryptoRng, Rng, RngCore, rngs::OsRng};
 use subtle::{ConditionallySelectable, ConstantTimeEq, CtOption};
 use log::{info, warn, error};
 
@@ -30,25 +33,24 @@ use zcash_client_backend::{
     wallet::{WalletShieldedOutput, WalletShieldedSpend}
 };
 
-use zcash_primitives::{
-    block::BlockHash,
-    serialize::{Vector},
-    consensus::{MAIN_NETWORK, BranchId, BlockHeight},
-    transaction::{
+use zcash_primitives::{block::BlockHash, consensus::{MAIN_NETWORK, BranchId, BlockHeight}, consensus::TEST_NETWORK, keys::OutgoingViewingKey, legacy::{Script, TransparentAddress}, merkle_tree::{CommitmentTree, IncrementalWitness}, note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption}, note_encryption::OutgoingCipherKey, note_encryption::SaplingNoteEncryption, primitives::Rseed, primitives::{PaymentAddress}, primitives::ValueCommitment, sapling::Node, note_encryption::prf_ock, serialize::{Vector}, transaction::{
         builder::{Builder},
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
-    },
-    sapling::Node,
-    merkle_tree::{CommitmentTree, IncrementalWitness},
-    legacy::{Script, TransparentAddress},
-    note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption},
-    zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
-    primitives::{PaymentAddress},
-};
+    }, zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex}};
+
+
+const COMPACT_NOTE_SIZE: usize = 1 + // version
+    11 + // diversifier
+    8  + // value
+    32; // rcv
+const NOTE_PLAINTEXT_SIZE: usize = COMPACT_NOTE_SIZE + 512;
+const OUT_PLAINTEXT_SIZE: usize = 32 + // pk_d
+    32; // esk
+const ENC_CIPHERTEXT_SIZE: usize = NOTE_PLAINTEXT_SIZE + 16;
+const OUT_CIPHERTEXT_SIZE: usize = OUT_PLAINTEXT_SIZE + 16;
 
 use crate::lightclient::{LightClientConfig};
-
 mod data;
 mod extended_key;
 mod utils;
@@ -1203,6 +1205,75 @@ impl LightWallet {
                     self.add_zaddr();
                 }
             }
+        }
+    }
+
+    fn random_enc_ciphertext_with<R: RngCore + CryptoRng>(
+        pa: PaymentAddress,
+        m: String,
+        mut rng: &mut R,
+    ) -> (
+        OutgoingViewingKey,
+        OutgoingCipherKey,
+        jubjub::ExtendedPoint,
+        bls12_381::Scalar,
+        jubjub::ExtendedPoint,
+        [u8; ENC_CIPHERTEXT_SIZE],
+        [u8; OUT_CIPHERTEXT_SIZE],
+    ) {
+        // Construct the value commitment for the proof instance
+        let value = 0;
+        let value_commitment = ValueCommitment {
+            value,
+            randomness: jubjub::Fr::random(&mut rng),
+        };
+        let cv = value_commitment.commitment().into();
+
+        let rseed = Rseed::BeforeZip212(jubjub::Fr::random(&mut rng));
+
+        let note = pa.create_note(value, rseed).unwrap();
+        let cmu = note.cmu();
+
+        // Use a Random OVK that the caller can discard. 
+        // We could also get this from the user to make sure that the outgoing memo is decryptable.
+        let mut ovk_bytes = [0u8; 32];
+        rng.fill_bytes(&mut ovk_bytes);
+        let ovk = OutgoingViewingKey(ovk_bytes);
+
+        let memo = Memo::from_bytes(m.as_bytes()).unwrap();
+        let mut ne = SaplingNoteEncryption::new(Some(ovk), note, pa, memo, &mut rng);
+        let epk = ne.epk().clone().into();
+        let enc_ciphertext = ne.encrypt_note_plaintext();
+        let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv, &cmu);
+        let ock = prf_ock(&ovk, &cv, &cmu, &epk);
+
+        (ovk, ock, cv, cmu, epk, enc_ciphertext, out_ciphertext)
+    }
+
+    pub fn encrypt_message(&self, msg: Memo, to: PaymentAddress) -> Result<(Vec<u8>, [u8; 32], [u8; 32]), String> {
+        let mut rng = OsRng;
+        let msg_str = msg.to_utf8().ok_or("Invalid Memo".to_string())?.map_err(|_e| "UTF-8 errror".to_string())?;
+
+        let (_, _ock, _cv, cmu, epk, enc_ciphertext, _out_ciphertext) = 
+            LightWallet::random_enc_ciphertext_with(to, msg_str, &mut rng);
+
+        return Ok((enc_ciphertext.to_vec(), epk.to_bytes(), cmu.to_bytes()))
+    }
+
+    pub fn decrypt_message(&self, ivk: Fr, epk_bytes: [u8; 32], cmu_bytes: [u8; 32], enc_bytes: Vec<u8>) -> Option<(Memo, PaymentAddress)> {
+        let epk = jubjub::ExtendedPoint::from_bytes(&epk_bytes).unwrap();
+        let cmu = bls12_381::Scalar::from_bytes(&cmu_bytes).unwrap();
+        
+        if let Some((_, b, c)) = try_sapling_note_decryption(
+            &TEST_NETWORK, BlockHeight::from_u32(1_000_000), 
+            &ivk, &epk, &cmu, &enc_bytes) {
+                let m = Memo::from_bytes(c.as_bytes());
+                if m.is_none() {
+                    return None;
+                }
+                return Some((m.unwrap(), b));
+        } else {
+            return None
         }
     }
 
