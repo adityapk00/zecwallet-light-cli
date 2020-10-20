@@ -254,12 +254,7 @@ impl FakeTransaction {
     }
 
     fn new_with_txid(txid: TxId) -> Self {
-        FakeTransaction {
-            tx: Transaction {
-                txid,
-                data: TransactionData::new()
-            }
-        }
+        FakeTransaction { tx: Transaction::new(txid, TransactionData::new()) }
     }
 
     fn get_tx(&self) -> &Transaction {
@@ -272,14 +267,14 @@ impl FakeTransaction {
 
         let taddr_bytes = hash160.result();
 
-        self.tx.data.vout.push(TxOut {
+        self.tx.vout.push(TxOut {
             value: Amount::from_u64(value).unwrap(),
             script_pubkey: TransparentAddress::PublicKey(taddr_bytes.try_into().unwrap()).script(),
         });
     }
 
     fn add_t_input(&mut self, txid: TxId, n: u32) {
-        self.tx.data.vin.push(TxIn {
+        self.tx.vin.push(TxIn {
             prevout: OutPoint::new(txid.0, n),
             script_sig: Script{0: vec![]},
             sequence: 0,
