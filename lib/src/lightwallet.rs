@@ -1213,14 +1213,14 @@ impl LightWallet {
         // Scan all the inputs to see if we spent any transparent funds in this tx
         for vin in tx.vin.iter() {    
             // Find the txid in the list of utxos that we have.
-            let txid = TxId {0: vin.prevout.hash};
+            let txid = TxId {0: *vin.prevout.hash()};
             match self.txs.write().unwrap().get_mut(&txid) {
                 Some(wtx) => {
                     //println!("Looking for {}, {}", txid, vin.prevout.n);
 
                     // One of the tx outputs is a match
                     let spent_utxo = wtx.utxos.iter_mut()
-                        .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64));
+                        .find(|u| u.txid == txid && u.output_index == (vin.prevout.n() as u64));
 
                     match spent_utxo {
                         Some(su) => {

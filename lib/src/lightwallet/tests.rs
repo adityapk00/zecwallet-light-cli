@@ -280,10 +280,7 @@ impl FakeTransaction {
 
     fn add_t_input(&mut self, txid: TxId, n: u32) {
         self.tx.data.vin.push(TxIn {
-            prevout: OutPoint{
-                hash: txid.0,
-                n
-            },
+            prevout: OutPoint::new(txid.0, n),
             script_sig: Script{0: vec![]},
             sequence: 0,
         });
