@@ -49,21 +49,17 @@ group = "0.8"
 
 [dependencies.zcash_client_backend]
 git = "https://github.com/adityapk00/librustzcash"
-rev = "f125836e0b2e4aaa959ab60b0edd5071fbdece07"
+rev = "3cb555b2d4c4d05e95c5e9663fe91521a670ebfc"
 default-features = false
 
 [dependencies.zcash_primitives]
 git = "https://github.com/adityapk00/librustzcash"
-rev = "f125836e0b2e4aaa959ab60b0edd5071fbdece07"
-default-features = false
+rev = "3cb555b2d4c4d05e95c5e9663fe91521a670ebfc"
 features = ["transparent-inputs"]
 
 [dependencies.zcash_proofs]
 git = "https://github.com/adityapk00/librustzcash"
-rev = "f125836e0b2e4aaa959ab60b0edd5071fbdece07"
-default-features = false
-features = ["multicore"]
-
+rev = "3cb555b2d4c4d05e95c5e9663fe91521a670ebfc"
 
 [build-dependencies]
 tonic-build = "0.1.1"
