@@ -37,7 +37,7 @@ use zcash_primitives::{
     consensus::{MAIN_NETWORK, BranchId, BlockHeight},
     transaction::{
         builder::{Builder},
-        components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
+        components::{Amount, OutPoint, TxOut},
         TxId, Transaction, 
     },
     sapling::Node,
@@ -55,6 +55,8 @@ mod extended_key;
 mod utils;
 mod address;
 mod walletzkey;
+
+pub mod fee;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 use extended_key::{KeyIndex, ExtendedPrivKey};
@@ -2029,7 +2031,9 @@ impl LightWallet {
 
         // Select notes to cover the target value
         println!("{}: Selecting notes", now() - start_time);
-        let target_value = Amount::from_u64(total_value).unwrap() + DEFAULT_FEE ;
+        
+        let fee = fee::get_default_fee(height as i32);
+        let target_value = Amount::from_u64(total_value).unwrap() + Amount::from_u64(fee).unwrap();
 
         // Select the candidate notes that are eligible to be spent
         let mut candidate_notes: Vec<_> = if transparent_only {

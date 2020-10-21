@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use json::{object};
 
-use crate::lightclient::LightClient;
+use crate::{lightclient::LightClient, lightwallet};
 use crate::lightwallet::LightWallet;
 
 pub trait Command {
@@ -508,10 +508,6 @@ impl Command for SendCommand {
             return self.help();
         }
 
-        use std::convert::TryInto;
-        use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
-        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
-
         // Check for a single argument that can be parsed as JSON
         let send_args = if args.len() == 1 {
             let arg_list = args[0];
@@ -533,7 +529,10 @@ impl Command for SendCommand {
                     Err(format!("Need 'address' and 'amount'\n"))
                 } else {
                     let amount = match j["amount"].as_str() {
-                        Some("entire-verified-zbalance") => lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee),
+                        Some("entire-verified-zbalance") => {
+                            let fee = lightwallet::fee::get_default_fee(lightclient.wallet.read().unwrap().last_scanned_height());
+                            lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee)
+                        },
                         _ => Some(j["amount"].as_u64().unwrap())
                     };
 
@@ -556,6 +555,7 @@ impl Command for SendCommand {
                 Ok(amt) => amt,
                 Err(e)  => {
                     if args[1] == "entire-verified-zbalance" {
+                        let fee = lightwallet::fee::get_default_fee(lightclient.wallet.read().unwrap().last_scanned_height());
                         match lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee) {
                             Some(amt) => amt,
                             None => { return format!("Not enough in wallet to pay transaction fee") }
