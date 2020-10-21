@@ -1,4 +1,4 @@
-use std::{convert::TryInto, mem};
+use std::convert::TryInto;
 use rand::{RngCore, rngs::OsRng};
 
 use ff::{PrimeField, Field};
@@ -252,12 +252,11 @@ impl FakeTransaction {
         FakeTransaction{ txouts: vec![], txins: vec![] }
     }
 
-    fn get_tx(&self) -> Transaction {
+    fn get_tx(self) -> Transaction {
         let mut tx_data = TransactionData::new();
         tx_data.vin.extend_from_slice(&self.txins);
         tx_data.vout.extend_from_slice(&self.txouts);
 
-        mem::forget(self);
         tx_data.freeze().unwrap()
     }
 
