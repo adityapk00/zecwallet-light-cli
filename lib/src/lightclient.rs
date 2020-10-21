@@ -62,7 +62,6 @@ pub struct LightClientConfig {
     pub server                      : http::Uri,
     pub chain_name                  : String,
     pub sapling_activation_height   : u64,
-    pub consensus_branch_id         : String,
     pub anchor_offset               : u32,
     pub data_dir                    : Option<String>
 }
@@ -75,7 +74,6 @@ impl LightClientConfig {
             server                      : http::Uri::default(),
             chain_name                  : chain_name,
             sapling_activation_height   : 0,
-            consensus_branch_id         : "".to_string(),
             anchor_offset               : ANCHOR_OFFSET,
             data_dir                    : dir,
         }
@@ -98,7 +96,6 @@ impl LightClientConfig {
             server,
             chain_name                  : info.chain_name,
             sapling_activation_height   : info.sapling_activation_height,
-            consensus_branch_id         : info.consensus_branch_id,
             anchor_offset               : ANCHOR_OFFSET,
             data_dir                    : None,
         };
@@ -1519,11 +1516,12 @@ impl LightClient {
         }
 
         let addr = address.or(self.wallet.read().unwrap().get_all_zaddresses().get(0).map(|s| s.clone())).unwrap();
-        
+        let branch_id = self.fetch_consensus_branch_id()?;
+
         let result = {
             let _lock = self.sync_lock.lock().unwrap();
             self.wallet.read().unwrap().send_to_address(
-                u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(), 
+                branch_id,
                 &self.sapling_spend, &self.sapling_output, 
                 true, 
                 vec![(&addr, tbal - fee, None)],
@@ -1534,11 +1532,24 @@ impl LightClient {
         result.map(|(txid, _)| txid)
     }
 
+    fn fetch_consensus_branch_id(&self) -> Result<u32, String> { 
+        match get_info(&self.get_server_uri()) {
+            Ok(i) => match u32::from_str_radix(&i.consensus_branch_id, 16) {
+                Ok(id) => Ok(id),
+                Err(_) => Err(format!("Couldn't parse concensus branch ID {:?}", i.consensus_branch_id)),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
             return Err("Wallet is locked".to_string());
         }
+
+        // First, get the concensus branch ID
+        let branch_id = self.fetch_consensus_branch_id()?;
 
         info!("Creating transaction");
 
@@ -1546,7 +1557,7 @@ impl LightClient {
             let _lock = self.sync_lock.lock().unwrap();
         
             self.wallet.write().unwrap().send_to_address(
-                u32::from_str_radix(&self.config.consensus_branch_id, 16).unwrap(), 
+                branch_id, 
                 &self.sapling_spend, &self.sapling_output,
                 false,
                 addrs,

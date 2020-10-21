@@ -660,7 +660,6 @@ fn get_test_config() -> LightClientConfig {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "test".to_string(),
         sapling_activation_height: 0,
-        consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
         data_dir: None,
     }
@@ -672,7 +671,6 @@ fn get_main_config() -> LightClientConfig {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "main".to_string(),
         sapling_activation_height: 0,
-        consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
         data_dir: None,
     }
@@ -723,7 +721,6 @@ fn test_unconfirmed_txns() {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "test".to_string(),
         sapling_activation_height: 0,
-        consensus_branch_id: "000000".to_string(),
         anchor_offset: 5, // offset = 5
         data_dir: None,
     };
@@ -2238,7 +2235,6 @@ fn test_t_z_derivation() {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "main".to_string(),
         sapling_activation_height: 0,
-        consensus_branch_id: "000000".to_string(),
         anchor_offset: 1,
         data_dir: None,
     };
@@ -2394,7 +2390,6 @@ fn test_import_birthday_adjust() {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "main".to_string(),
         sapling_activation_height: 5,
-        consensus_branch_id: "000000".to_string(),
         anchor_offset: 0,
         data_dir: None,
     };
