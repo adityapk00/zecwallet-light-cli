@@ -528,9 +528,9 @@ impl Command for SendCommand {
                 if !j.has_key("address") || !j.has_key("amount") {
                     Err(format!("Need 'address' and 'amount'\n"))
                 } else {
+                    let fee = lightwallet::fee::get_default_fee(lightclient.wallet.read().unwrap().last_scanned_height());
                     let amount = match j["amount"].as_str() {
-                        Some("entire-verified-zbalance") => {
-                            let fee = lightwallet::fee::get_default_fee(lightclient.wallet.read().unwrap().last_scanned_height());
+                        Some("entire-verified-zbalance") => {                            
                             lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee)
                         },
                         _ => Some(j["amount"].as_u64().unwrap())
@@ -538,7 +538,7 @@ impl Command for SendCommand {
 
                     match amount {
                         Some(amt) => Ok((j["address"].as_str().unwrap().to_string().clone(), amt, j["memo"].as_str().map(|s| s.to_string().clone()))),
-                        None => Err(format!("Not enough in wallet to pay transaction fee"))
+                        None => Err(format!("Not enough in wallet to pay transaction fee of {}", fee))
                     }
                 }
             }).collect::<Result<Vec<(String, u64, Option<String>)>, String>>();
@@ -558,7 +558,7 @@ impl Command for SendCommand {
                         let fee = lightwallet::fee::get_default_fee(lightclient.wallet.read().unwrap().last_scanned_height());
                         match lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee) {
                             Some(amt) => amt,
-                            None => { return format!("Not enough in wallet to pay transaction fee") }
+                            None => { return format!("Not enough in wallet to pay transaction fee of {}", fee) }
                         }
                     } else {
                         return format!("Couldn't parse amount: {}", e);
