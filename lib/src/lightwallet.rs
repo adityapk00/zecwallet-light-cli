@@ -33,7 +33,7 @@ use zcash_client_backend::{
     wallet::{WalletShieldedOutput, WalletShieldedSpend}
 };
 
-use zcash_primitives::{block::BlockHash, consensus::{MAIN_NETWORK, BranchId, BlockHeight}, consensus::TEST_NETWORK, keys::OutgoingViewingKey, legacy::{Script, TransparentAddress}, merkle_tree::{CommitmentTree, IncrementalWitness}, note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption}, note_encryption::OutgoingCipherKey, note_encryption::SaplingNoteEncryption, primitives::Rseed, primitives::{PaymentAddress}, primitives::ValueCommitment, sapling::Node, note_encryption::prf_ock, serialize::{Vector}, transaction::{
+use zcash_primitives::{block::BlockHash, consensus::{MAIN_NETWORK, BranchId, BlockHeight}, keys::OutgoingViewingKey, legacy::{Script, TransparentAddress}, merkle_tree::{CommitmentTree, IncrementalWitness}, note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption}, note_encryption::OutgoingCipherKey, note_encryption::SaplingNoteEncryption, primitives::Rseed, primitives::{PaymentAddress}, primitives::ValueCommitment, sapling::Node, note_encryption::prf_ock, serialize::{Vector}, transaction::{
         builder::{Builder},
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
@@ -1208,73 +1208,112 @@ impl LightWallet {
         }
     }
 
-    fn random_enc_ciphertext_with<R: RngCore + CryptoRng>(
+    fn encrypt_message_to<R: RngCore + CryptoRng>(
+        &self,
         pa: PaymentAddress,
-        m: String,
+        ovk: Option<OutgoingViewingKey>,
+        msg: String,
         mut rng: &mut R,
-    ) -> (
-        OutgoingViewingKey,
-        OutgoingCipherKey,
-        jubjub::ExtendedPoint,
-        bls12_381::Scalar,
-        jubjub::ExtendedPoint,
-        [u8; ENC_CIPHERTEXT_SIZE],
-        [u8; OUT_CIPHERTEXT_SIZE],
-    ) {
-        // Construct the value commitment for the proof instance
+    ) -> Result<(
+            Option<OutgoingCipherKey>,
+            jubjub::ExtendedPoint,
+            bls12_381::Scalar,
+            jubjub::ExtendedPoint,
+            [u8; ENC_CIPHERTEXT_SIZE],
+            [u8; OUT_CIPHERTEXT_SIZE]), String> 
+    {
+        // 0-value note
         let value = 0;
+
+        // Construct the value commitment, used if an OVK was supplied to create out_ciphertext
         let value_commitment = ValueCommitment {
             value,
             randomness: jubjub::Fr::random(&mut rng),
         };
         let cv = value_commitment.commitment().into();
 
+        // Use a rseed from pre-canopy. It doesn't really matter, but this is what is tested out. 
         let rseed = Rseed::BeforeZip212(jubjub::Fr::random(&mut rng));
 
+        // 0-value note with the rseed
         let note = pa.create_note(value, rseed).unwrap();
+
+        // CMU is used in the out_cuphertext. Technically this is not needed to recover the note 
+        // by the receiver, but it is needed to recover the note by the sender. 
         let cmu = note.cmu();
 
-        // Use a Random OVK that the caller can discard. 
-        // We could also get this from the user to make sure that the outgoing memo is decryptable.
-        let mut ovk_bytes = [0u8; 32];
-        rng.fill_bytes(&mut ovk_bytes);
-        let ovk = OutgoingViewingKey(ovk_bytes);
+        // Create a memo from the String. This might error out if the memo is invalid. 
+        let memo = Memo::from_bytes(msg.as_bytes()).ok_or("Bad Memo")?;
 
-        let memo = Memo::from_bytes(m.as_bytes()).unwrap();
-        let mut ne = SaplingNoteEncryption::new(Some(ovk), note, pa, memo, &mut rng);
+        // Create the note encrytion object
+        let mut ne = SaplingNoteEncryption::new(ovk, note, pa, memo, &mut rng);
+
+        // EPK, which needs to be sent to the reciever. 
         let epk = ne.epk().clone().into();
+
+        // enc_ciphertext is the encrypted note, out_ciphertext is the outgoing cipher text that the 
+        // sender can recover
         let enc_ciphertext = ne.encrypt_note_plaintext();
         let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv, &cmu);
-        let ock = prf_ock(&ovk, &cv, &cmu, &epk);
 
-        (ovk, ock, cv, cmu, epk, enc_ciphertext, out_ciphertext)
+        // OCK is used to recover outgoing encrypted notes
+        let ock = if ovk.is_some() {
+            Some(prf_ock(&ovk.unwrap(), &cv, &cmu, &epk))
+        } else {
+            None
+        };
+
+        Ok((ock, cv, cmu, epk, enc_ciphertext, out_ciphertext))
     }
 
     pub fn encrypt_message(&self, msg: Memo, to: PaymentAddress) -> Result<(Vec<u8>, [u8; 32], [u8; 32]), String> {
         let mut rng = OsRng;
-        let msg_str = msg.to_utf8().ok_or("Invalid Memo".to_string())?.map_err(|_e| "UTF-8 errror".to_string())?;
+        let msg_str = msg.to_utf8() // Memo -> UTF-8
+                                .ok_or("Invalid Memo".to_string())? // Check if memo is valid
+                                .map_err(|_e| "UTF-8 errror".to_string())?; // Check if UTF-8 is valid
 
-        let (_, _ock, _cv, cmu, epk, enc_ciphertext, _out_ciphertext) = 
-            LightWallet::random_enc_ciphertext_with(to, msg_str, &mut rng);
+        // Encrypt To address. We're using a 'NONE' OVK here, so the out_ciphertext is not recoverable.
+        let (_ock, _cv, cmu, epk, enc_ciphertext, _out_ciphertext) = 
+            self.encrypt_message_to(to, None, msg_str, &mut rng)?;
 
-        return Ok((enc_ciphertext.to_vec(), epk.to_bytes(), cmu.to_bytes()))
+        Ok((enc_ciphertext.to_vec(), epk.to_bytes(), cmu.to_bytes()))
     }
 
-    pub fn decrypt_message(&self, ivk: Fr, epk_bytes: [u8; 32], cmu_bytes: [u8; 32], enc_bytes: Vec<u8>) -> Option<(Memo, PaymentAddress)> {
-        let epk = jubjub::ExtendedPoint::from_bytes(&epk_bytes).unwrap();
-        let cmu = bls12_381::Scalar::from_bytes(&cmu_bytes).unwrap();
-        
-        if let Some((_, b, c)) = try_sapling_note_decryption(
-            &TEST_NETWORK, BlockHeight::from_u32(1_000_000), 
-            &ivk, &epk, &cmu, &enc_bytes) {
-                let m = Memo::from_bytes(c.as_bytes());
-                if m.is_none() {
-                    return None;
-                }
-                return Some((m.unwrap(), b));
-        } else {
-            return None
+    fn decrypt_message_for_ivk(&self, ivk: Fr, epk_bytes: [u8; 32], cmu_bytes: [u8; 32], enc_bytes: Vec<u8>) -> Option<(Memo, PaymentAddress)> {
+        let epk = jubjub::ExtendedPoint::from_bytes(&epk_bytes);
+        if epk.is_none().into() {
+            return None;
         }
+
+        let cmu = bls12_381::Scalar::from_bytes(&cmu_bytes);
+        if cmu.is_none().into() {
+            return None;
+        }
+        
+        // Attempt decryption. We attempt at main_network at 1,000,000 height, but it doesn't 
+        // really apply, since this note is not spendable anyway, so the rseed and the note iteself
+        // are not usable. 
+        match try_sapling_note_decryption(&MAIN_NETWORK, BlockHeight::from_u32(1_000_000), 
+            &ivk, &epk.unwrap(), &cmu.unwrap(), &enc_bytes) {
+            Some((_note, address, memo)) => Some((memo, address)),
+            None => None
+        } 
+    }
+
+    pub fn decrypt_message(&self, epk_bytes: [u8; 32], cmu_bytes: [u8; 32], enc_bytes: Vec<u8>) -> Option<(Memo, PaymentAddress)> {
+        // Collect all the ivks in the wallet
+        let ivks: Vec<_> = self.zkeys.read().unwrap().iter().map(|zk| zk.extfvk.fvk.vk.ivk()).collect();
+
+        // Attempt decryption with all available ivks, one at a time. This is pretty fast, so need need for fancy multithreading
+        for ivk in ivks {
+            if let Some((memo, address)) = self.decrypt_message_for_ivk(ivk, epk_bytes, cmu_bytes, enc_bytes.clone()) {
+                // If decryption succeeded for this IVK, return the decrypted memo and the matched address
+                return Some((memo, address))
+            }
+        }
+
+        // If nothing matched
+        None
     }
 
     // Scan the full Tx and update memos for incoming shielded transactions.

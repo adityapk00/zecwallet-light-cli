@@ -303,8 +303,13 @@ fn enc_test() {
     let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
 
     let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
-    let (dec, addr) = wallet.decrypt_message(ivk, epk, cmu, enc).unwrap();
+    let (dec, addr) = wallet.decrypt_message_for_ivk(ivk, epk, cmu, enc.clone()).unwrap();
 
+    assert_eq!(dec, msg);
+    assert_eq!(addr, to);
+
+    // Also attempt decryption with all addresses
+    let (dec, addr) = wallet.decrypt_message(epk, cmu, enc).unwrap();
     assert_eq!(dec, msg);
     assert_eq!(addr, to);
 }
@@ -325,10 +330,10 @@ fn enc_test_bad_ivk() {
     let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
 
     let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
-    let dec_success = wallet.decrypt_message(ivk_bad, epk, cmu, enc.clone());
+    let dec_success = wallet.decrypt_message_for_ivk(ivk_bad, epk, cmu, enc.clone());
     assert!(dec_success.is_none());
 
-    let dec_success = wallet.decrypt_message(ivk_good, epk, cmu, enc.clone());
+    let dec_success = wallet.decrypt_message_for_ivk(ivk_good, epk, cmu, enc.clone());
     assert!(dec_success.is_some());
     assert_eq!(dec_success.unwrap().0, msg);
 }
@@ -354,23 +359,23 @@ fn enc_test_bad_epk_cmu() {
     let esk = note.generate_or_derive_esk(&mut rng);
     let epk_bad: jubjub::ExtendedPoint = (note.g_d * esk).into();
 
-    let dec_success = wallet.decrypt_message(ivk, epk_bad.to_bytes(), cmu, enc.clone());
+    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk_bad.to_bytes(), cmu, enc.clone());
     assert!(dec_success.is_none());
 
     // Bad CMU should fail
-    let dec_success = wallet.decrypt_message(ivk, epk, [1u8; 32], enc.clone());
+    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk, [1u8; 32], enc.clone());
     assert!(dec_success.is_none());
     
     // Bad EPK and CMU should fail
-    let dec_success = wallet.decrypt_message(ivk, [0u8; 32], [1u8; 32], enc.clone());
+    let dec_success = wallet.decrypt_message_for_ivk(ivk, [0u8; 32], [1u8; 32], enc.clone());
     assert!(dec_success.is_none());
 
     // Bad payload
-    let dec_success = wallet.decrypt_message(ivk, epk, cmu, [0u8; ENC_CIPHERTEXT_SIZE].to_vec());
+    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk, cmu, [0u8; ENC_CIPHERTEXT_SIZE].to_vec());
     assert!(dec_success.is_none());
 
     // This should finally work.
-    let dec_success = wallet.decrypt_message(ivk, epk, cmu, enc.clone());
+    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk, cmu, enc.clone());
     assert!(dec_success.is_some());
     assert_eq!(dec_success.unwrap().0.to_utf8().unwrap().unwrap(), msg_str);
 }
