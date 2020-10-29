@@ -22,7 +22,7 @@ pub fn write_string<W: Write>(mut writer: W, s: &String) -> io::Result<()> {
 }
 
 // Interpret a string or hex-encoded memo, and return a Memo object
-pub fn interpret_memo_string(memo_str: &String) -> Result<Memo, String> {
+pub fn interpret_memo_string(memo_str: String) -> Result<Memo, String> {
     // If the string starts with an "0x", and contains only hex chars ([a-f0-9]+) then
     // interpret it as a hex
     let s_bytes = if memo_str.to_lowercase().starts_with("0x") {

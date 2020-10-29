@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use json::{object};
 
-use crate::lightclient::LightClient;
+use crate::{lightclient::LightClient, lightwallet::utils};
 use crate::lightwallet::LightWallet;
 
 pub trait Command {
@@ -475,6 +475,102 @@ impl Command for ShieldCommand {
     }
 }
 
+struct EncryptMessageCommand {}
+impl Command for EncryptMessageCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Encrypt a memo to be sent to a z-address offline");
+        h.push("Usage:");
+        h.push("encryptmessage <address> \"memo\"");
+        h.push("OR");
+        h.push("encryptmessage \"{'address': <address>, 'memo': <memo>}\" ");
+        h.push("");
+        h.push("NOTE: This command only returns the encrypted payload. It does not broadcast it. You are expected to send the encrypted payload to the recipient offline");
+        h.push("Example:");
+        h.push("encryptmessage ztestsapling1x65nq4dgp0qfywgxcwk9n0fvm4fysmapgr2q00p85ju252h6l7mmxu2jg9cqqhtvzd69jwhgv8d \"Hello from the command line\"");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Encrypt a memo to be sent to a z-address offline".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {        
+        if args.len() < 1 || args.len() > 3 {
+            return self.help();
+        }
+
+        // Check for a single argument that can be parsed as JSON
+        let (to, memo) = if args.len() == 1 {
+            let arg_list = args[0];
+            let j = match json::parse(&arg_list) {
+                Ok(j)  => j,
+                Err(e) => {
+                    let es = format!("Couldn't understand JSON: {}", e);
+                    return format!("{}\n{}", es, self.help());
+                }
+            };
+
+            if !j.has_key("address") || !j.has_key("memo") {
+                let es = format!("Need 'address' and 'memo'\n");
+                return format!("{}\n{}", es, self.help());
+            } 
+
+            let memo = utils::interpret_memo_string(j["memo"].as_str().unwrap().to_string());
+            if memo.is_err() {
+                return format!("{}\n{}", memo.err().unwrap(), self.help());
+            }
+            let to = j["address"].as_str().unwrap().to_string();
+
+            (to, memo.unwrap())
+        } else if args.len() == 2 {
+            let to = args[0].to_string();
+
+            let memo = utils::interpret_memo_string(args[1].to_string());
+            if memo.is_err() {
+                return format!("{}\n{}", memo.err().unwrap(), self.help());
+            }
+
+            (to, memo.unwrap())
+        } else {
+            return  format!("Wrong number of arguments. Was expecting 1 or 2\n{}", self.help());
+        };
+
+        lightclient.do_encrypt_message(to, memo).pretty(2)
+    }
+}
+
+
+
+struct DecryptMessageCommand {}
+impl Command for DecryptMessageCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Attempt to decrypt a message with all the view keys in the wallet.");
+        h.push("Usage:");
+        h.push("decryptmessage \"encrypted_message_base64\"");
+        h.push("");
+        h.push("Example:");
+        h.push("decryptmessage RW5jb2RlIGFyYml0cmFyeSBvY3RldHMgYXMgYmFzZTY0LiBSZXR1cm5zIGEgU3RyaW5nLg==");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Attempt to decrypt a message with all the view keys in the wallet.".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {        
+        if args.len() != 1 {
+            return self.help();
+        }
+
+        lightclient.do_decrypt_message(args[0].to_string()).pretty(2)
+    }
+}
 
 struct SendCommand {}
 impl Command for SendCommand {
@@ -502,8 +598,6 @@ impl Command for SendCommand {
         // Parse the args. There are two argument types.
         // 1 - A set of 2(+1 optional) arguments for a single address send representing address, value, memo?
         // 2 - A single argument in the form of a JSON string that is "[{address: address, value: value, memo: memo},...]"
-
-        // 1 - Destination address. T or Z address
         if args.len() < 1 || args.len() > 3 {
             return self.help();
         }
@@ -888,6 +982,8 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("sync".to_string(),              Box::new(SyncCommand{}));
     map.insert("syncstatus".to_string(),        Box::new(SyncStatusCommand{}));
     map.insert("encryptionstatus".to_string(),  Box::new(EncryptionStatusCommand{}));
+    map.insert("encryptmessage".to_string(),    Box::new(EncryptMessageCommand{}));
+    map.insert("decryptmessage".to_string(),    Box::new(DecryptMessageCommand{}));
     map.insert("rescan".to_string(),            Box::new(RescanCommand{}));
     map.insert("clear".to_string(),             Box::new(ClearCommand{}));
     map.insert("help".to_string(),              Box::new(HelpCommand{}));

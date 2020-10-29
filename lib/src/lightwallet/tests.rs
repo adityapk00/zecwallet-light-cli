@@ -24,7 +24,7 @@ use zcash_primitives::{
 
 use sha2::{Sha256, Digest};
 
-use super::{ENC_CIPHERTEXT_SIZE, LightWallet};
+use super::{LightWallet, message};
 use super::LightClientConfig;
 use crate::lightwallet::walletzkey::{WalletZKeyType};
 use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
@@ -290,10 +290,8 @@ impl FakeTransaction {
     }
 }
 
-
-
 #[test]
-fn enc_test() {
+fn test_encrypt_message() {
     let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
     wallet.add_zaddr();
 
@@ -302,83 +300,18 @@ fn enc_test() {
 
     let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
 
-    let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
-    let (dec, addr) = wallet.decrypt_message_for_ivk(ivk, epk, cmu, enc.clone()).unwrap();
+    let enc = message::Message::new(to.clone(), msg.clone()).encrypt().unwrap();
+    let dec_msg = message::Message::decrypt(&enc.clone(), ivk).unwrap();
 
-    assert_eq!(dec, msg);
-    assert_eq!(addr, to);
+    assert_eq!(dec_msg.memo, msg);
+    assert_eq!(dec_msg.to, to);
 
     // Also attempt decryption with all addresses
-    let (dec, addr) = wallet.decrypt_message(epk, cmu, enc).unwrap();
-    assert_eq!(dec, msg);
-    assert_eq!(addr, to);
+    let dec_msg = wallet.decrypt_message(enc).unwrap();
+    assert_eq!(dec_msg.memo, msg);
+    assert_eq!(dec_msg.to, to);
 }
 
-
-#[test]
-fn enc_test_bad_ivk() {
-    let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
-    wallet.add_zaddr();
-
-    let to = wallet.zkeys.read().unwrap().get(1).unwrap().zaddress.clone();
-
-    // The ivk and "to" are different, so decryption should fail 
-    let ivk_bad = wallet.zkeys.read().unwrap().get(0).unwrap().extfvk.fvk.vk.ivk();
-    // This is the correct IVK for the "to" address
-    let ivk_good = wallet.zkeys.read().unwrap().get(1).unwrap().extfvk.fvk.vk.ivk();
-    
-    let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
-
-    let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
-    let dec_success = wallet.decrypt_message_for_ivk(ivk_bad, epk, cmu, enc.clone());
-    assert!(dec_success.is_none());
-
-    let dec_success = wallet.decrypt_message_for_ivk(ivk_good, epk, cmu, enc.clone());
-    assert!(dec_success.is_some());
-    assert_eq!(dec_success.unwrap().0, msg);
-}
-
-#[test]
-fn enc_test_bad_epk_cmu() {
-    let mut rng = OsRng;
-
-    let wallet = LightWallet::new(None, &get_test_config(), 0).unwrap();
-    wallet.add_zaddr();
-
-    let to = wallet.zkeys.read().unwrap().get(1).unwrap().zaddress.clone();
-    // This is the correct IVK for the "to" address
-    let ivk = wallet.zkeys.read().unwrap().get(1).unwrap().extfvk.fvk.vk.ivk();
-    
-    let msg_str = "Hello World with some value!";
-    let msg = Memo::from_bytes(msg_str.to_string().as_bytes()).unwrap();
-
-    let (enc, epk, cmu) = wallet.encrypt_message(msg.clone(), to.clone()).unwrap();
-
-    // Create a new, random EPK
-    let note = to.create_note(0,  Rseed::BeforeZip212(jubjub::Fr::random(&mut rng))).unwrap();
-    let esk = note.generate_or_derive_esk(&mut rng);
-    let epk_bad: jubjub::ExtendedPoint = (note.g_d * esk).into();
-
-    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk_bad.to_bytes(), cmu, enc.clone());
-    assert!(dec_success.is_none());
-
-    // Bad CMU should fail
-    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk, [1u8; 32], enc.clone());
-    assert!(dec_success.is_none());
-    
-    // Bad EPK and CMU should fail
-    let dec_success = wallet.decrypt_message_for_ivk(ivk, [0u8; 32], [1u8; 32], enc.clone());
-    assert!(dec_success.is_none());
-
-    // Bad payload
-    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk, cmu, [0u8; ENC_CIPHERTEXT_SIZE].to_vec());
-    assert!(dec_success.is_none());
-
-    // This should finally work.
-    let dec_success = wallet.decrypt_message_for_ivk(ivk, epk, cmu, enc.clone());
-    assert!(dec_success.is_some());
-    assert_eq!(dec_success.unwrap().0.to_utf8().unwrap().unwrap(), msg_str);
-}
 
 #[test]
 fn test_z_balances() {
@@ -1305,14 +1238,14 @@ fn test_multi_z() {
         assert_eq!(txs[&sent_txid].notes[change_note_number].is_change, true);
         assert_eq!(txs[&sent_txid].notes[change_note_number].spent, None);
         assert_eq!(txs[&sent_txid].notes[change_note_number].unconfirmed_spent, None);
-        assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[change_note_number].memo), None);
+        assert_eq!(LightWallet::memo_str(txs[&sent_txid].notes[change_note_number].memo.clone()), None);
 
         assert_eq!(txs[&sent_txid].notes[ext_note_number].note.value, AMOUNT_SENT);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].extfvk, wallet.zkeys.read().unwrap()[6].extfvk);  // The new addr is added after the change addresses
         assert_eq!(txs[&sent_txid].notes[ext_note_number].is_change, false);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].spent, None);
         assert_eq!(txs[&sent_txid].notes[ext_note_number].unconfirmed_spent, None);
-        assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[ext_note_number].memo), Some(outgoing_memo.clone()));
+        assert_eq!(LightWallet::memo_str(txs[&sent_txid].notes[ext_note_number].memo.clone()), Some(outgoing_memo.clone()));
 
         assert_eq!(txs[&sent_txid].total_shielded_value_spent, AMOUNT1);
 
@@ -1425,7 +1358,7 @@ fn test_z_spend_to_taddr() {
         assert_eq!(txs[&sent_txid2].outgoing_metadata.len(), 1);
         assert_eq!(txs[&sent_txid2].outgoing_metadata[0].address, taddr);
         assert_eq!(txs[&sent_txid2].outgoing_metadata[0].value, AMOUNT_SENT);
-        assert_eq!(LightWallet::memo_str(&Some(txs[&sent_txid2].outgoing_metadata[0].memo.clone())), None);
+        assert_eq!(LightWallet::memo_str(Some(txs[&sent_txid2].outgoing_metadata[0].memo.clone())), None);
     }
 
     // Now add the block
@@ -1440,7 +1373,7 @@ fn test_z_spend_to_taddr() {
         assert_eq!(txs[&sent_txid2].outgoing_metadata.len(), 1);
         assert_eq!(txs[&sent_txid2].outgoing_metadata[0].address, taddr);
         assert_eq!(txs[&sent_txid2].outgoing_metadata[0].value, AMOUNT_SENT);
-        assert_eq!(LightWallet::memo_str(&Some(txs[&sent_txid2].outgoing_metadata[0].memo.clone())), None);
+        assert_eq!(LightWallet::memo_str(Some(txs[&sent_txid2].outgoing_metadata[0].memo.clone())), None);
     }
 }
 
@@ -1644,7 +1577,7 @@ fn test_z_incoming_memo() {
         assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.zkeys.read().unwrap()[0].extfvk);
         assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - fee);
         assert_eq!(LightWallet::note_address(wallet.config.hrp_sapling_address(), &txs[&sent_txid].notes[0]), Some(my_address));
-        assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[0].memo), Some(memo));
+        assert_eq!(LightWallet::memo_str(txs[&sent_txid].notes[0].memo.clone()), Some(memo));
     }
 }
 
@@ -1693,7 +1626,7 @@ fn test_z_incoming_hex_memo() {
         assert_eq!(txs[&sent_txid].notes[0].extfvk, wallet.zkeys.read().unwrap()[0].extfvk);
         assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT1 - fee);
         assert_eq!(LightWallet::note_address(wallet.config.hrp_sapling_address(), &txs[&sent_txid].notes[0]), Some(my_address));
-        assert_eq!(LightWallet::memo_str(&txs[&sent_txid].notes[0].memo), Some(orig_memo));
+        assert_eq!(LightWallet::memo_str(txs[&sent_txid].notes[0].memo.clone()), Some(orig_memo));
     }
 }
 
@@ -1980,7 +1913,7 @@ fn test_multi_spends() {
         assert_eq!(zaddr2_note.is_change, false);
         assert_eq!(zaddr2_note.spent, None);
         assert_eq!(zaddr2_note.unconfirmed_spent, None);
-        assert_eq!(LightWallet::memo_str(&zaddr2_note.memo), Some(outgoing_memo2));
+        assert_eq!(LightWallet::memo_str(zaddr2_note.memo.clone()), Some(outgoing_memo2));
 
         // Find zaddr3
         let zaddr3_note = txs[&sent_txid].notes.iter().find(|n| n.note.value == ZAMOUNT3).unwrap();
@@ -1988,7 +1921,7 @@ fn test_multi_spends() {
         assert_eq!(zaddr3_note.is_change, false);
         assert_eq!(zaddr3_note.spent, None);
         assert_eq!(zaddr3_note.unconfirmed_spent, None);
-        assert_eq!(LightWallet::memo_str(&zaddr3_note.memo), Some(outgoing_memo3));
+        assert_eq!(LightWallet::memo_str(zaddr3_note.memo.clone()), Some(outgoing_memo3));
 
         // Find taddr2
         let utxo2 = txs[&sent_txid].utxos.iter().find(|u| u.value == TAMOUNT2).unwrap();
@@ -2048,12 +1981,12 @@ fn test_multi_spends() {
         // Find the znote
         let zoutgoing = txs[&sent_txid2].outgoing_metadata.iter().find(|o| o.address == ext_address).unwrap();
         assert_eq!(zoutgoing.value, EXT_ZADDR_AMOUNT);
-        assert_eq!(LightWallet::memo_str(&Some(zoutgoing.memo.clone())), Some(ext_memo));
+        assert_eq!(LightWallet::memo_str(Some(zoutgoing.memo.clone())), Some(ext_memo));
 
         // Find the taddr
         let toutgoing = txs[&sent_txid2].outgoing_metadata.iter().find(|o| o.address == ext_taddr).unwrap();
         assert_eq!(toutgoing.value, ext_taddr_amount);
-        assert_eq!(LightWallet::memo_str(&Some(toutgoing.memo.clone())), None);
+        assert_eq!(LightWallet::memo_str(Some(toutgoing.memo.clone())), None);
     }
 }
 
@@ -2837,7 +2770,7 @@ fn test_encrypted_zreceive() {
         assert_eq!(zaddr2_note.is_change, false);
         assert_eq!(zaddr2_note.spent, None);
         assert_eq!(zaddr2_note.unconfirmed_spent, None);
-        assert_eq!(LightWallet::memo_str(&zaddr2_note.memo), Some(outgoing_memo2));
+        assert_eq!(LightWallet::memo_str(zaddr2_note.memo.clone()), Some(outgoing_memo2));
     }
 }
 

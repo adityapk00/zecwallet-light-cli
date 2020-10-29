@@ -2680,6 +2680,7 @@ name = "zecwalletlitelib"
 version = "0.1.0"
 dependencies = [
  "base58 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "base64 0.12.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bellman 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "blake2b_simd 0.5.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "bls12_381 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
