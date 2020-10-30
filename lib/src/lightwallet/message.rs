@@ -248,10 +248,26 @@ pub mod tests {
         let dec_success = Message::decrypt(&bad_enc, ivk);
         assert!(dec_success.is_err());
 
-        // Bad payload
+        // Bad payload 1
         let mut bad_enc = enc.clone();
         bad_enc.splice(65.., [0u8; ENC_CIPHERTEXT_SIZE].to_vec());
         let dec_success = Message::decrypt(&bad_enc, ivk);
+        assert!(dec_success.is_err());
+
+        // Bad payload 2
+        let mut bad_enc = enc.clone();
+        bad_enc.reverse();
+        let dec_success = Message::decrypt(&bad_enc, ivk);
+        assert!(dec_success.is_err());
+
+        // Bad payload 3
+        let c = enc.clone();
+        let (bad_enc, _) = c.split_at(bad_enc.len() - 1);
+        let dec_success = Message::decrypt(&bad_enc, ivk);
+        assert!(dec_success.is_err());
+        
+        // Bad payload 4
+        let dec_success = Message::decrypt(&[], ivk);
         assert!(dec_success.is_err());
 
         // This should finally work.
