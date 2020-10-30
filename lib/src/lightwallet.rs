@@ -7,6 +7,7 @@ use std::io::{Error, ErrorKind};
 use std::convert::TryFrom;
 
 use threadpool::ThreadPool;
+use zcash_proofs::prover::LocalTxProver;
 use std::sync::mpsc::{channel};
 
 use rand::{Rng, rngs::OsRng};
@@ -48,7 +49,6 @@ mod data;
 mod extended_key;
 pub mod utils;
 mod address;
-mod prover;
 mod walletzkey;
 pub(crate) mod message;
 
@@ -1227,14 +1227,14 @@ impl LightWallet {
         // Scan all the inputs to see if we spent any transparent funds in this tx
         for vin in tx.vin.iter() {    
             // Find the txid in the list of utxos that we have.
-            let txid = TxId {0: vin.prevout.hash};
+            let txid = TxId {0: *vin.prevout.hash()};
             match self.txs.write().unwrap().get_mut(&txid) {
                 Some(wtx) => {
                     //println!("Looking for {}, {}", txid, vin.prevout.n);
 
                     // One of the tx outputs is a match
                     let spent_utxo = wtx.utxos.iter_mut()
-                        .find(|u| u.txid == txid && u.output_index == (vin.prevout.n as u64));
+                        .find(|u| u.txid == txid && u.output_index == (vin.prevout.n() as u64));
 
                     match spent_utxo {
                         Some(su) => {
@@ -2206,7 +2206,7 @@ impl LightWallet {
         println!("{}: Building transaction", now() - start_time);
         let (tx, _) = match builder.build(
             BranchId::try_from(consensus_branch_id).unwrap(),
-            &prover::InMemTxProver::new(spend_params, output_params),
+            &LocalTxProver::from_bytes(spend_params, output_params),
         ) {
             Ok(res) => res,
             Err(e) => {

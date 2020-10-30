@@ -291,7 +291,6 @@ pub mod tests {
       server: "0.0.0.0:0".parse().unwrap(),
       chain_name: "main".to_string(),
       sapling_activation_height: 0,
-      consensus_branch_id: "000000".to_string(),
       anchor_offset: 0,
       data_dir: None,
     }

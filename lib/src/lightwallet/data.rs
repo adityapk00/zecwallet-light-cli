@@ -289,7 +289,7 @@ impl Utxo {
     }
 
     pub fn to_outpoint(&self) -> OutPoint {
-        OutPoint { hash: self.txid.0, n: self.output_index as u32 }
+        OutPoint::new(self.txid.0, self.output_index as u32)
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
