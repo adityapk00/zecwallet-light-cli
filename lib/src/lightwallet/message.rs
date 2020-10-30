@@ -6,22 +6,10 @@ use jubjub::Fr;
 use rand::{rngs::OsRng, CryptoRng, RngCore};
 use std::io::{self, ErrorKind, Read};
 use zcash_primitives::{
-    consensus::{BlockHeight, MAIN_NETWORK},
-    keys::OutgoingViewingKey,
-    note_encryption::try_sapling_note_decryption,
-    note_encryption::{prf_ock, Memo, OutgoingCipherKey, SaplingNoteEncryption},
-    primitives::{PaymentAddress, Rseed, ValueCommitment},
+    consensus::{BlockHeight, MAIN_NETWORK}, keys::OutgoingViewingKey, 
+    note_encryption::{ENC_CIPHERTEXT_SIZE, Memo, OUT_CIPHERTEXT_SIZE, OutgoingCipherKey, SaplingNoteEncryption, prf_ock, try_sapling_note_decryption}, 
+    primitives::{PaymentAddress, Rseed, ValueCommitment}
 };
-
-const COMPACT_NOTE_SIZE: usize = 1 + // version
-    11 + // diversifier
-    8  + // value
-    32; // rcv
-const NOTE_PLAINTEXT_SIZE: usize = COMPACT_NOTE_SIZE + 512;
-const OUT_PLAINTEXT_SIZE: usize = 32 + // pk_d
-    32; // esk
-pub const ENC_CIPHERTEXT_SIZE: usize = NOTE_PLAINTEXT_SIZE + 16;
-const OUT_CIPHERTEXT_SIZE: usize = OUT_PLAINTEXT_SIZE + 16;
 
 pub struct Message {
     pub to: PaymentAddress,
