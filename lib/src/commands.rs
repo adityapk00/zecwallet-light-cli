@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use json::{object};
 
-use crate::{lightclient::LightClient, lightwallet};
+use crate::{lightclient::LightClient, lightwallet::{self, fee}};
 use crate::lightwallet::LightWallet;
 
 pub trait Command {
@@ -790,6 +790,41 @@ impl Command for HeightCommand {
     }
 }
 
+struct DefaultFeeCommand {}
+impl Command for DefaultFeeCommand {
+    fn help(&self)  -> String {
+        let mut h = vec![];
+        h.push("Returns the default fee in zats for outgoing transactions");
+        h.push("Usage:");
+        h.push("defaultfee <optional_block_height>");
+        h.push("");
+        h.push("Example:");
+        h.push("defaultfee");
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Returns the default fee in zats for outgoing transactions".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        if args.len() > 1 {
+            return format!("Was expecting at most 1 argument\n{}", self.help());
+        }
+
+        let height = if args.len() == 1 {
+            match args[0].parse::<i32>() {
+                Ok(h) => h,
+                Err(e) => return format!("Couldn't parse height {}", e)
+            }
+        } else {
+            lightclient.last_scanned_height() as i32
+        };
+
+        let j = object! { "defaultfee" => fee::get_default_fee(height)};
+        j.pretty(2)
+    }
+}
 
 struct NewAddressCommand {}
 impl Command for NewAddressCommand {
@@ -904,6 +939,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("list".to_string(),              Box::new(TransactionsCommand{}));
     map.insert("notes".to_string(),             Box::new(NotesCommand{}));
     map.insert("new".to_string(),               Box::new(NewAddressCommand{}));
+    map.insert("defaultfee".to_string(),        Box::new(DefaultFeeCommand{}));
     map.insert("seed".to_string(),              Box::new(SeedCommand{}));
     map.insert("encrypt".to_string(),           Box::new(EncryptCommand{}));
     map.insert("decrypt".to_string(),           Box::new(DecryptCommand{}));
