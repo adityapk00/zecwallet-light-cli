@@ -1,11 +1,17 @@
 use byteorder::ReadBytesExt;
+use bytes::{Buf, Bytes, IntoBuf};
 use ff::Field;
 use group::GroupEncoding;
-use bytes::{Buf, Bytes, IntoBuf};
 use jubjub::Fr;
+use rand::{rngs::OsRng, CryptoRng, RngCore};
 use std::io::{self, ErrorKind, Read};
-use rand::{CryptoRng, rngs::OsRng, RngCore};
-use zcash_primitives::{consensus::{BlockHeight, MAIN_NETWORK}, keys::OutgoingViewingKey, note_encryption::{Memo, OutgoingCipherKey, SaplingNoteEncryption, prf_ock}, note_encryption::try_sapling_note_decryption, primitives::{PaymentAddress, Rseed, ValueCommitment}};
+use zcash_primitives::{
+    consensus::{BlockHeight, MAIN_NETWORK},
+    keys::OutgoingViewingKey,
+    note_encryption::try_sapling_note_decryption,
+    note_encryption::{prf_ock, Memo, OutgoingCipherKey, SaplingNoteEncryption},
+    primitives::{PaymentAddress, Rseed, ValueCommitment},
+};
 
 const COMPACT_NOTE_SIZE: usize = 1 + // version
     11 + // diversifier
@@ -19,7 +25,7 @@ const OUT_CIPHERTEXT_SIZE: usize = OUT_PLAINTEXT_SIZE + 16;
 
 pub struct Message {
     pub to: PaymentAddress,
-    pub memo: Memo
+    pub memo: Memo,
 }
 
 impl Message {
@@ -36,14 +42,17 @@ impl Message {
         &self,
         ovk: Option<OutgoingViewingKey>,
         mut rng: &mut R,
-    ) -> Result<(
+    ) -> Result<
+        (
             Option<OutgoingCipherKey>,
             jubjub::ExtendedPoint,
             bls12_381::Scalar,
             jubjub::ExtendedPoint,
             [u8; ENC_CIPHERTEXT_SIZE],
-            [u8; OUT_CIPHERTEXT_SIZE]), String> 
-    {
+            [u8; OUT_CIPHERTEXT_SIZE],
+        ),
+        String,
+    > {
         // 0-value note
         let value = 0;
 
@@ -54,23 +63,24 @@ impl Message {
         };
         let cv = value_commitment.commitment().into();
 
-        // Use a rseed from pre-canopy. It doesn't really matter, but this is what is tested out. 
+        // Use a rseed from pre-canopy. It doesn't really matter, but this is what is tested out.
         let rseed = Rseed::BeforeZip212(jubjub::Fr::random(&mut rng));
 
         // 0-value note with the rseed
         let note = self.to.create_note(value, rseed).unwrap();
 
-        // CMU is used in the out_cuphertext. Technically this is not needed to recover the note 
-        // by the receiver, but it is needed to recover the note by the sender. 
+        // CMU is used in the out_cuphertext. Technically this is not needed to recover the note
+        // by the receiver, but it is needed to recover the note by the sender.
         let cmu = note.cmu();
 
         // Create the note encrytion object
-        let mut ne = SaplingNoteEncryption::new(ovk, note, self.to.clone(), self.memo.clone(), &mut rng);
+        let mut ne =
+            SaplingNoteEncryption::new(ovk, note, self.to.clone(), self.memo.clone(), &mut rng);
 
-        // EPK, which needs to be sent to the reciever. 
+        // EPK, which needs to be sent to the reciever.
         let epk = ne.epk().clone().into();
 
-        // enc_ciphertext is the encrypted note, out_ciphertext is the outgoing cipher text that the 
+        // enc_ciphertext is the encrypted note, out_ciphertext is the outgoing cipher text that the
         // sender can recover
         let enc_ciphertext = ne.encrypt_note_plaintext();
         let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv, &cmu);
@@ -89,7 +99,7 @@ impl Message {
         let mut rng = OsRng;
 
         // Encrypt To address. We're using a 'NONE' OVK here, so the out_ciphertext is not recoverable.
-        let (_ock, _cv, cmu, epk, enc_ciphertext, _out_ciphertext) = 
+        let (_ock, _cv, cmu, epk, enc_ciphertext, _out_ciphertext) =
             self.encrypt_message_to(None, &mut rng)?;
 
         // We'll encode the message on the wire as a series of bytes
@@ -108,44 +118,62 @@ impl Message {
 
     pub fn decrypt(data: &[u8], ivk: Fr) -> io::Result<Message> {
         if data.len() != 1 + 32 + 32 + ENC_CIPHERTEXT_SIZE {
-            return Err(io::Error::new(ErrorKind::InvalidData, "Incorrect encrypred payload size".to_string()));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Incorrect encrypred payload size".to_string(),
+            ));
         }
 
         let mut reader = Bytes::from(data).into_buf().reader();
         let version = reader.read_u8()?;
         if version > Message::serialized_version() {
-            return Err(io::Error::new(ErrorKind::InvalidData, format!("Can't read version {}", version)));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Can't read version {}", version),
+            ));
         }
-        
+
         let mut cmu_bytes = [0u8; 32];
         reader.read_exact(&mut cmu_bytes)?;
         let cmu = bls12_381::Scalar::from_bytes(&cmu_bytes);
         if cmu.is_none().into() {
-            return Err(io::Error::new(ErrorKind::InvalidData, format!("Can't read CMU bytes")));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Can't read CMU bytes"),
+            ));
         }
 
         let mut epk_bytes = [0u8; 32];
         reader.read_exact(&mut epk_bytes)?;
         let epk = jubjub::ExtendedPoint::from_bytes(&epk_bytes);
         if epk.is_none().into() {
-            return Err(io::Error::new(ErrorKind::InvalidData, format!("Can't read EPK bytes")));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Can't read EPK bytes"),
+            ));
         }
 
         let mut enc_bytes = [0u8; ENC_CIPHERTEXT_SIZE];
         reader.read_exact(&mut enc_bytes)?;
-        
-        // Attempt decryption. We attempt at main_network at 1,000,000 height, but it doesn't 
-        // really apply, since this note is not spendable anyway, so the rseed and the note iteself
-        // are not usable. 
-        match try_sapling_note_decryption(&MAIN_NETWORK, BlockHeight::from_u32(1_000_000), 
-            &ivk, &epk.unwrap(), &cmu.unwrap(), &enc_bytes) {
-            Some((_note, address, memo)) => {
-                Ok(Self::new(address, memo))
-            },
-            None =>  Err(io::Error::new(ErrorKind::InvalidData, format!("Failed to decrypt")))
-        } 
-    }
 
+        // Attempt decryption. We attempt at main_network at 1,000,000 height, but it doesn't
+        // really apply, since this note is not spendable anyway, so the rseed and the note iteself
+        // are not usable.
+        match try_sapling_note_decryption(
+            &MAIN_NETWORK,
+            BlockHeight::from_u32(1_000_000),
+            &ivk,
+            &epk.unwrap(),
+            &cmu.unwrap(),
+            &enc_bytes,
+        ) {
+            Some((_note, address, memo)) => Ok(Self::new(address, memo)),
+            None => Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to decrypt"),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -155,11 +183,12 @@ pub mod tests {
     use jubjub::Fr;
     use rand::{rngs::OsRng, Rng};
     use zcash_primitives::{
-        note_encryption::Memo, primitives::{PaymentAddress, Rseed}, 
-        zip32::{ExtendedFullViewingKey, ExtendedSpendingKey}
+        note_encryption::Memo,
+        primitives::{PaymentAddress, Rseed},
+        zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
     };
 
-    use super::{ENC_CIPHERTEXT_SIZE, Message};
+    use super::{Message, ENC_CIPHERTEXT_SIZE};
 
     fn get_random_zaddr() -> (ExtendedSpendingKey, Fr, PaymentAddress) {
         let mut rng = OsRng;
@@ -176,7 +205,7 @@ pub mod tests {
     #[test]
     fn test_encrpyt_decrypt() {
         let (_, ivk, to) = get_random_zaddr();
-        
+
         let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
 
         let enc = Message::new(to.clone(), msg.clone()).encrypt().unwrap();
@@ -189,14 +218,21 @@ pub mod tests {
         let dec_msg = Message::decrypt(&enc, ivk).unwrap();
         assert_eq!(dec_msg.memo, msg);
         assert_eq!(dec_msg.to, to);
+
+        // Raw memo of 512 bytes
+        let msg = Memo::from_bytes(&[255u8; 512]).unwrap();
+        let enc = Message::new(to.clone(), msg.clone()).encrypt().unwrap();
+        let dec_msg = Message::decrypt(&enc.clone(), ivk).unwrap();
+
+        assert_eq!(dec_msg.memo, msg);
+        assert_eq!(dec_msg.to, to);
     }
 
-    
     #[test]
-    fn test_bad_ivks() {
+    fn test_bad_inputs() {
         let (_, ivk1, to1) = get_random_zaddr();
         let (_, ivk2, _) = get_random_zaddr();
-        
+
         let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
 
         let enc = Message::new(to1.clone(), msg.clone()).encrypt().unwrap();
@@ -204,16 +240,16 @@ pub mod tests {
         assert!(dec_success.is_err());
 
         let dec_success = Message::decrypt(&enc.clone(), ivk1).unwrap();
-        
+
         assert_eq!(dec_success.memo, msg);
         assert_eq!(dec_success.to, to1);
     }
-    
+
     #[test]
     fn test_enc_dec_bad_epk_cmu() {
         let mut rng = OsRng;
 
-        let (_, ivk, to) = get_random_zaddr();        
+        let (_, ivk, to) = get_random_zaddr();
         let msg_str = "Hello World with some value!";
         let msg = Memo::from_bytes(msg_str.to_string().as_bytes()).unwrap();
 
@@ -226,7 +262,9 @@ pub mod tests {
         assert!(dec_success.is_err());
 
         // Create a new, random EPK
-        let note = to.create_note(0,  Rseed::BeforeZip212(jubjub::Fr::random(&mut rng))).unwrap();
+        let note = to
+            .create_note(0, Rseed::BeforeZip212(jubjub::Fr::random(&mut rng)))
+            .unwrap();
         let esk = note.generate_or_derive_esk(&mut rng);
         let epk_bad: jubjub::ExtendedPoint = (note.g_d * esk).into();
 
@@ -240,7 +278,7 @@ pub mod tests {
         bad_enc.splice(33..65, [1u8; 32].to_vec());
         let dec_success = Message::decrypt(&bad_enc, ivk);
         assert!(dec_success.is_err());
-        
+
         // Bad EPK and CMU should fail
         let mut bad_enc = enc.clone();
         bad_enc.splice(1..33, [0u8; 32].to_vec());
@@ -265,7 +303,7 @@ pub mod tests {
         let (bad_enc, _) = c.split_at(bad_enc.len() - 1);
         let dec_success = Message::decrypt(&bad_enc, ivk);
         assert!(dec_success.is_err());
-        
+
         // Bad payload 4
         let dec_success = Message::decrypt(&[], ivk);
         assert!(dec_success.is_err());
@@ -273,6 +311,9 @@ pub mod tests {
         // This should finally work.
         let dec_success = Message::decrypt(&enc, ivk);
         assert!(dec_success.is_ok());
-        assert_eq!(dec_success.unwrap().memo.to_utf8().unwrap().unwrap(), msg_str);
+        assert_eq!(
+            dec_success.unwrap().memo.to_utf8().unwrap().unwrap(),
+            msg_str
+        );
     }
 }
