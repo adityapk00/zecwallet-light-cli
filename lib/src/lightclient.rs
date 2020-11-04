@@ -17,8 +17,10 @@ use protobuf::parse_from_bytes;
 use threadpool::ThreadPool;
 
 use json::{object, array, JsonValue};
+
 use zcash_primitives::{note_encryption::Memo, transaction::{TxId, Transaction}};
-use zcash_primitives::{constants::testnet, constants::mainnet, constants::regtest,};
+use zcash_primitives::{constants::testnet, constants::mainnet, constants::regtest};
+use zcash_primitives::consensus::{BranchId, BlockHeight, MAIN_NETWORK};
 use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
 
 use log::{info, warn, error, LevelFilter};
@@ -1555,7 +1557,7 @@ impl LightClient {
         }
 
         let addr = address.or(self.wallet.read().unwrap().get_all_zaddresses().get(0).map(|s| s.clone())).unwrap();
-        let branch_id = self.fetch_consensus_branch_id()?;
+        let branch_id = self.consensus_branch_id();
 
         let result = {
             let _lock = self.sync_lock.lock().unwrap();
@@ -1571,14 +1573,11 @@ impl LightClient {
         result.map(|(txid, _)| txid)
     }
 
-    fn fetch_consensus_branch_id(&self) -> Result<u32, String> { 
-        match get_info(&self.get_server_uri()) {
-            Ok(i) => match u32::from_str_radix(&i.consensus_branch_id, 16) {
-                Ok(id) => Ok(id),
-                Err(_) => Err(format!("Couldn't parse concensus branch ID {:?}", i.consensus_branch_id)),
-            },
-            Err(e) => Err(e),
-        }
+    fn consensus_branch_id(&self) -> u32 { 
+        let height = self.wallet.read().unwrap().last_scanned_height();
+        let branch: BranchId = BranchId::for_height(&MAIN_NETWORK, BlockHeight::from_u32(height as u32));
+        let branch_id: u32 = u32::from(branch);
+        branch_id
     }
 
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
@@ -1588,7 +1587,7 @@ impl LightClient {
         }
 
         // First, get the concensus branch ID
-        let branch_id = self.fetch_consensus_branch_id()?;
+        let branch_id = self.consensus_branch_id();
 
         info!("Creating transaction");
 
