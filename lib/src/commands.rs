@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use json::{object};
 
-use crate::{lightclient::LightClient, lightwallet::utils};
+use crate::{lightclient::LightClient, lightwallet::{self, fee, utils}};
 use crate::lightwallet::LightWallet;
 
 pub trait Command {
@@ -602,10 +602,6 @@ impl Command for SendCommand {
             return self.help();
         }
 
-        use std::convert::TryInto;
-        use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
-        let fee: u64 = DEFAULT_FEE.try_into().unwrap();
-
         // Check for a single argument that can be parsed as JSON
         let send_args = if args.len() == 1 {
             let arg_list = args[0];
@@ -626,14 +622,17 @@ impl Command for SendCommand {
                 if !j.has_key("address") || !j.has_key("amount") {
                     Err(format!("Need 'address' and 'amount'\n"))
                 } else {
+                    let fee = lightwallet::fee::get_default_fee(lightclient.wallet.read().unwrap().last_scanned_height());
                     let amount = match j["amount"].as_str() {
-                        Some("entire-verified-zbalance") => lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee),
+                        Some("entire-verified-zbalance") => {                            
+                            lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee)
+                        },
                         _ => Some(j["amount"].as_u64().unwrap())
                     };
 
                     match amount {
                         Some(amt) => Ok((j["address"].as_str().unwrap().to_string().clone(), amt, j["memo"].as_str().map(|s| s.to_string().clone()))),
-                        None => Err(format!("Not enough in wallet to pay transaction fee"))
+                        None => Err(format!("Not enough in wallet to pay transaction fee of {}", fee))
                     }
                 }
             }).collect::<Result<Vec<(String, u64, Option<String>)>, String>>();
@@ -650,9 +649,10 @@ impl Command for SendCommand {
                 Ok(amt) => amt,
                 Err(e)  => {
                     if args[1] == "entire-verified-zbalance" {
+                        let fee = lightwallet::fee::get_default_fee(lightclient.wallet.read().unwrap().last_scanned_height());
                         match lightclient.wallet.read().unwrap().verified_zbalance(None).checked_sub(fee) {
                             Some(amt) => amt,
-                            None => { return format!("Not enough in wallet to pay transaction fee") }
+                            None => { return format!("Not enough in wallet to pay transaction fee of {}", fee) }
                         }
                     } else {
                         return format!("Couldn't parse amount: {}", e);
@@ -884,6 +884,41 @@ impl Command for HeightCommand {
     }
 }
 
+struct DefaultFeeCommand {}
+impl Command for DefaultFeeCommand {
+    fn help(&self)  -> String {
+        let mut h = vec![];
+        h.push("Returns the default fee in zats for outgoing transactions");
+        h.push("Usage:");
+        h.push("defaultfee <optional_block_height>");
+        h.push("");
+        h.push("Example:");
+        h.push("defaultfee");
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Returns the default fee in zats for outgoing transactions".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        if args.len() > 1 {
+            return format!("Was expecting at most 1 argument\n{}", self.help());
+        }
+
+        let height = if args.len() == 1 {
+            match args[0].parse::<i32>() {
+                Ok(h) => h,
+                Err(e) => return format!("Couldn't parse height {}", e)
+            }
+        } else {
+            lightclient.last_scanned_height() as i32
+        };
+
+        let j = object! { "defaultfee" => fee::get_default_fee(height)};
+        j.pretty(2)
+    }
+}
 
 struct NewAddressCommand {}
 impl Command for NewAddressCommand {
@@ -1000,6 +1035,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("list".to_string(),              Box::new(TransactionsCommand{}));
     map.insert("notes".to_string(),             Box::new(NotesCommand{}));
     map.insert("new".to_string(),               Box::new(NewAddressCommand{}));
+    map.insert("defaultfee".to_string(),        Box::new(DefaultFeeCommand{}));
     map.insert("seed".to_string(),              Box::new(SeedCommand{}));
     map.insert("encrypt".to_string(),           Box::new(EncryptCommand{}));
     map.insert("decrypt".to_string(),           Box::new(DecryptCommand{}));

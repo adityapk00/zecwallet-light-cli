@@ -35,6 +35,7 @@ use log4rs::append::rolling_file::policy::compound::{
 };
 
 use crate::grpcconnector::{self, *};
+use crate::lightwallet::fee;
 use crate::ANCHOR_OFFSET;
 
 mod checkpoints;
@@ -1069,11 +1070,8 @@ impl LightClient {
 
         // Add in all mempool txns
         tx_list.extend(wallet.mempool_txs.read().unwrap().iter().map( |(_, wtx)| {
-            use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
-            use std::convert::TryInto;
-            
             let amount: u64 = wtx.outgoing_metadata.iter().map(|om| om.value).sum::<u64>();
-            let fee: u64 = DEFAULT_FEE.try_into().unwrap();
+            let fee = fee::get_default_fee(wallet.last_scanned_height());
 
             // Collect outgoing metadata
             let outgoing_json = wtx.outgoing_metadata.iter()
@@ -1545,10 +1543,7 @@ impl LightClient {
     }
 
     pub fn do_shield(&self, address: Option<String>) -> Result<String, String> {
-        use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
-        use std::convert::TryInto;
-
-        let fee = DEFAULT_FEE.try_into().unwrap();
+        let fee = fee::get_default_fee(self.wallet.read().unwrap().last_scanned_height());
         let tbal = self.wallet.read().unwrap().tbalance(None);
 
         // Make sure there is a balance, and it is greated than the amount
