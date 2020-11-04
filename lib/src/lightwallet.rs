@@ -1,53 +1,71 @@
-use std::time::{SystemTime, Duration};
-use std::io::{self, Read, Write};
 use std::cmp;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
-use std::io::{Error, ErrorKind};
 use std::convert::TryFrom;
+use std::io::{self, Read, Write};
+use std::io::{Error, ErrorKind};
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, SystemTime};
 
+use std::sync::mpsc::channel;
 use threadpool::ThreadPool;
-use std::sync::mpsc::{channel};
 
-use rand::{Rng, rngs::OsRng};
+use log::{error, info, warn};
+use rand::{rngs::OsRng, Rng};
 use subtle::{ConditionallySelectable, ConstantTimeEq, CtOption};
-use log::{info, warn, error};
 
 use protobuf::parse_from_bytes;
 
-use libflate::gzip::{Decoder};
+use bip39::{Language, Mnemonic};
+use libflate::gzip::Decoder;
 use secp256k1::SecretKey;
-use bip39::{Mnemonic, Language};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 use sodiumoxide::crypto::secretbox;
 
 use zcash_client_backend::{
-    encoding::{encode_payment_address, encode_extended_spending_key, encode_extended_full_viewing_key, decode_extended_spending_key, decode_extended_full_viewing_key},
+    encoding::{
+        decode_extended_full_viewing_key, decode_extended_spending_key,
+        encode_extended_full_viewing_key, encode_extended_spending_key, encode_payment_address,
+    },
     proto::compact_formats::{CompactBlock, CompactOutput},
-    wallet::{WalletShieldedOutput, WalletShieldedSpend}
+    wallet::{WalletShieldedOutput, WalletShieldedSpend},
 };
 
-use zcash_primitives::{block::BlockHash, consensus::{MAIN_NETWORK, BranchId, BlockHeight}, legacy::{Script, TransparentAddress}, merkle_tree::{CommitmentTree, IncrementalWitness}, note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption}, primitives::{PaymentAddress}, prover::TxProver, sapling::Node, serialize::Vector, transaction::{
+use zcash_primitives::{
+    block::BlockHash,
+    consensus::{BlockHeight, BranchId, MAIN_NETWORK},
+    legacy::{Script, TransparentAddress},
+    merkle_tree::{CommitmentTree, IncrementalWitness},
+    note_encryption::{
+        try_sapling_compact_note_decryption, try_sapling_note_decryption,
+        try_sapling_output_recovery, Memo,
+    },
+    primitives::PaymentAddress,
+    prover::TxProver,
+    sapling::Node,
+    serialize::Vector,
+    transaction::{
         builder::Builder,
         components::{Amount, OutPoint, TxOut},
-        TxId, Transaction, 
-    }, zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex}};
+        Transaction, TxId,
+    },
+    zip32::{ChildIndex, ExtendedFullViewingKey, ExtendedSpendingKey},
+};
 
-use crate::lightclient::{LightClientConfig};
+use crate::lightclient::LightClientConfig;
+mod address;
 mod data;
 mod extended_key;
-pub mod utils;
-mod address;
-mod walletzkey;
 pub(crate) mod message;
+pub mod utils;
+mod walletzkey;
 
 pub mod fee;
 
-use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
-use extended_key::{KeyIndex, ExtendedPrivKey};
+use data::{BlockData, OutgoingTxMetadata, SaplingNoteData, SpendableNote, Utxo, WalletTx};
+use extended_key::{ExtendedPrivKey, KeyIndex};
 use walletzkey::{WalletZKey, WalletZKeyType};
 
 pub const MAX_REORG: usize = 100;

@@ -1,28 +1,44 @@
+use rand::{rngs::OsRng, RngCore};
 use std::convert::TryInto;
-use rand::{RngCore, rngs::OsRng};
 
-use ff::{PrimeField, Field};
+use ff::{Field, PrimeField};
 use group::GroupEncoding;
-use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
-use zcash_client_backend::{encoding::{encode_payment_address, decode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key},
-    proto::compact_formats::{
-        CompactBlock, CompactOutput, CompactSpend, CompactTx,
-    }
+use protobuf::{CachedSize, Message, RepeatedField, UnknownFields};
+use zcash_client_backend::{
+    encoding::{
+        decode_extended_full_viewing_key, decode_extended_spending_key, decode_payment_address,
+        encode_payment_address,
+    },
+    proto::compact_formats::{CompactBlock, CompactOutput, CompactSpend, CompactTx},
 };
-use zcash_primitives::{block::BlockHash, constants::SPENDING_KEY_GENERATOR, legacy::{Script, TransparentAddress,}, merkle_tree::MerklePath, redjubjub::Signature, note_encryption::{Memo, SaplingNoteEncryption}, primitives::{Diversifier, Note, PaymentAddress, ProofGenerationKey, Rseed}, primitives::ValueCommitment, prover::TxProver, sapling::Node, transaction::components::GROTH_PROOF_SIZE, transaction::{
-        TxId, Transaction, TransactionData,
-        components::{TxOut, TxIn, OutPoint, Amount,},
+use zcash_primitives::{
+    block::BlockHash,
+    constants::SPENDING_KEY_GENERATOR,
+    legacy::{Script, TransparentAddress},
+    merkle_tree::MerklePath,
+    note_encryption::{Memo, SaplingNoteEncryption},
+    primitives::ValueCommitment,
+    primitives::{Diversifier, Note, PaymentAddress, ProofGenerationKey, Rseed},
+    prover::TxProver,
+    redjubjub::Signature,
+    sapling::Node,
+    transaction::components::GROTH_PROOF_SIZE,
+    transaction::{
         components::amount::DEFAULT_FEE,
-    }, zip32::{ExtendedFullViewingKey, ExtendedSpendingKey}};
+        components::{Amount, OutPoint, TxIn, TxOut},
+        Transaction, TransactionData, TxId,
+    },
+    zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
+};
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use zcash_proofs::{prover::LocalTxProver, sapling::SaplingProvingContext};
 
-use super::{LightWallet, message};
 use super::LightClientConfig;
-use crate::lightwallet::walletzkey::{WalletZKeyType};
-use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
+use super::{message, LightWallet};
+use crate::lightwallet::walletzkey::WalletZKeyType;
 use crate::SaplingParams;
+use secp256k1::{key::PublicKey, key::SecretKey, Secp256k1};
 
 use lazy_static::lazy_static;
 lazy_static!(
