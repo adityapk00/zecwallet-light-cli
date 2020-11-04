@@ -9,6 +9,7 @@ embed_params = []
 
 [dependencies]
 base58 = "0.1.0"
+base64 = "0.12.3"
 log = "0.4"
 log4rs = "0.8.3"
 dirs = "2.0.2"
@@ -47,18 +48,19 @@ jubjub = "0.5.1"
 bls12_381 = "0.3.1"
 group = "0.8"
 
+
 [dependencies.zcash_client_backend]
 git = "https://github.com/adityapk00/librustzcash"
-rev = "3cb555b2d4c4d05e95c5e9663fe91521a670ebfc"
+rev = "e12b463b7f7ac4f915a530f46f2dc4d0f9a24cbf"
 
 [dependencies.zcash_primitives]
 git = "https://github.com/adityapk00/librustzcash"
-rev = "3cb555b2d4c4d05e95c5e9663fe91521a670ebfc"
+rev = "e12b463b7f7ac4f915a530f46f2dc4d0f9a24cbf"
 features = ["transparent-inputs"]
 
 [dependencies.zcash_proofs]
 git = "https://github.com/adityapk00/librustzcash"
-rev = "3cb555b2d4c4d05e95c5e9663fe91521a670ebfc"
+rev = "e12b463b7f7ac4f915a530f46f2dc4d0f9a24cbf"
 features = ["multicore"]
 
 [build-dependencies]

@@ -32,29 +32,25 @@ use zcash_client_backend::{
 };
 
 use zcash_primitives::{
-    block::BlockHash,
-    serialize::{Vector},
-    consensus::{MAIN_NETWORK, BranchId, BlockHeight},
+    block::BlockHash, consensus::{MAIN_NETWORK, BranchId, BlockHeight}, 
+    legacy::{Script, TransparentAddress}, merkle_tree::{CommitmentTree, IncrementalWitness}, 
+    note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption}, 
+    primitives::PaymentAddress, sapling::Node, serialize::Vector, 
     transaction::{
-        builder::{Builder},
+        builder::Builder,
         components::{Amount, OutPoint, TxOut}, components::amount::DEFAULT_FEE,
         TxId, Transaction, 
-    },
-    sapling::Node,
-    merkle_tree::{CommitmentTree, IncrementalWitness},
-    legacy::{Script, TransparentAddress},
-    note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption},
-    zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex},
-    primitives::{PaymentAddress},
+    }, 
+    zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex}
 };
 
 use crate::lightclient::{LightClientConfig};
-
 mod data;
 mod extended_key;
-mod utils;
+pub mod utils;
 mod address;
 mod walletzkey;
+pub(crate) mod message;
 
 use data::{BlockData, WalletTx, Utxo, SaplingNoteData, SpendableNote, OutgoingTxMetadata};
 use extended_key::{KeyIndex, ExtendedPrivKey};
@@ -75,6 +71,8 @@ pub fn double_sha256(payload: &[u8]) -> Vec<u8> {
 }
 
 use base58::{ToBase58};
+
+use self::message::Message;
 
 /// A trait for converting a [u8] to base58 encoded string.
 pub trait ToBase58Check {
@@ -754,7 +752,7 @@ impl LightWallet {
         }
     }
 
-    pub fn memo_str(memo: &Option<Memo>) -> Option<String> {
+    pub fn memo_str(memo: Option<Memo>) -> Option<String> {
         match memo {
             Some(memo) => {
                 match memo.to_utf8() {
@@ -1204,6 +1202,22 @@ impl LightWallet {
                 }
             }
         }
+    }
+    
+    pub fn decrypt_message(&self, enc: Vec<u8>) -> Option<Message> {
+        // Collect all the ivks in the wallet
+        let ivks: Vec<_> = self.zkeys.read().unwrap().iter().map(|zk| zk.extfvk.fvk.vk.ivk()).collect();
+
+        // Attempt decryption with all available ivks, one at a time. This is pretty fast, so need need for fancy multithreading
+        for ivk in ivks {
+            if let Ok(msg) = Message::decrypt(&enc, ivk) {
+                // If decryption succeeded for this IVK, return the decrypted memo and the matched address
+                return Some(msg)
+            }
+        }
+
+        // If nothing matched
+        None
     }
 
     // Scan the full Tx and update memos for incoming shielded transactions.
@@ -2162,7 +2176,7 @@ impl LightWallet {
                 Some(s) => {
                     // If the string starts with an "0x", and contains only hex chars ([a-f0-9]+) then
                     // interpret it as a hex
-                    match utils::interpret_memo_string(&s) {
+                    match utils::interpret_memo_string(s) {
                         Ok(m) => Some(m),
                         Err(e) => {
                             error!("{}", e);
@@ -2249,7 +2263,7 @@ impl LightWallet {
                                     if !LightWallet::is_shielded_address(&addr.to_string(), &self.config) {
                                         Memo::default()
                                     } else {
-                                        match utils::interpret_memo_string(s) {
+                                        match utils::interpret_memo_string(s.clone()) {
                                             Ok(m) => m,
                                             Err(e) => {
                                                 error!("{}", e);

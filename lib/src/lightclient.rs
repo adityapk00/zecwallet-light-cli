@@ -1,4 +1,4 @@
-use crate::lightwallet::LightWallet;
+use crate::lightwallet::{message::Message, LightWallet};
 
 use rand::{rngs::OsRng, seq::SliceRandom};
 
@@ -17,9 +17,11 @@ use protobuf::parse_from_bytes;
 use threadpool::ThreadPool;
 
 use json::{object, array, JsonValue};
-use zcash_primitives::transaction::{TxId, Transaction};
+
+use zcash_primitives::{note_encryption::Memo, transaction::{TxId, Transaction}};
 use zcash_primitives::{constants::testnet, constants::mainnet, constants::regtest};
 use zcash_primitives::consensus::{BranchId, BlockHeight, MAIN_NETWORK};
+use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
 
 use log::{info, warn, error, LevelFilter};
 use log4rs::append::rolling_file::RollingFileAppender;
@@ -929,6 +931,44 @@ impl LightClient {
         res
     }
 
+    pub fn do_encrypt_message(&self, to_address_str: String, memo: Memo) -> JsonValue {
+        let to = match decode_payment_address(self.config.hrp_sapling_address(), &to_address_str) {
+            Ok(Some(to)) => to,
+            _ => {
+                return object! {"error" => format!("Couldn't parse {} as a z-address", to_address_str) };
+            }
+        };
+
+        match Message::new(to, memo).encrypt() {
+            Ok(v) => {
+                object! {"encrypted_base64" => base64::encode(v) }
+            },
+            Err(e) => {
+                object! {"error" => format!("Couldn't encrypt. Error was {}", e)}
+            }
+        }
+    }
+
+    pub fn do_decrypt_message(&self, enc_base64: String) -> JsonValue {
+        let wallet = self.wallet.read().unwrap();
+
+        let data = match base64::decode(enc_base64) {
+            Ok(v) => v,
+            Err(e) => {
+                return  object! {"error" => format!("Couldn't decode base64. Error was {}", e)}
+            }
+        };
+
+        match wallet.decrypt_message(data) {
+            Some(m) => object! { 
+                "to" => encode_payment_address(self.config.hrp_sapling_address(), &m.to),
+                "memo" => LightWallet::memo_str(Some(m.memo.clone())),
+                "memohex" => hex::encode(m.memo.as_bytes())
+            },
+            None => object! { "error" => "Couldn't decrypt with any of the wallet's keys"}
+        }
+    }
+
     pub fn do_encryption_status(&self) -> JsonValue {
         let wallet = self.wallet.read().unwrap();
         object!{
@@ -961,7 +1001,7 @@ impl LightClient {
                             let mut o = object!{
                                 "address" => om.address.clone(),
                                 "value"   => om.value,
-                                "memo"    => LightWallet::memo_str(&Some(om.memo.clone()))
+                                "memo"    => LightWallet::memo_str(Some(om.memo.clone()))
                             };
 
                             if include_memo_hex {
@@ -995,7 +1035,7 @@ impl LightClient {
                             "txid"         => format!("{}", v.txid),
                             "amount"       => nd.note.value as i64,
                             "address"      => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
-                            "memo"         => LightWallet::memo_str(&nd.memo)
+                            "memo"         => LightWallet::memo_str(nd.memo.clone())
                         };
 
                         if include_memo_hex {
@@ -1041,7 +1081,7 @@ impl LightClient {
                     let mut o = object!{
                         "address" => om.address.clone(),
                         "value"   => om.value,
-                        "memo"    => LightWallet::memo_str(&Some(om.memo.clone())),
+                        "memo"    => LightWallet::memo_str(Some(om.memo.clone())),
                     };
 
                     if include_memo_hex {
