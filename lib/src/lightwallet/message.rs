@@ -340,7 +340,7 @@ pub mod tests {
         let msg_str = "Hello World with some value!";
         let msg = Memo::from_bytes(msg_str.to_string().as_bytes()).unwrap();
 
-        let enc = Message::new(to.clone(), msg).encrypt().unwrap();
+        let enc = Message::new(to.clone(), msg.clone()).encrypt().unwrap();
 
         // Replace each individual byte and make sure it breaks. i.e., each byte is important
         for i in 0..enc.len() {
@@ -351,5 +351,10 @@ pub mod tests {
             let dec_success = Message::decrypt(&bad_enc, ivk);
             assert!(dec_success.is_err());
         }
+
+        let dec_success = Message::decrypt(&enc.clone(), ivk).unwrap();
+
+        assert_eq!(dec_success.memo, msg);
+        assert_eq!(dec_success.to, to);
     }
 }
