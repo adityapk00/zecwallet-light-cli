@@ -7,7 +7,6 @@ use std::io::{Error, ErrorKind};
 use std::convert::TryFrom;
 
 use threadpool::ThreadPool;
-use zcash_proofs::prover::LocalTxProver;
 use std::sync::mpsc::{channel};
 
 use rand::{Rng, rngs::OsRng};
@@ -31,18 +30,11 @@ use zcash_client_backend::{
     wallet::{WalletShieldedOutput, WalletShieldedSpend}
 };
 
-use zcash_primitives::{
-    block::BlockHash, consensus::{MAIN_NETWORK, BranchId, BlockHeight}, 
-    legacy::{Script, TransparentAddress}, merkle_tree::{CommitmentTree, IncrementalWitness}, 
-    note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption}, 
-    primitives::PaymentAddress, sapling::Node, serialize::Vector, 
-    transaction::{
+use zcash_primitives::{block::BlockHash, consensus::{MAIN_NETWORK, BranchId, BlockHeight}, legacy::{Script, TransparentAddress}, merkle_tree::{CommitmentTree, IncrementalWitness}, note_encryption::{Memo, try_sapling_note_decryption, try_sapling_output_recovery, try_sapling_compact_note_decryption}, primitives::{PaymentAddress}, prover::TxProver, sapling::Node, serialize::Vector, transaction::{
         builder::Builder,
         components::{Amount, OutPoint, TxOut},
         TxId, Transaction, 
-    }, 
-    zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex}
-};
+    }, zip32::{ExtendedFullViewingKey, ExtendedSpendingKey, ChildIndex}};
 
 use crate::lightclient::{LightClientConfig};
 mod data;
@@ -1988,11 +1980,10 @@ impl LightWallet {
         });
     }
 
-    pub fn send_to_address<F> (
+    pub fn send_to_address<F, P: TxProver> (
         &self,
         consensus_branch_id: u32,
-        spend_params: &[u8],
-        output_params: &[u8],
+        prover: P,
         transparent_only: bool,
         tos: Vec<(&str, u64, Option<String>)>,
         broadcast_fn: F
@@ -2210,7 +2201,7 @@ impl LightWallet {
         println!("{}: Building transaction", now() - start_time);
         let (tx, _) = match builder.build(
             BranchId::try_from(consensus_branch_id).unwrap(),
-            &LocalTxProver::from_bytes(spend_params, output_params),
+            &prover,
         ) {
             Ok(res) => res,
             Err(e) => {
