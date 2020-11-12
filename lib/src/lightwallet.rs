@@ -256,7 +256,6 @@ impl LightWallet {
             return Err(io::Error::new(ErrorKind::InvalidData, e));
         }
 
-        println!("Reading wallet version {}", version);
         info!("Reading wallet version {}", version);
         
         // At version 5, we're writing the rest of the file as a compressed stream (gzip)
@@ -2054,8 +2053,8 @@ impl LightWallet {
             vec![]
         } else {
             self.txs.read().unwrap().iter()
-                .map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
-                .flatten()
+                .flat_map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
+                .filter(|(_, note)| note.note.value > 0)
                 .filter_map(|(txid, note)| {
                     // Filter out notes that are already spent
                     if note.spent.is_some() || note.unconfirmed_spent.is_some() {
