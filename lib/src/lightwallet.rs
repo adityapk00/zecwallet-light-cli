@@ -1550,15 +1550,25 @@ impl LightWallet {
 
         // Increment tree and witnesses
         let node = Node::new(cmu.into());
-        for witness in existing_witnesses {
-            witness.append(node).unwrap();
+
+        // For existing witnesses, do the insertion parallely, so that we can speed it up, since there
+        // are likely to be many existing witnesses
+        {
+            use rayon::prelude::*;
+
+            existing_witnesses.par_iter_mut().for_each(|witness| {
+                witness.append(node).unwrap();
+            });
         }
+
+        // These are likely empty or len() == 1, so no point doing it parallely. 
         for witness in block_witnesses {
             witness.append(node).unwrap();
         }
         for witness in new_witnesses {
             witness.append(node).unwrap();
         }
+        
         tree.append(node).unwrap();
 
         // Collect all the RXs and fine if there was a valid result somewhere
