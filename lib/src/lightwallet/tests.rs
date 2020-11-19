@@ -856,6 +856,53 @@ fn test_witness_vk_noupdate() {
 }
 
 #[test]
+fn test_zerovalue_witness_updates() {
+    const AMOUNT1: u64 = 50000;
+    let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
+    let mut phash = block_hash;
+
+    // 2 blocks, so 2 witnesses to start with
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 2);
+
+    // Add 2 new blocks
+    for i in 2..4 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+
+    // 2 blocks, so now 4 total witnesses
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 4);
+    
+    // Now spend the funds, spending 0
+    let my_addr = wallet.add_zaddr();
+    const AMOUNT_SENT: u64 = 0;
+    
+    // Create a tx and send to address
+    let (_, raw_tx) = send_wallet_funds(&wallet, vec![(&my_addr, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(4, phash);
+    cb3.add_tx(&sent_tx);
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+    phash = cb3.hash();
+
+    // Find the zero value note, make sure it has just 1 witnesses, since it was just sent.
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_txid).unwrap().notes.iter().find(|n| n.note.value == 0).unwrap().witnesses.len(), 1);
+    // Add 2 new blocks
+    for i in 5..7 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+    
+    // zero value note still has no witnesses updated
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_txid).unwrap().notes.iter().find(|n| n.note.value == 0).unwrap().witnesses.len(), 0);
+}
+
+#[test]
 fn test_witness_updates() {
     const AMOUNT1: u64 = 50000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);

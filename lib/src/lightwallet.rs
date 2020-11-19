@@ -1797,12 +1797,26 @@ impl LightWallet {
             // Create a write lock 
             let mut txs = self.txs.write().unwrap();
 
-            // Remove the older witnesses from the SaplingNoteData, so that we don't save them 
+            // Remove witnesses from the SaplingNoteData, so that we don't save them 
             // in the wallet, taking up unnecessary space
+            // Witnesses are removed if:
+            // 1. They are old (i.e. spent over a 100 blocks ago), so no risk of the tx getting reorged
+            // 2. If they are 0-value, so they will never be spent
+            // 3. Are not spendable - i.e., don't have a spending key, so no point keeping them updated
             txs.values_mut().for_each(|wtx| {
                 wtx.notes
                     .iter_mut()
-                    .filter(|nd| nd.spent.is_some() && nd.spent_at_height.is_some() && nd.spent_at_height.unwrap() < height - (MAX_REORG as i32) - 1)
+                    .filter(|nd| {
+                        // Was this a spent note that was spent over a 100 blocks ago?
+                        let is_note_old = nd.spent.is_some() && nd.spent_at_height.is_some() && nd.spent_at_height.unwrap() < height - (MAX_REORG as i32) - 1;
+                        
+                        // Is this a zero-value note?
+                        let is_zero_note = nd.note.value == 0;
+
+                        let is_not_spendable = !nd.is_spendable;
+
+                        return is_note_old || is_zero_note || is_not_spendable;
+                    })
                     .for_each(|nd| {
                         nd.witnesses.clear()
                     })
@@ -1830,16 +1844,15 @@ impl LightWallet {
             for tx in txs.values_mut() {
                 for nd in tx.notes.iter_mut() {
                     // Duplicate the most recent witness
-                    if nd.is_spendable {
-                        if let Some(witness) = nd.witnesses.last() {
-                            let clone = witness.clone();
-                            nd.witnesses.push(clone);
-                        }
-                        // Trim the oldest witnesses
-                        nd.witnesses = nd
-                            .witnesses
-                            .split_off(nd.witnesses.len().saturating_sub(100));
+                    if let Some(witness) = nd.witnesses.last() {
+                        let clone = witness.clone();
+                        nd.witnesses.push(clone);
                     }
+
+                    // Trim the oldest witnesses, keeping around only MAX_REORG witnesses
+                    nd.witnesses = nd
+                        .witnesses
+                        .split_off(nd.witnesses.len().saturating_sub(MAX_REORG));
                 }
             }
 
@@ -1850,23 +1863,7 @@ impl LightWallet {
                 // Create a single mutable slice of all the wallet's note's witnesses.
                 let mut witness_refs: Vec<_> = txs
                     .values_mut()
-                    .map(|tx| 
-                        tx.notes.iter_mut()
-                            .filter_map(|nd| 
-                                if !nd.is_spendable { 
-                                    // If the note is not spendable, then no point updating it
-                                    None
-                                } else if nd.spent.is_none() && nd.unconfirmed_spent.is_none() {
-                                    // Note was not spent 
-                                    nd.witnesses.last_mut() 
-                                } else if nd.spent.is_some() && nd.spent_at_height.is_some() && nd.spent_at_height.unwrap() < height - (MAX_REORG as i32) - 1 {
-                                   // Note was spent in the last 100 blocks
-                                    nd.witnesses.last_mut() 
-                                } else {
-                                    // If note was old (spent NOT in the last 100 blocks)
-                                    None 
-                                }))
-                    .flatten()
+                    .flat_map(|tx| tx.notes.iter_mut().filter_map(|nd| nd.witnesses.last_mut()))
                     .collect();
 
                 self.scan_block_internal(
