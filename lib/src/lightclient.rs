@@ -1,5 +1,6 @@
 use crate::lightwallet::{message::Message, LightWallet};
 
+use zcash_proofs::prover::LocalTxProver;
 use std::sync::{Arc, RwLock, Mutex, mpsc::channel};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
@@ -1545,9 +1546,11 @@ impl LightClient {
 
         let result = {
             let _lock = self.sync_lock.lock().unwrap();
+            let prover = LocalTxProver::from_bytes(&self.sapling_spend, &self.sapling_output);
+            
             self.wallet.read().unwrap().send_to_address(
                 branch_id,
-                &self.sapling_spend, &self.sapling_output, 
+                prover,
                 true, 
                 vec![(&addr, tbal - fee, None)],
                 |txbytes| broadcast_raw_tx(&self.get_server_uri(), txbytes)
@@ -1577,10 +1580,11 @@ impl LightClient {
 
         let result = {
             let _lock = self.sync_lock.lock().unwrap();
-        
+            let prover = LocalTxProver::from_bytes(&self.sapling_spend, &self.sapling_output);
+
             self.wallet.write().unwrap().send_to_address(
                 branch_id, 
-                &self.sapling_spend, &self.sapling_output,
+                prover,
                 false,
                 addrs,
                 |txbytes| broadcast_raw_tx(&self.get_server_uri(), txbytes)

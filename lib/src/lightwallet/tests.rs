@@ -1,34 +1,44 @@
+use rand::{rngs::OsRng, RngCore};
 use std::convert::TryInto;
-use rand::{RngCore, rngs::OsRng};
 
-use ff::{PrimeField, Field};
+use ff::{Field, PrimeField};
 use group::GroupEncoding;
-use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
-use zcash_client_backend::{encoding::{encode_payment_address, decode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key},
-    proto::compact_formats::{
-        CompactBlock, CompactOutput, CompactSpend, CompactTx,
-    }
+use protobuf::{CachedSize, Message, RepeatedField, UnknownFields};
+use zcash_client_backend::{
+    encoding::{
+        decode_extended_full_viewing_key, decode_extended_spending_key, decode_payment_address,
+        encode_payment_address,
+    },
+    proto::compact_formats::{CompactBlock, CompactOutput, CompactSpend, CompactTx},
 };
 use zcash_primitives::{
     block::BlockHash,
+    constants::SPENDING_KEY_GENERATOR,
+    legacy::{Script, TransparentAddress},
+    merkle_tree::MerklePath,
     note_encryption::{Memo, SaplingNoteEncryption},
-    primitives::{Note, PaymentAddress, Rseed},
-    legacy::{Script, TransparentAddress,},
+    primitives::ValueCommitment,
+    primitives::{Diversifier, Note, PaymentAddress, ProofGenerationKey, Rseed},
+    prover::TxProver,
+    redjubjub::Signature,
+    sapling::Node,
+    transaction::components::GROTH_PROOF_SIZE,
     transaction::{
-        TxId, Transaction, TransactionData,
-        components::{TxOut, TxIn, OutPoint, Amount,},
         components::amount::DEFAULT_FEE,
+        components::{Amount, OutPoint, TxIn, TxOut},
+        Transaction, TransactionData, TxId,
     },
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
 };
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
+use zcash_proofs::{prover::LocalTxProver, sapling::SaplingProvingContext};
 
-use super::{LightWallet, message};
 use super::LightClientConfig;
-use crate::lightwallet::walletzkey::{WalletZKeyType};
-use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
+use super::{message, LightWallet};
+use crate::lightwallet::walletzkey::WalletZKeyType;
 use crate::SaplingParams;
+use secp256k1::{key::PublicKey, key::SecretKey, Secp256k1};
 
 use lazy_static::lazy_static;
 lazy_static!(
@@ -46,6 +56,82 @@ lazy_static!(
 
     static ref BRANCH_ID: u32 = u32::from_str_radix("2bb40e60", 16).unwrap();
 );
+
+
+struct FakeTxProver {}
+
+impl TxProver for FakeTxProver {
+    type SaplingProvingContext = SaplingProvingContext;
+
+    fn new_sapling_proving_context(&self) -> Self::SaplingProvingContext {
+        SaplingProvingContext::new()
+    }
+
+    fn spend_proof(
+        &self,
+        _ctx: &mut Self::SaplingProvingContext,
+        proof_generation_key: ProofGenerationKey,
+        _diversifier: Diversifier,
+        _rseed: Rseed,
+        ar: jubjub::Fr,
+        value: u64,
+        _anchor: bls12_381::Scalar,
+        _merkle_path: MerklePath<Node>,
+    ) -> Result<([u8; GROTH_PROOF_SIZE], jubjub::ExtendedPoint, zcash_primitives::redjubjub::PublicKey), ()> {
+        let zkproof = [0u8; GROTH_PROOF_SIZE];
+
+        let mut rng = OsRng;
+
+        // We create the randomness of the value commitment
+        let rcv = jubjub::Fr::random(&mut rng);
+        let cv = ValueCommitment {
+            value,
+            randomness: rcv,
+        };
+        // Compute value commitment
+        let value_commitment: jubjub::ExtendedPoint = cv.commitment().into();
+
+        let rk =
+        zcash_primitives::redjubjub::PublicKey(proof_generation_key.ak.clone().into()).randomize(ar, SPENDING_KEY_GENERATOR);
+
+        Ok((zkproof, value_commitment, rk))
+    }
+
+    fn output_proof(
+        &self,
+        _ctx: &mut Self::SaplingProvingContext,
+        _esk: jubjub::Fr,
+        _payment_address: PaymentAddress,
+        _rcm: jubjub::Fr,
+        value: u64,
+    ) -> ([u8; GROTH_PROOF_SIZE], jubjub::ExtendedPoint) {
+        let zkproof = [0u8; GROTH_PROOF_SIZE];
+        
+        let mut rng = OsRng;
+
+        // We create the randomness of the value commitment
+        let rcv = jubjub::Fr::random(&mut rng);
+
+        let cv = ValueCommitment {
+            value,
+            randomness: rcv,
+        };
+        // Compute value commitment
+        let value_commitment: jubjub::ExtendedPoint = cv.commitment().into();
+        (zkproof, value_commitment)
+    }
+
+    fn binding_sig(
+        &self,
+        _ctx: &mut Self::SaplingProvingContext,
+        _value_balance: Amount,
+        _sighash: &[u8; 32],
+    ) -> Result<Signature, ()> {
+        let fake_bytes = vec![0u8; 64];
+        Signature::read(&fake_bytes[..]).map_err(|_e| ())
+    }
+}
+
 
 struct FakeCompactBlock {
     block: CompactBlock,
@@ -735,7 +821,7 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
 
 // A test helper method to send a transaction
 fn send_wallet_funds(wallet: &LightWallet, tos: Vec<(&str, u64, Option<String>)>) -> Result<(String, Vec<u8>), String> {
-    wallet.send_to_address(*BRANCH_ID, &SS, &SO, false, tos, |_| Ok(' '.to_string()))
+    wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, false, tos, |_| Ok(' '.to_string()))
 }
 
 #[test]
@@ -1466,12 +1552,12 @@ fn test_transparent_only_send() {
     // Try to send in transparent-only mode, but try and spend more than we have. This is an error. 
     
     // Create a tx and send to address. This should consume both the UTXO and the note
-    let r = wallet.send_to_address(*BRANCH_ID, &SS, &SO, true,
+    let r = wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, true,
          vec![(&ext_address, 50000, None)], |_| Ok(' '.to_string()));
     assert!(r.err().unwrap().contains("Insufficient"));
 
     // Send the appropriate amount, that should work
-    let (_, raw_tx) = wallet.send_to_address(*BRANCH_ID, &SS, &SO, true,
+    let (_, raw_tx) = wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, true,
         vec![(&ext_address, 30000, None)], |_| Ok(' '.to_string())).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
@@ -2069,7 +2155,7 @@ fn test_bad_send() {
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
 
     // Broadcast error
-    let raw_tx = wallet.send_to_address(*BRANCH_ID, &SS, &SO, false,
+    let raw_tx = wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, false,
         vec![(&ext_taddr, 10, None)], |_| Err("broadcast failed".to_string()));
     assert!(raw_tx.err().unwrap().contains("broadcast failed"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
@@ -2103,7 +2189,8 @@ fn test_bad_params() {
     let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());  
 
     // Bad params
-    let _ = wallet.send_to_address(*BRANCH_ID, &[], &[], false,
+    let prover = LocalTxProver::from_bytes(&[], &[]);
+    let _ = wallet.send_to_address(*BRANCH_ID, prover, false,
                             vec![(&ext_taddr, 10, None)], |_| Ok(' '.to_string()));
 }
 
