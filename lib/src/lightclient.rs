@@ -1,7 +1,5 @@
 use crate::lightwallet::{message::Message, LightWallet};
 
-use rand::{rngs::OsRng, seq::SliceRandom};
-
 use std::sync::{Arc, RwLock, Mutex, mpsc::channel};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
@@ -1500,39 +1498,30 @@ impl LightClient {
         txids_to_fetch.sort();
         txids_to_fetch.dedup();
 
-        let mut rng = OsRng;        
-        txids_to_fetch.shuffle(&mut rng);
+        let result: Vec<Result<(), String>> = {
+            // Fetch all the txids in a parallel iterator
+            use rayon::prelude::*;
 
-        let num_fetches = txids_to_fetch.len();
-        let (ctx, crx) = channel();
-
-        // And go and fetch the txids, getting the full transaction, so we can 
-        // read the memos
-        for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
-
-            let pool = pool.clone();
             let server_uri = self.get_server_uri();
-            let ctx = ctx.clone();
-            
-            pool.execute(move || {
+
+            txids_to_fetch.par_iter().map(|(txid, height)| {
                 info!("Fetching full Tx: {}", txid);
 
-                match fetch_full_tx(&server_uri, txid) {
+                match fetch_full_tx(&server_uri, *txid) {
                     Ok(tx_bytes) => {
                         let tx = Transaction::read(&tx_bytes[..]).unwrap();
     
-                        light_wallet_clone.read().unwrap().scan_full_tx(&tx, height, 0);
-                        ctx.send(Ok(())).unwrap();
+                        light_wallet_clone.read().unwrap().scan_full_tx(&tx, *height, 0);
+                        Ok(())
                     },
-                    Err(e) => ctx.send(Err(e)).unwrap()
-                };                
-            });
+                    Err(e) => Err(e)
+                }
+            }).collect()
         };
-
+        
         // Wait for all the fetches to finish.
-        let result = crx.iter().take(num_fetches).collect::<Result<Vec<()>, String>>();
-        match result {
+        match result.into_iter().collect::<Result<Vec<()>, String>>() {
             Ok(_) => Ok(object!{
                 "result" => "success",
                 "latest_block" => latest_block,
