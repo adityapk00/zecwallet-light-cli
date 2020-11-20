@@ -797,6 +797,7 @@ impl LightClient {
             Ok(i) => {
                 let o = object!{
                     "version" => i.version,
+                    "server_uri" => self.get_server_uri().to_string(),
                     "vendor" => i.vendor,
                     "taddr_support" => i.taddr_support,
                     "chain_name" => i.chain_name,
