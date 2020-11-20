@@ -279,13 +279,14 @@ pub struct Utxo {
     pub value: u64,
     pub height: i32,
 
+    pub spent_at_height: Option<i32>,
     pub spent: Option<TxId>,             // If this utxo was confirmed spent
     pub unconfirmed_spent: Option<TxId>, // If this utxo was spent in a send, but has not yet been confirmed.
 }
 
 impl Utxo {
     pub fn serialized_version() -> u64 {
-        return 1;
+        return 2;
     }
 
     pub fn to_outpoint(&self) -> OutPoint {
@@ -294,7 +295,7 @@ impl Utxo {
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        assert_eq!(version, Utxo::serialized_version());
+        assert!(version <= Utxo::serialized_version());
 
         let address_len = reader.read_i32::<LittleEndian>()?;
         let mut address_bytes = vec![0; address_len as usize];
@@ -322,6 +323,12 @@ impl Utxo {
             Ok(TxId{0: txbytes})
         })?;
 
+        let spent_at_height = if version <= 1 { None } else {
+            Optional::read(&mut reader, |r| {
+                r.read_i32::<LittleEndian>()
+            })?
+        };
+
         // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
 
         Ok(Utxo {
@@ -331,6 +338,7 @@ impl Utxo {
             script,
             value,
             height,
+            spent_at_height,
             spent,
             unconfirmed_spent: None::<TxId>,
         })
@@ -351,6 +359,8 @@ impl Utxo {
         Vector::write(&mut writer, &self.script, |w, b| w.write_all(&[*b]))?;
 
         Optional::write(&mut writer, &self.spent, |w, txid| w.write_all(&txid.0))?;
+
+        Optional::write(&mut writer, &self.spent_at_height, |w, s| w.write_i32::<LittleEndian>(*s))?;
 
         // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
 

@@ -907,6 +907,7 @@ impl LightClient {
                                 "scriptkey"          => hex::encode(utxo.script.clone()),
                                 "is_change"          => false, // TODO: Identify notes as change if we send change to taddrs
                                 "address"            => utxo.address.clone(),
+                                "spent_at_height"    => utxo.spent_at_height,
                                 "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
                                 "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
                             })

@@ -150,7 +150,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 10;
+        return 11;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -419,7 +419,7 @@ impl LightWallet {
         };
 
         // Do a one-time fix of the spent_at_height for older wallets
-        if version <= 7 {
+        if version <= 10 {
             lw.fix_spent_at_height();
         }
 
@@ -1156,6 +1156,7 @@ impl LightWallet {
                         script: vout.script_pubkey.0.clone(),
                         value: vout.value.into(),
                         height,
+                        spent_at_height: None,
                         spent: None,
                         unconfirmed_spent: None,
                     });
@@ -1300,6 +1301,7 @@ impl LightWallet {
                     match spent_utxo {
                         Some(su) => {
                             info!("Spent utxo from {} was spent in {}", txid, tx.txid());
+                            su.spent_at_height = Some(height);
                             su.spent = Some(tx.txid().clone());
                             su.unconfirmed_spent = None;
 
@@ -2050,6 +2052,15 @@ impl LightWallet {
                 .filter(|nd| nd.spent.is_some() && nd.spent_at_height.is_none())
                 .for_each(|nd| {
                     nd.spent_at_height = spent_txid_map.get(&nd.spent.unwrap()).map(|b| *b);
+                })
+        });
+
+        // Go over all the Utxos that might need updating
+        self.txs.write().unwrap().values_mut().for_each(|wtx| {
+            wtx.utxos.iter_mut()
+                .filter(|utxo| utxo.spent.is_some() && utxo.spent_at_height.is_none())
+                .for_each(|utxo| {
+                    utxo.spent_at_height = spent_txid_map.get(&utxo.spent.unwrap()).map(|b| *b);
                 })
         });
     }

@@ -532,6 +532,7 @@ fn test_t_receive_spend() {
         assert_eq!(txs.len(), 2);
         assert_eq!(txs[&txid1].utxos.len(), 1);
         assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+        assert_eq!(txs[&txid1].utxos[0].spent_at_height, Some(101));
         assert_eq!(txs[&txid1].utxos[0].spent, Some(txid2));
         assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
 
@@ -607,6 +608,7 @@ fn test_t_receive_spend_among_tadds() {
         assert_eq!(txs.len(), 2);
         assert_eq!(txs[&txid1].utxos.len(), 1);
         assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+        assert_eq!(txs[&txid1].utxos[0].spent_at_height, Some(101));
         assert_eq!(txs[&txid1].utxos[0].spent, Some(txid2));
         assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
 
@@ -716,6 +718,7 @@ fn test_serialization() {
         assert_eq!(txs[&ttxid1].utxos[0].output_index, 0);
         assert_eq!(txs[&ttxid1].utxos[0].value, TAMOUNT1);
         assert_eq!(txs[&ttxid1].utxos[0].height, 0);
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, Some(1));
         assert_eq!(txs[&ttxid1].utxos[0].spent, Some(ttxid2));
         assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
 
@@ -1669,6 +1672,7 @@ fn test_transparent_only_send() {
 
         // Now make sure the t addr was recieved
         assert_eq!(txs[&txid_t].utxos[0].address, taddr);
+        assert_eq!(txs[&txid_t].utxos[0].spent_at_height, Some(2));
         assert_eq!(txs[&txid_t].utxos[0].spent, Some(sent_txid));
 
         assert_eq!(wallet.tbalance(None), 0);
@@ -1763,6 +1767,7 @@ fn test_t_spend_to_z() {
 
         // The UTXO should also be spent
         assert_eq!(txs[&txid_t].utxos[0].address, taddr);
+        assert_eq!(txs[&txid_t].utxos[0].spent_at_height, Some(2));
         assert_eq!(txs[&txid_t].utxos[0].spent, Some(sent_txid));
         assert_eq!(txs[&txid_t].utxos[0].unconfirmed_spent, None);
 
@@ -2042,6 +2047,7 @@ fn test_multi_t() {
         assert_eq!(txs[&sent_txid1].utxos.len(), 1);
         assert_eq!(txs[&sent_txid1].utxos[0].value, AMOUNT_SENT1);
         assert_eq!(txs[&sent_txid1].utxos[0].address, taddr2);
+        assert_eq!(txs[&sent_txid1].utxos[0].spent_at_height, Some(3));
         assert_eq!(txs[&sent_txid1].utxos[0].spent, Some(sent_txid2));
         assert_eq!(txs[&sent_txid1].utxos[0].unconfirmed_spent, None);
     }
