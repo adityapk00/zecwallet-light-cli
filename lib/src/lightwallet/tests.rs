@@ -1062,6 +1062,100 @@ fn test_witness_updates() {
 }
 
 #[test]
+fn test_remove_unused_taddrs() {
+    let secp = Secp256k1::new();
+    
+    const AMOUNT1: u64 = 50000;
+    
+    let (wallet, _txid, _block_hash) = get_test_wallet(AMOUNT1);
+
+    // Send a fake transaction to the last taddr
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap().first().unwrap());
+
+    // Start with 1 taddr
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 1); 
+    
+    // Send a Tx to the last address
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, AMOUNT1);
+
+    let tx = ftx.get_tx();
+    wallet.scan_full_tx(&tx, 3, 0);  
+
+    // Now, 5 new addresses should be created. 
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 1+5); 
+
+    wallet.remove_unused_taddrs();
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 1); // extra addresses removed
+
+    // Send to the 2nd taddr
+    wallet.add_taddr();
+    let pk2 = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap().get(1).unwrap());
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk2, AMOUNT1);
+
+    let tx = ftx.get_tx();
+    wallet.scan_full_tx(&tx, 3, 0);  
+
+    // Now, 5 new addresses should be created. 
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 2+5); 
+
+    // extra addresses are not removed, because once we get to the 2nd address, the remove doesn't do anything
+    wallet.remove_unused_taddrs();
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 2+5); 
+}
+
+#[test]
+fn test_remove_unused_zaddrs() {
+    const AMOUNT1: u64 = 50000;
+    const AMOUNT_SENT: u64 = 10000;
+    
+    let (wallet, _txid, block_hash) = get_test_wallet(AMOUNT1);
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 6);   // Starts with 1+5 addresses
+
+    wallet.remove_unused_zaddrs();
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 1);   // All extra addresses removed
+
+    let my_addr = wallet.get_all_zaddresses().get(0).unwrap().clone();
+
+    // Create a tx and send to address
+    let (_, raw_tx) = send_wallet_funds(&wallet, 
+        vec![(&my_addr, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let _sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(2, block_hash);
+    cb3.add_tx(&sent_tx);
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 6);   // New addresses created
+    
+    wallet.remove_unused_zaddrs();
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 1);   // All extra addresses removed
+
+    let zaddr2 = wallet.add_zaddr();
+    
+    // Create a tx and send to address
+    let (_, raw_tx) = send_wallet_funds(&wallet, 
+        vec![(&zaddr2, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let _sent_txid = sent_tx.txid();
+
+    let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
+    cb4.add_tx(&sent_tx);
+    wallet.scan_block(&cb4.as_bytes()).unwrap();
+    
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 7);   // New addresses created
+    
+    // This should do nothing, since the second address is now used. 
+    wallet.remove_unused_zaddrs();
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 7);  
+
+}
+
+#[test]
 fn test_z_spend_to_z() {
     const AMOUNT1: u64 = 50000;
     let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
@@ -1792,7 +1886,7 @@ fn test_add_new_zt_hd_after_incoming() {
     wallet.scan_block(&cb3.as_bytes()).unwrap();
 
     // NOw, 5 new addresses should be created
-    assert_eq!(wallet.zkeys.read().unwrap().len(), 6+5);     
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 6+5);
 
     let secp = Secp256k1::new();
     // Send a fake transaction to the last taddr

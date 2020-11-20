@@ -69,7 +69,7 @@ use extended_key::{ExtendedPrivKey, KeyIndex};
 use walletzkey::{WalletZKey, WalletZKeyType};
 
 pub const MAX_REORG: usize = 100;
-pub const GAP_RULE_UNUSED_ADDRESSES: usize = if cfg!(any(target_os="ios", target_os="android")) { 1 } else { 5 };
+pub const GAP_RULE_UNUSED_ADDRESSES: usize = if cfg!(any(target_os="ios", target_os="android")) { 0 } else { 5 };
 
 fn now() -> f64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
@@ -1166,6 +1166,10 @@ impl LightWallet {
 
     // If one of the last 'n' taddress was used, ensure we add the next HD taddress to the wallet. 
     pub fn ensure_hd_taddresses(&self, address: &String) {        
+        if GAP_RULE_UNUSED_ADDRESSES == 0 {
+            return;
+        }
+
         let last_addresses = {
             self.taddresses.read().unwrap().iter().rev().take(GAP_RULE_UNUSED_ADDRESSES).map(|s| s.clone()).collect::<Vec<String>>()
         };
@@ -1189,6 +1193,10 @@ impl LightWallet {
 
     // If one of the last 'n' zaddress was used, ensure we add the next HD zaddress to the wallet
     pub fn ensure_hd_zaddresses(&self, address: &String) {
+        if GAP_RULE_UNUSED_ADDRESSES == 0 {
+            return;
+        }
+
         let last_addresses = {
             self.zkeys.read().unwrap().iter()
                 .filter(|zk| zk.keytype == WalletZKeyType::HdKey)
@@ -1212,6 +1220,48 @@ impl LightWallet {
                     self.add_zaddr();
                 }
             }
+        }
+    }
+
+    pub fn remove_unused_taddrs(&self) {
+        if self.tkeys.read().unwrap().len() <= 1 {
+            return;
+        }
+
+        let txns = self.txs.write().unwrap();
+        let taddrs = self.taddresses.read().unwrap().iter().map(|a| a.clone()).collect::<Vec<_>>();
+
+        let highest_account = txns.values()
+            .flat_map(|wtx| 
+                wtx.utxos.iter().map(|u| taddrs.iter().position(|taddr| *taddr == u.address).unwrap_or(taddrs.len()))
+            )
+            .max();
+
+        if highest_account.is_none() {
+            return;
+        }
+
+        if highest_account.unwrap() == 0 {
+            // Remove unused addresses
+            self.tkeys.write().unwrap().truncate(1);
+            self.taddresses.write().unwrap().truncate(1);
+        }
+    }
+
+    pub fn remove_unused_zaddrs(&self) {
+        if self.zkeys.read().unwrap().len() <=1 {
+            return;
+        }
+
+        let txns = self.txs.write().unwrap();
+        let highest_account = txns.values().flat_map(|wtx| wtx.notes.iter().map(|n| n.account)).max();
+        if highest_account.is_none() {
+            return;
+        }
+
+        if highest_account.unwrap() == 0 {
+            // Remove unused addresses
+            self.zkeys.write().unwrap().truncate(1);
         }
     }
     
