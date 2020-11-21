@@ -2426,10 +2426,35 @@ fn test_rollback() {
     // Add with the proper prev hash
     add_blocks(&wallet, 5, 2, blk4_hash).unwrap();
 
+    // recieve a t utxo
+    let secp = Secp256k1::new();
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+
+    const TAMOUNT1: u64 = 20000;
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, TAMOUNT1);
+
+    let tx = ftx.get_tx();
+    let ttxid1 = tx.txid();
+
+    wallet.scan_full_tx(&tx, 6, 0);  
+
     let blk6_hash;
     {
         let blks = wallet.blocks.read().unwrap();
         blk6_hash = blks[6].hash.clone();
+    }
+
+    {
+        // Ensure the utxo is in
+        let txs = wallet.txs.read().unwrap();
+
+        // Now make sure the t addr was recieved
+        assert_eq!(txs[&ttxid1].utxos.len(), 1);
+        assert_eq!(txs[&ttxid1].utxos[0].height, 6);
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, None);
+        assert_eq!(txs[&ttxid1].utxos[0].spent, None);
+        assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
     }
 
     // Now do a Tx
@@ -2451,14 +2476,22 @@ fn test_rollback() {
     // Make sure the Tx is in.
     {
         let txs = wallet.txs.read().unwrap();
+
+        // Note was spent
         assert_eq!(txs[&txid1].notes.len(), 1);
         assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+        assert_eq!(txs[&txid1].notes[0].spent_at_height, Some(7));
         assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
         assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+        // The utxo should automatically be included
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, Some(7));
+        assert_eq!(txs[&ttxid1].utxos[0].spent, Some(sent_txid));
+        assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
         
         // The sent tx should generate change
         assert_eq!(txs[&sent_txid].notes.len(), 1);
-        assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT - AMOUNT_SENT - fee);
+        assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT - AMOUNT_SENT + TAMOUNT1 - fee);
         assert_eq!(txs[&sent_txid].notes[0].is_change, true);
         assert_eq!(txs[&sent_txid].notes[0].spent, None);
         assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
@@ -2474,12 +2507,17 @@ fn test_rollback() {
     {
         let txs = wallet.txs.read().unwrap();
 
-        // Orig Tx is still there, since this is in block 0
-        // But now the spent tx is gone
+        // Orig Tx is still there, since this is in block 0, but the "spent"
+        // has been rolled back, both for the note and utxo
         assert_eq!(txs[&txid1].notes.len(), 1);
         assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+        assert_eq!(txs[&txid1].notes[0].spent_at_height, None);
         assert_eq!(txs[&txid1].notes[0].spent, None);
         assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, None);
+        assert_eq!(txs[&ttxid1].utxos[0].spent, None);
+        assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
 
         // The sent tx is missing
         assert!(txs.get(&sent_txid).is_none());

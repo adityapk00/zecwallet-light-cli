@@ -1532,14 +1532,29 @@ impl LightWallet {
             // were spent in any of the txids that were removed
             txs.values_mut()
                 .for_each(|wtx| {
+                    // Update notes to rollback any spent notes
                     wtx.notes.iter_mut()
                         .for_each(|nd| {
                             if nd.spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap()) {
                                 nd.spent = None;
+                                nd.spent_at_height = None;
                             }
 
                             if nd.unconfirmed_spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap()) {
                                 nd.unconfirmed_spent = None;
+                            }
+                        });
+                    
+                    // Update UTXOs to rollback any spent utxos
+                    wtx.utxos.iter_mut()
+                        .for_each(|utxo| {
+                            if utxo.spent.is_some() && txids_to_remove.contains(&utxo.spent.unwrap()) {
+                                utxo.spent = None;
+                                utxo.spent_at_height = None;
+                            }
+
+                            if utxo.unconfirmed_spent.is_some() && txids_to_remove.contains(&utxo.unconfirmed_spent.unwrap()) {
+                                utxo.unconfirmed_spent = None;
                             }
                         })
                 })
