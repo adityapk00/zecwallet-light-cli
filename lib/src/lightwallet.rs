@@ -393,8 +393,8 @@ impl LightWallet {
                 .collect();
             txs.values_mut().for_each(|tx| {
                 tx.notes.iter_mut().for_each(|nd| {
-                    nd.is_spendable = spendable_keys.contains(&nd.extfvk);
-                    if !nd.is_spendable {
+                    nd.have_spending_key = spendable_keys.contains(&nd.extfvk);
+                    if !nd.have_spending_key {
                         nd.witnesses.clear();
                     }
                 })
@@ -1900,10 +1900,8 @@ impl LightWallet {
                         
                         // Is this a zero-value note?
                         let is_zero_note = nd.note.value == 0;
-
-                        let is_not_spendable = !nd.is_spendable;
-
-                        return is_note_old || is_zero_note || is_not_spendable;
+                        
+                        return is_note_old || is_zero_note || !nd.have_spending_key;
                     })
                     .for_each(|nd| {
                         nd.witnesses.clear()

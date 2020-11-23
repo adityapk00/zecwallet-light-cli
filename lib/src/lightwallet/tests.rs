@@ -928,7 +928,7 @@ fn test_witness_vk_noupdate() {
     wallet.scan_block(&cb1.as_bytes()).unwrap();
 
     // Assert no witnesses are present in the imported view key
-    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].is_spendable, false);
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].have_spending_key, false);
     assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].is_change, false);
     assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].witnesses.len(), 0);
 
