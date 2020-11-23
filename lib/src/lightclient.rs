@@ -775,13 +775,6 @@ impl LightClient {
                    }
                }
            }
-       }        
-
-       // On mobile, clear out any unused addresses
-       if cfg!(any(target_os="ios", target_os="android")) { 
-            let wallet = self.wallet.write().unwrap();
-            wallet.remove_unused_zaddrs();
-            wallet.remove_unused_taddrs();
        }
 
        let mut buffer: Vec<u8> = vec![];

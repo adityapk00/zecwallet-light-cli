@@ -150,7 +150,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 11;
+        return 12;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -421,6 +421,17 @@ impl LightWallet {
         // Do a one-time fix of the spent_at_height for older wallets
         if version <= 10 {
             lw.fix_spent_at_height();
+        }
+
+        // On mobile, clear out any unused addresses
+        if cfg!(any(target_os="ios", target_os="android")) { 
+            // Before version 11, where we had extra z and t addrs for mobile.
+            if version <= 11 {
+                // Remove extra addresses. Note that this will only remove the extra addresses if the user has used only 1
+                // z address and only 1 t address, which should be the case on mobile (unless the user is reusing the desktop seed)
+                lw.remove_unused_zaddrs();
+                lw.remove_unused_taddrs();
+            }
         }
 
         Ok(lw)
