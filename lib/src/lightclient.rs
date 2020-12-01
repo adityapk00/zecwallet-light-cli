@@ -1,7 +1,6 @@
 use crate::lightwallet::{message::Message, LightWallet};
 
-use rand::{rngs::OsRng, seq::SliceRandom};
-
+use zcash_proofs::prover::LocalTxProver;
 use std::sync::{Arc, RwLock, Mutex, mpsc::channel};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
@@ -776,7 +775,7 @@ impl LightClient {
                    }
                }
            }
-       }        
+       }
 
        let mut buffer: Vec<u8> = vec![];
        match self.wallet.write().unwrap().write(&mut buffer) {
@@ -798,6 +797,7 @@ impl LightClient {
             Ok(i) => {
                 let o = object!{
                     "version" => i.version,
+                    "server_uri" => self.get_server_uri().to_string(),
                     "vendor" => i.vendor,
                     "taddr_support" => i.taddr_support,
                     "chain_name" => i.chain_name,
@@ -900,6 +900,7 @@ impl LightClient {
                                 "scriptkey"          => hex::encode(utxo.script.clone()),
                                 "is_change"          => false, // TODO: Identify notes as change if we send change to taddrs
                                 "address"            => utxo.address.clone(),
+                                "spent_at_height"    => utxo.spent_at_height,
                                 "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
                                 "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
                             })
@@ -1500,39 +1501,30 @@ impl LightClient {
         txids_to_fetch.sort();
         txids_to_fetch.dedup();
 
-        let mut rng = OsRng;        
-        txids_to_fetch.shuffle(&mut rng);
+        let result: Vec<Result<(), String>> = {
+            // Fetch all the txids in a parallel iterator
+            use rayon::prelude::*;
 
-        let num_fetches = txids_to_fetch.len();
-        let (ctx, crx) = channel();
-
-        // And go and fetch the txids, getting the full transaction, so we can 
-        // read the memos
-        for (txid, height) in txids_to_fetch {
             let light_wallet_clone = self.wallet.clone();
-
-            let pool = pool.clone();
             let server_uri = self.get_server_uri();
-            let ctx = ctx.clone();
-            
-            pool.execute(move || {
+
+            txids_to_fetch.par_iter().map(|(txid, height)| {
                 info!("Fetching full Tx: {}", txid);
 
-                match fetch_full_tx(&server_uri, txid) {
+                match fetch_full_tx(&server_uri, *txid) {
                     Ok(tx_bytes) => {
                         let tx = Transaction::read(&tx_bytes[..]).unwrap();
     
-                        light_wallet_clone.read().unwrap().scan_full_tx(&tx, height, 0);
-                        ctx.send(Ok(())).unwrap();
+                        light_wallet_clone.read().unwrap().scan_full_tx(&tx, *height, 0);
+                        Ok(())
                     },
-                    Err(e) => ctx.send(Err(e)).unwrap()
-                };                
-            });
+                    Err(e) => Err(e)
+                }
+            }).collect()
         };
-
+        
         // Wait for all the fetches to finish.
-        let result = crx.iter().take(num_fetches).collect::<Result<Vec<()>, String>>();
-        match result {
+        match result.into_iter().collect::<Result<Vec<()>, String>>() {
             Ok(_) => Ok(object!{
                 "result" => "success",
                 "latest_block" => latest_block,
@@ -1556,9 +1548,11 @@ impl LightClient {
 
         let result = {
             let _lock = self.sync_lock.lock().unwrap();
+            let prover = LocalTxProver::from_bytes(&self.sapling_spend, &self.sapling_output);
+            
             self.wallet.read().unwrap().send_to_address(
                 branch_id,
-                &self.sapling_spend, &self.sapling_output, 
+                prover,
                 true, 
                 vec![(&addr, tbal - fee, None)],
                 |txbytes| broadcast_raw_tx(&self.get_server_uri(), txbytes)
@@ -1588,10 +1582,11 @@ impl LightClient {
 
         let result = {
             let _lock = self.sync_lock.lock().unwrap();
-        
+            let prover = LocalTxProver::from_bytes(&self.sapling_spend, &self.sapling_output);
+
             self.wallet.write().unwrap().send_to_address(
                 branch_id, 
-                &self.sapling_spend, &self.sapling_output,
+                prover,
                 false,
                 addrs,
                 |txbytes| broadcast_raw_tx(&self.get_server_uri(), txbytes)

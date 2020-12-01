@@ -1,34 +1,44 @@
+use rand::{rngs::OsRng, RngCore};
 use std::convert::TryInto;
-use rand::{RngCore, rngs::OsRng};
 
-use ff::{PrimeField, Field};
+use ff::{Field, PrimeField};
 use group::GroupEncoding;
-use protobuf::{Message, UnknownFields, CachedSize, RepeatedField};
-use zcash_client_backend::{encoding::{encode_payment_address, decode_payment_address, decode_extended_spending_key, decode_extended_full_viewing_key},
-    proto::compact_formats::{
-        CompactBlock, CompactOutput, CompactSpend, CompactTx,
-    }
+use protobuf::{CachedSize, Message, RepeatedField, UnknownFields};
+use zcash_client_backend::{
+    encoding::{
+        decode_extended_full_viewing_key, decode_extended_spending_key, decode_payment_address,
+        encode_payment_address,
+    },
+    proto::compact_formats::{CompactBlock, CompactOutput, CompactSpend, CompactTx},
 };
 use zcash_primitives::{
     block::BlockHash,
+    constants::SPENDING_KEY_GENERATOR,
+    legacy::{Script, TransparentAddress},
+    merkle_tree::MerklePath,
     note_encryption::{Memo, SaplingNoteEncryption},
-    primitives::{Note, PaymentAddress, Rseed},
-    legacy::{Script, TransparentAddress,},
+    primitives::ValueCommitment,
+    primitives::{Diversifier, Note, PaymentAddress, ProofGenerationKey, Rseed},
+    prover::TxProver,
+    redjubjub::Signature,
+    sapling::Node,
+    transaction::components::GROTH_PROOF_SIZE,
     transaction::{
-        TxId, Transaction, TransactionData,
-        components::{TxOut, TxIn, OutPoint, Amount,},
         components::amount::DEFAULT_FEE,
+        components::{Amount, OutPoint, TxIn, TxOut},
+        Transaction, TransactionData, TxId,
     },
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
 };
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
+use zcash_proofs::{prover::LocalTxProver, sapling::SaplingProvingContext};
 
-use super::{LightWallet, message};
 use super::LightClientConfig;
-use crate::lightwallet::walletzkey::{WalletZKeyType};
-use secp256k1::{Secp256k1, key::PublicKey, key::SecretKey};
+use super::{message, LightWallet};
+use crate::lightwallet::walletzkey::WalletZKeyType;
 use crate::SaplingParams;
+use secp256k1::{key::PublicKey, key::SecretKey, Secp256k1};
 
 use lazy_static::lazy_static;
 lazy_static!(
@@ -46,6 +56,82 @@ lazy_static!(
 
     static ref BRANCH_ID: u32 = u32::from_str_radix("2bb40e60", 16).unwrap();
 );
+
+
+struct FakeTxProver {}
+
+impl TxProver for FakeTxProver {
+    type SaplingProvingContext = SaplingProvingContext;
+
+    fn new_sapling_proving_context(&self) -> Self::SaplingProvingContext {
+        SaplingProvingContext::new()
+    }
+
+    fn spend_proof(
+        &self,
+        _ctx: &mut Self::SaplingProvingContext,
+        proof_generation_key: ProofGenerationKey,
+        _diversifier: Diversifier,
+        _rseed: Rseed,
+        ar: jubjub::Fr,
+        value: u64,
+        _anchor: bls12_381::Scalar,
+        _merkle_path: MerklePath<Node>,
+    ) -> Result<([u8; GROTH_PROOF_SIZE], jubjub::ExtendedPoint, zcash_primitives::redjubjub::PublicKey), ()> {
+        let zkproof = [0u8; GROTH_PROOF_SIZE];
+
+        let mut rng = OsRng;
+
+        // We create the randomness of the value commitment
+        let rcv = jubjub::Fr::random(&mut rng);
+        let cv = ValueCommitment {
+            value,
+            randomness: rcv,
+        };
+        // Compute value commitment
+        let value_commitment: jubjub::ExtendedPoint = cv.commitment().into();
+
+        let rk =
+        zcash_primitives::redjubjub::PublicKey(proof_generation_key.ak.clone().into()).randomize(ar, SPENDING_KEY_GENERATOR);
+
+        Ok((zkproof, value_commitment, rk))
+    }
+
+    fn output_proof(
+        &self,
+        _ctx: &mut Self::SaplingProvingContext,
+        _esk: jubjub::Fr,
+        _payment_address: PaymentAddress,
+        _rcm: jubjub::Fr,
+        value: u64,
+    ) -> ([u8; GROTH_PROOF_SIZE], jubjub::ExtendedPoint) {
+        let zkproof = [0u8; GROTH_PROOF_SIZE];
+        
+        let mut rng = OsRng;
+
+        // We create the randomness of the value commitment
+        let rcv = jubjub::Fr::random(&mut rng);
+
+        let cv = ValueCommitment {
+            value,
+            randomness: rcv,
+        };
+        // Compute value commitment
+        let value_commitment: jubjub::ExtendedPoint = cv.commitment().into();
+        (zkproof, value_commitment)
+    }
+
+    fn binding_sig(
+        &self,
+        _ctx: &mut Self::SaplingProvingContext,
+        _value_balance: Amount,
+        _sighash: &[u8; 32],
+    ) -> Result<Signature, ()> {
+        let fake_bytes = vec![0u8; 64];
+        Signature::read(&fake_bytes[..]).map_err(|_e| ())
+    }
+}
+
 
 struct FakeCompactBlock {
     block: CompactBlock,
@@ -446,6 +532,7 @@ fn test_t_receive_spend() {
         assert_eq!(txs.len(), 2);
         assert_eq!(txs[&txid1].utxos.len(), 1);
         assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+        assert_eq!(txs[&txid1].utxos[0].spent_at_height, Some(101));
         assert_eq!(txs[&txid1].utxos[0].spent, Some(txid2));
         assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
 
@@ -521,6 +608,7 @@ fn test_t_receive_spend_among_tadds() {
         assert_eq!(txs.len(), 2);
         assert_eq!(txs[&txid1].utxos.len(), 1);
         assert_eq!(txs[&txid1].utxos[0].value, AMOUNT1);
+        assert_eq!(txs[&txid1].utxos[0].spent_at_height, Some(101));
         assert_eq!(txs[&txid1].utxos[0].spent, Some(txid2));
         assert_eq!(txs[&txid1].utxos[0].unconfirmed_spent, None);
 
@@ -630,6 +718,7 @@ fn test_serialization() {
         assert_eq!(txs[&ttxid1].utxos[0].output_index, 0);
         assert_eq!(txs[&ttxid1].utxos[0].value, TAMOUNT1);
         assert_eq!(txs[&ttxid1].utxos[0].height, 0);
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, Some(1));
         assert_eq!(txs[&ttxid1].utxos[0].spent, Some(ttxid2));
         assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
 
@@ -735,7 +824,7 @@ fn get_test_wallet(amount: u64) -> (LightWallet, TxId, BlockHash) {
 
 // A test helper method to send a transaction
 fn send_wallet_funds(wallet: &LightWallet, tos: Vec<(&str, u64, Option<String>)>) -> Result<(String, Vec<u8>), String> {
-    wallet.send_to_address(*BRANCH_ID, &SS, &SO, false, tos, |_| Ok(' '.to_string()))
+    wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, false, tos, |_| Ok(' '.to_string()))
 }
 
 #[test]
@@ -839,7 +928,7 @@ fn test_witness_vk_noupdate() {
     wallet.scan_block(&cb1.as_bytes()).unwrap();
 
     // Assert no witnesses are present in the imported view key
-    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].is_spendable, false);
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].have_spending_key, false);
     assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].is_change, false);
     assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].witnesses.len(), 0);
 
@@ -853,6 +942,53 @@ fn test_witness_vk_noupdate() {
 
     // Assert no witnesses are present in the imported view key
     assert_eq!(wallet.txs.read().unwrap().get(&sent_tx.txid()).unwrap().notes[0].witnesses.len(), 0);
+}
+
+#[test]
+fn test_zerovalue_witness_updates() {
+    const AMOUNT1: u64 = 50000;
+    let (wallet, txid1, block_hash) = get_test_wallet(AMOUNT1);
+    let mut phash = block_hash;
+
+    // 2 blocks, so 2 witnesses to start with
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 2);
+
+    // Add 2 new blocks
+    for i in 2..4 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+
+    // 2 blocks, so now 4 total witnesses
+    assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 4);
+    
+    // Now spend the funds, spending 0
+    let my_addr = wallet.add_zaddr();
+    const AMOUNT_SENT: u64 = 0;
+    
+    // Create a tx and send to address
+    let (_, raw_tx) = send_wallet_funds(&wallet, vec![(&my_addr, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(4, phash);
+    cb3.add_tx(&sent_tx);
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+    phash = cb3.hash();
+
+    // Find the zero value note, make sure it has just 1 witnesses, since it was just sent.
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_txid).unwrap().notes.iter().find(|n| n.note.value == 0).unwrap().witnesses.len(), 1);
+    // Add 2 new blocks
+    for i in 5..7 {
+        let blk = FakeCompactBlock::new(i, phash);
+        wallet.scan_block(&blk.as_bytes()).unwrap();
+        phash = blk.hash();
+    }
+    
+    // zero value note still has no witnesses updated
+    assert_eq!(wallet.txs.read().unwrap().get(&sent_txid).unwrap().notes.iter().find(|n| n.note.value == 0).unwrap().witnesses.len(), 0);
 }
 
 #[test]
@@ -926,6 +1062,100 @@ fn test_witness_updates() {
         phash = blk.hash();
     }
     assert_eq!(wallet.txs.read().unwrap().get(&txid1).unwrap().notes[0].witnesses.len(), 0);
+}
+
+#[test]
+fn test_remove_unused_taddrs() {
+    let secp = Secp256k1::new();
+    
+    const AMOUNT1: u64 = 50000;
+    
+    let (wallet, _txid, _block_hash) = get_test_wallet(AMOUNT1);
+
+    // Send a fake transaction to the last taddr
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap().first().unwrap());
+
+    // Start with 1 taddr
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 1); 
+    
+    // Send a Tx to the last address
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, AMOUNT1);
+
+    let tx = ftx.get_tx();
+    wallet.scan_full_tx(&tx, 3, 0);  
+
+    // Now, 5 new addresses should be created. 
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 1+5); 
+
+    wallet.remove_unused_taddrs();
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 1); // extra addresses removed
+
+    // Send to the 2nd taddr
+    wallet.add_taddr();
+    let pk2 = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap().get(1).unwrap());
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk2, AMOUNT1);
+
+    let tx = ftx.get_tx();
+    wallet.scan_full_tx(&tx, 3, 0);  
+
+    // Now, 5 new addresses should be created. 
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 2+5); 
+
+    // extra addresses are not removed, because once we get to the 2nd address, the remove doesn't do anything
+    wallet.remove_unused_taddrs();
+    assert_eq!(wallet.taddresses.read().unwrap().len(), 2+5); 
+}
+
+#[test]
+fn test_remove_unused_zaddrs() {
+    const AMOUNT1: u64 = 50000;
+    const AMOUNT_SENT: u64 = 10000;
+    
+    let (wallet, _txid, block_hash) = get_test_wallet(AMOUNT1);
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 6);   // Starts with 1+5 addresses
+
+    wallet.remove_unused_zaddrs();
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 1);   // All extra addresses removed
+
+    let my_addr = wallet.get_all_zaddresses().get(0).unwrap().clone();
+
+    // Create a tx and send to address
+    let (_, raw_tx) = send_wallet_funds(&wallet, 
+        vec![(&my_addr, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let _sent_txid = sent_tx.txid();
+
+    let mut cb3 = FakeCompactBlock::new(2, block_hash);
+    cb3.add_tx(&sent_tx);
+    wallet.scan_block(&cb3.as_bytes()).unwrap();
+
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 6);   // New addresses created
+    
+    wallet.remove_unused_zaddrs();
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 1);   // All extra addresses removed
+
+    let zaddr2 = wallet.add_zaddr();
+    
+    // Create a tx and send to address
+    let (_, raw_tx) = send_wallet_funds(&wallet, 
+        vec![(&zaddr2, AMOUNT_SENT, None)]).unwrap();
+
+    let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
+    let _sent_txid = sent_tx.txid();
+
+    let mut cb4 = FakeCompactBlock::new(3, cb3.hash());
+    cb4.add_tx(&sent_tx);
+    wallet.scan_block(&cb4.as_bytes()).unwrap();
+    
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 7);   // New addresses created
+    
+    // This should do nothing, since the second address is now used. 
+    wallet.remove_unused_zaddrs();
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 7);  
+
 }
 
 #[test]
@@ -1419,12 +1649,12 @@ fn test_transparent_only_send() {
     // Try to send in transparent-only mode, but try and spend more than we have. This is an error. 
     
     // Create a tx and send to address. This should consume both the UTXO and the note
-    let r = wallet.send_to_address(*BRANCH_ID, &SS, &SO, true,
+    let r = wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, true,
          vec![(&ext_address, 50000, None)], |_| Ok(' '.to_string()));
     assert!(r.err().unwrap().contains("Insufficient"));
 
     // Send the appropriate amount, that should work
-    let (_, raw_tx) = wallet.send_to_address(*BRANCH_ID, &SS, &SO, true,
+    let (_, raw_tx) = wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, true,
         vec![(&ext_address, 30000, None)], |_| Ok(' '.to_string())).unwrap();
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
@@ -1442,6 +1672,7 @@ fn test_transparent_only_send() {
 
         // Now make sure the t addr was recieved
         assert_eq!(txs[&txid_t].utxos[0].address, taddr);
+        assert_eq!(txs[&txid_t].utxos[0].spent_at_height, Some(2));
         assert_eq!(txs[&txid_t].utxos[0].spent, Some(sent_txid));
 
         assert_eq!(wallet.tbalance(None), 0);
@@ -1536,6 +1767,7 @@ fn test_t_spend_to_z() {
 
         // The UTXO should also be spent
         assert_eq!(txs[&txid_t].utxos[0].address, taddr);
+        assert_eq!(txs[&txid_t].utxos[0].spent_at_height, Some(2));
         assert_eq!(txs[&txid_t].utxos[0].spent, Some(sent_txid));
         assert_eq!(txs[&txid_t].utxos[0].unconfirmed_spent, None);
 
@@ -1659,7 +1891,7 @@ fn test_add_new_zt_hd_after_incoming() {
     wallet.scan_block(&cb3.as_bytes()).unwrap();
 
     // NOw, 5 new addresses should be created
-    assert_eq!(wallet.zkeys.read().unwrap().len(), 6+5);     
+    assert_eq!(wallet.zkeys.read().unwrap().len(), 6+5);
 
     let secp = Secp256k1::new();
     // Send a fake transaction to the last taddr
@@ -1815,6 +2047,7 @@ fn test_multi_t() {
         assert_eq!(txs[&sent_txid1].utxos.len(), 1);
         assert_eq!(txs[&sent_txid1].utxos[0].value, AMOUNT_SENT1);
         assert_eq!(txs[&sent_txid1].utxos[0].address, taddr2);
+        assert_eq!(txs[&sent_txid1].utxos[0].spent_at_height, Some(3));
         assert_eq!(txs[&sent_txid1].utxos[0].spent, Some(sent_txid2));
         assert_eq!(txs[&sent_txid1].utxos[0].unconfirmed_spent, None);
     }
@@ -2022,7 +2255,7 @@ fn test_bad_send() {
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
 
     // Broadcast error
-    let raw_tx = wallet.send_to_address(*BRANCH_ID, &SS, &SO, false,
+    let raw_tx = wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, false,
         vec![(&ext_taddr, 10, None)], |_| Err("broadcast failed".to_string()));
     assert!(raw_tx.err().unwrap().contains("broadcast failed"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
@@ -2056,7 +2289,8 @@ fn test_bad_params() {
     let ext_taddr = wallet.address_from_sk(&SecretKey::from_slice(&[1u8; 32]).unwrap());  
 
     // Bad params
-    let _ = wallet.send_to_address(*BRANCH_ID, &[], &[], false,
+    let prover = LocalTxProver::from_bytes(&[], &[]);
+    let _ = wallet.send_to_address(*BRANCH_ID, prover, false,
                             vec![(&ext_taddr, 10, None)], |_| Ok(' '.to_string()));
 }
 
@@ -2192,10 +2426,35 @@ fn test_rollback() {
     // Add with the proper prev hash
     add_blocks(&wallet, 5, 2, blk4_hash).unwrap();
 
+    // recieve a t utxo
+    let secp = Secp256k1::new();
+    let pk = PublicKey::from_secret_key(&secp, &wallet.tkeys.read().unwrap()[0]);
+
+    const TAMOUNT1: u64 = 20000;
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, TAMOUNT1);
+
+    let tx = ftx.get_tx();
+    let ttxid1 = tx.txid();
+
+    wallet.scan_full_tx(&tx, 6, 0);  
+
     let blk6_hash;
     {
         let blks = wallet.blocks.read().unwrap();
         blk6_hash = blks[6].hash.clone();
+    }
+
+    {
+        // Ensure the utxo is in
+        let txs = wallet.txs.read().unwrap();
+
+        // Now make sure the t addr was recieved
+        assert_eq!(txs[&ttxid1].utxos.len(), 1);
+        assert_eq!(txs[&ttxid1].utxos[0].height, 6);
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, None);
+        assert_eq!(txs[&ttxid1].utxos[0].spent, None);
+        assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
     }
 
     // Now do a Tx
@@ -2217,14 +2476,22 @@ fn test_rollback() {
     // Make sure the Tx is in.
     {
         let txs = wallet.txs.read().unwrap();
+
+        // Note was spent
         assert_eq!(txs[&txid1].notes.len(), 1);
         assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+        assert_eq!(txs[&txid1].notes[0].spent_at_height, Some(7));
         assert_eq!(txs[&txid1].notes[0].spent, Some(sent_txid));
         assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+        // The utxo should automatically be included
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, Some(7));
+        assert_eq!(txs[&ttxid1].utxos[0].spent, Some(sent_txid));
+        assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
         
         // The sent tx should generate change
         assert_eq!(txs[&sent_txid].notes.len(), 1);
-        assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT - AMOUNT_SENT - fee);
+        assert_eq!(txs[&sent_txid].notes[0].note.value, AMOUNT - AMOUNT_SENT + TAMOUNT1 - fee);
         assert_eq!(txs[&sent_txid].notes[0].is_change, true);
         assert_eq!(txs[&sent_txid].notes[0].spent, None);
         assert_eq!(txs[&sent_txid].notes[0].unconfirmed_spent, None);
@@ -2240,12 +2507,17 @@ fn test_rollback() {
     {
         let txs = wallet.txs.read().unwrap();
 
-        // Orig Tx is still there, since this is in block 0
-        // But now the spent tx is gone
+        // Orig Tx is still there, since this is in block 0, but the "spent"
+        // has been rolled back, both for the note and utxo
         assert_eq!(txs[&txid1].notes.len(), 1);
         assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT);
+        assert_eq!(txs[&txid1].notes[0].spent_at_height, None);
         assert_eq!(txs[&txid1].notes[0].spent, None);
         assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, None);
+
+        assert_eq!(txs[&ttxid1].utxos[0].spent_at_height, None);
+        assert_eq!(txs[&ttxid1].utxos[0].spent, None);
+        assert_eq!(txs[&ttxid1].utxos[0].unconfirmed_spent, None);
 
         // The sent tx is missing
         assert!(txs.get(&sent_txid).is_none());

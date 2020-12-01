@@ -67,7 +67,8 @@ pub struct SaplingNoteData {
     pub unconfirmed_spent: Option<TxId>, // If this note was spent in a send, but has not yet been confirmed.
     pub memo:  Option<Memo>,
     pub is_change: bool,
-    pub is_spendable: bool,              // If the spending key is available in the wallet (i.e., whether to keep witness up-to-date)
+    pub have_spending_key: bool,         // If the spending key is available in the wallet (i.e., whether to keep witness up-to-date)
+    
     // TODO: We need to remove the unconfirmed_spent (i.e., set it to None) if the Tx has expired
 }
 
@@ -115,7 +116,7 @@ impl SaplingNoteData {
     ) -> Self {
         let witness = output.witness;
 
-        let is_spendable = walletkey.have_spending_key();
+        let have_spending_key = walletkey.have_spending_key();
 
         let nf = {
             let mut nf = [0; 32];
@@ -132,14 +133,14 @@ impl SaplingNoteData {
             extfvk: walletkey.extfvk.clone(),
             diversifier: *output.to.diversifier(),
             note: output.note,
-            witnesses: if is_spendable {vec![witness]} else {vec![]},
+            witnesses: if have_spending_key {vec![witness]} else {vec![]},
             nullifier: nf,
             spent: None,
             spent_at_height: None,
             unconfirmed_spent: None,
             memo: None,
             is_change: output.is_change,
-            is_spendable,
+            have_spending_key,
         }
     }
 
@@ -211,7 +212,7 @@ impl SaplingNoteData {
 
         let is_change: bool = reader.read_u8()? > 0;
 
-        let is_spendable = if version <= 2 {
+        let have_spending_key = if version <= 2 {
             true // Will get populated in the lightwallet::read() method, for now assume true
         } else {
             reader.read_u8()? > 0
@@ -229,7 +230,7 @@ impl SaplingNoteData {
             unconfirmed_spent: None,
             memo,
             is_change,
-            is_spendable,
+            have_spending_key,
         })
     }
 
@@ -260,7 +261,7 @@ impl SaplingNoteData {
 
         writer.write_u8(if self.is_change {1} else {0})?;
 
-        writer.write_u8(if self.is_spendable {1} else {0})?;
+        writer.write_u8(if self.have_spending_key {1} else {0})?;
 
         // Note that we don't write the unconfirmed_spent field, because if the wallet is restarted,
         // we don't want to be beholden to any expired txns
@@ -279,13 +280,14 @@ pub struct Utxo {
     pub value: u64,
     pub height: i32,
 
+    pub spent_at_height: Option<i32>,
     pub spent: Option<TxId>,             // If this utxo was confirmed spent
     pub unconfirmed_spent: Option<TxId>, // If this utxo was spent in a send, but has not yet been confirmed.
 }
 
 impl Utxo {
     pub fn serialized_version() -> u64 {
-        return 1;
+        return 2;
     }
 
     pub fn to_outpoint(&self) -> OutPoint {
@@ -294,7 +296,7 @@ impl Utxo {
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
-        assert_eq!(version, Utxo::serialized_version());
+        assert!(version <= Utxo::serialized_version());
 
         let address_len = reader.read_i32::<LittleEndian>()?;
         let mut address_bytes = vec![0; address_len as usize];
@@ -322,6 +324,12 @@ impl Utxo {
             Ok(TxId{0: txbytes})
         })?;
 
+        let spent_at_height = if version <= 1 { None } else {
+            Optional::read(&mut reader, |r| {
+                r.read_i32::<LittleEndian>()
+            })?
+        };
+
         // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
 
         Ok(Utxo {
@@ -331,6 +339,7 @@ impl Utxo {
             script,
             value,
             height,
+            spent_at_height,
             spent,
             unconfirmed_spent: None::<TxId>,
         })
@@ -351,6 +360,8 @@ impl Utxo {
         Vector::write(&mut writer, &self.script, |w, b| w.write_all(&[*b]))?;
 
         Optional::write(&mut writer, &self.spent, |w, txid| w.write_all(&txid.0))?;
+
+        Optional::write(&mut writer, &self.spent_at_height, |w, s| w.write_i32::<LittleEndian>(*s))?;
 
         // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
 
