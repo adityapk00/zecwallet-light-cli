@@ -8,13 +8,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-16.04]
+        os: [ubuntu-20.04]
 
     steps:
       - uses: actions/checkout@v1
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.46.0
+          toolchain: 1.48.0
           override: true
           components: rustfmt, clippy
       - name: cargo fetch
@@ -25,9 +25,9 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --verbose --release --all
+          args: --verbose --all
       - name: Run tests
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --verbose --release --all
+          args: --verbose --all
