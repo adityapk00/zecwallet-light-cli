@@ -132,7 +132,9 @@ pub struct LightWallet {
     pub taddresses: Arc<RwLock<Vec<String>>>,
 
     blocks: Arc<RwLock<Vec<BlockData>>>,
-    pub txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
+
+    pub current_txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
+    pub archive_txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
 
     // Transactions that are only in the mempool, but haven't been confirmed yet. 
     // This is not stored to disk. 
@@ -148,9 +150,25 @@ pub struct LightWallet {
     pub total_scan_duration: Arc<RwLock<Vec<Duration>>>,
 }
 
+macro_rules! combine_values {
+    ($first:expr, $second:expr) => {
+        $first.read().unwrap().values().chain(
+            $second.read().unwrap().values()
+        ) 
+    };
+}
+
+macro_rules! combine_iter {
+    ($first:expr, $second:expr) => {
+        $first.read().unwrap().iter().chain(
+            $second.read().unwrap().iter()
+        )
+    };
+}
+
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 12;
+        return 13;
     }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
@@ -240,7 +258,8 @@ impl LightWallet {
             tkeys:       Arc::new(RwLock::new(vec![tpk])),
             taddresses:  Arc::new(RwLock::new(vec![taddr])),
             blocks:      Arc::new(RwLock::new(vec![])),
-            txs:         Arc::new(RwLock::new(HashMap::new())),
+            current_txs: Arc::new(RwLock::new(HashMap::new())),
+            archive_txs: Arc::new(RwLock::new(HashMap::new())),
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday:    latest_block,
@@ -374,16 +393,7 @@ impl LightWallet {
 
             Ok((TxId{0: txid_bytes}, WalletTx::read(r).unwrap()))
         })?;
-        let mut txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
-
-        let chain_name = utils::read_string(&mut reader)?;
-
-        if chain_name != config.chain_name {
-            return Err(Error::new(ErrorKind::InvalidData,
-                                    format!("Wallet chain name {} doesn't match expected {}", chain_name, config.chain_name)));
-        }
-
-        let birthday = reader.read_u64::<LittleEndian>()?;
+        let mut current_txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
 
         // If version <= 8, adjust the "is_spendable" status of each note data
         if version <= 8 {
@@ -391,7 +401,7 @@ impl LightWallet {
             let spendable_keys: Vec<_> = zkeys.iter()
                 .filter(|zk| zk.have_spending_key()).map(|zk| zk.extfvk.clone())
                 .collect();
-            txs.values_mut().for_each(|tx| {
+            current_txs.values_mut().for_each(|tx| {
                 tx.notes.iter_mut().for_each(|nd| {
                     nd.have_spending_key = spendable_keys.contains(&nd.extfvk);
                     if !nd.have_spending_key {
@@ -400,6 +410,27 @@ impl LightWallet {
                 })
             });
         }
+
+        let archive_txs = if version <= 12 {
+            HashMap::new()
+        } else {
+            let txs_tuples = Vector::read(&mut reader, |r| {
+                let mut txid_bytes = [0u8; 32];
+                r.read_exact(&mut txid_bytes)?;
+
+                Ok((TxId{0: txid_bytes}, WalletTx::read(r).unwrap()))
+            })?;
+
+            txs_tuples.into_iter().collect::<HashMap<_,_>>()
+        };
+
+        let chain_name = utils::read_string(&mut reader)?;
+        if chain_name != config.chain_name {
+            return Err(Error::new(ErrorKind::InvalidData,
+                                    format!("Wallet chain name {} doesn't match expected {}", chain_name, config.chain_name)));
+        }
+
+        let birthday = reader.read_u64::<LittleEndian>()?;
 
         let lw = LightWallet{
             encrypted:   encrypted,
@@ -411,7 +442,8 @@ impl LightWallet {
             tkeys:       Arc::new(RwLock::new(tkeys)),
             taddresses:  Arc::new(RwLock::new(taddresses)),
             blocks:      Arc::new(RwLock::new(blocks)),
-            txs:         Arc::new(RwLock::new(txs)),
+            current_txs: Arc::new(RwLock::new(current_txs)),
+            archive_txs: Arc::new(RwLock::new(archive_txs)),
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday,
@@ -481,7 +513,7 @@ impl LightWallet {
         // The hashmap, write as a set of tuples. Store them sorted so that wallets are
         // deterministically saved
         {
-            let txlist = self.txs.read().unwrap();
+            let txlist = self.current_txs.read().unwrap();
             let mut txns = txlist.iter().collect::<Vec<(&TxId, &WalletTx)>>();
             txns.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
 
@@ -491,6 +523,20 @@ impl LightWallet {
                                 v.write(w)
                             })?;
         }
+
+        {
+            let txlist = self.archive_txs.read().unwrap();
+            let mut txns = txlist.iter().collect::<Vec<(&TxId, &WalletTx)>>();
+            txns.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
+
+            Vector::write(&mut writer, &txns,
+                            |w, (k, v)| {
+                                w.write_all(&k.0)?;
+                                v.write(w)
+                            })?;
+        }
+
+        // Write the chain name
         utils::write_string(&mut writer, &self.config.chain_name)?;
 
         // While writing the birthday, get it from the fn so we recalculate it properly
@@ -518,7 +564,8 @@ impl LightWallet {
     // If no birthday was recorded, return the sapling activation height
     pub fn get_first_tx_block(&self) -> u64 {
         // Find the first transaction
-        let mut blocks = self.txs.read().unwrap().values()
+        // let mut blocks = self.current_txs.read().unwrap().values().chain(self.archive_txs.read().unwrap().values())
+        let mut blocks = combine_values!(self.current_txs, self.archive_txs)
             .map(|wtx| wtx.block as u64)
             .collect::<Vec<u64>>();
         blocks.sort();
@@ -678,7 +725,8 @@ impl LightWallet {
     /// and the wallet will need to be rescanned
     pub fn clear_blocks(&self) {
         self.blocks.write().unwrap().clear();
-        self.txs.write().unwrap().clear();
+        self.current_txs.write().unwrap().clear();
+        self.archive_txs.write().unwrap().clear();
         self.mempool_txs.write().unwrap().clear();
     }
 
@@ -965,8 +1013,7 @@ impl LightWallet {
     }
 
     pub fn zbalance(&self, addr: Option<String>) -> u64 {
-        self.txs.read().unwrap()
-            .values()
+        combine_values!(self.current_txs, self.archive_txs)
             .map(|tx| {
                 tx.notes.iter()
                     .filter(|nd| {  // TODO, this whole section is shared with verified_balance. Refactor it. 
@@ -987,7 +1034,7 @@ impl LightWallet {
 
     // Get all (unspent) utxos. Unconfirmed spent utxos are included
     pub fn get_utxos(&self) -> Vec<Utxo> {
-        let txs = self.txs.read().unwrap();
+        let txs = self.current_txs.read().unwrap();
 
         txs.values()
             .flat_map(|tx| {
@@ -1015,9 +1062,7 @@ impl LightWallet {
             None => return 0,
         };
 
-        self.txs
-            .read()
-            .unwrap()
+        self.current_txs.read().unwrap()
             .values()
             .map(|tx| {
                 tx.notes
@@ -1057,9 +1102,7 @@ impl LightWallet {
             None => return 0,
         };
 
-        self.txs
-            .read()
-            .unwrap()
+        self.current_txs.read().unwrap()
             .values()
             .map(|tx| {
                 if tx.block as u32 <= anchor_height {
@@ -1088,9 +1131,7 @@ impl LightWallet {
     pub fn spendable_zbalance(&self, addr: Option<String>) -> u64 {
         let anchor_height = self.get_anchor_height();
 
-        self.txs
-            .read()
-            .unwrap()
+        self.current_txs.read().unwrap()
             .values()
             .map(|tx| {
                 if tx.block as u32 <= anchor_height {
@@ -1137,7 +1178,7 @@ impl LightWallet {
     }
 
     fn add_toutput_to_wtx(&self, height: i32, timestamp: u64, txid: &TxId, vout: &TxOut, n: u64) {
-        let mut txs = self.txs.write().unwrap();
+        let mut txs = self.current_txs.write().unwrap();
 
         // Find the existing transaction entry, or create a new one.
         if !txs.contains_key(&txid) {
@@ -1240,10 +1281,9 @@ impl LightWallet {
             return;
         }
 
-        let txns = self.txs.write().unwrap();
         let taddrs = self.taddresses.read().unwrap().iter().map(|a| a.clone()).collect::<Vec<_>>();
 
-        let highest_account = txns.values()
+        let highest_account = combine_values!(self.current_txs, self.archive_txs)
             .flat_map(|wtx| 
                 wtx.utxos.iter().map(|u| taddrs.iter().position(|taddr| *taddr == u.address).unwrap_or(taddrs.len()))
             )
@@ -1265,8 +1305,8 @@ impl LightWallet {
             return;
         }
 
-        let txns = self.txs.write().unwrap();
-        let highest_account = txns.values().flat_map(|wtx| wtx.notes.iter().map(|n| n.account)).max();
+        let highest_account = combine_values!(self.current_txs, self.archive_txs)
+            .flat_map(|wtx| wtx.notes.iter().map(|n| n.account)).max();
         if highest_account.is_none() {
             return;
         }
@@ -1530,7 +1570,7 @@ impl LightWallet {
 
         // Next, remove entire transactions
         {
-            let mut txs = self.txs.write().unwrap();
+            let mut txs = self.current_txs.write().unwrap();
             let txids_to_remove = txs.values()
                 .filter_map(|wtx| if wtx.block >= at_height {Some(wtx.txid.clone())} else {None})
                 .collect::<HashSet<TxId>>();
@@ -1574,7 +1614,7 @@ impl LightWallet {
         // Of the notes that still remain, unroll the witness.
         // Remove `num_invalidated` items from the witness
         {
-            let mut txs = self.txs.write().unwrap();
+            let mut txs = self.current_txs.write().unwrap();
 
             // Trim all witnesses for the invalidated blocks
             for tx in txs.values_mut() {
@@ -1883,7 +1923,7 @@ impl LightWallet {
         let nfs: Vec<_>;
         {
             // Create a write lock 
-            let mut txs = self.txs.write().unwrap();
+            let mut txs = self.current_txs.write().unwrap();
 
             // Remove witnesses from the SaplingNoteData, so that we don't save them 
             // in the wallet, taking up unnecessary space
@@ -1977,7 +2017,7 @@ impl LightWallet {
 
         for tx in new_txs {
             // Create a write lock 
-            let mut txs = self.txs.write().unwrap();
+            let mut txs = self.current_txs.write().unwrap();
 
             // Mark notes as spent.
             let mut total_shielded_value_spent: u64 = 0;
@@ -2068,25 +2108,30 @@ impl LightWallet {
     // so for older wallets, it will need to be added
     pub fn fix_spent_at_height(&self) {
         // First, build an index of all the txids and the heights at which they were spent. 
-        let spent_txid_map: HashMap<_, _> = self.txs.read().unwrap().iter().map(|(txid, wtx)| (txid.clone(), wtx.block)).collect();
+        let spent_txid_map: HashMap<_, _> = combine_iter!(self.current_txs, self.archive_txs)
+            .map(|(txid, wtx)| (txid.clone(), wtx.block)).collect();
         
         // Go over all the sapling notes that might need updating
-        self.txs.write().unwrap().values_mut().for_each(|wtx| {
-            wtx.notes.iter_mut()
-                .filter(|nd| nd.spent.is_some() && nd.spent_at_height.is_none())
-                .for_each(|nd| {
-                    nd.spent_at_height = spent_txid_map.get(&nd.spent.unwrap()).map(|b| *b);
-                })
-        });
+        self.current_txs.write().unwrap().values_mut().chain(
+                self.archive_txs.write().unwrap().values_mut())
+            .for_each(|wtx| {
+                wtx.notes.iter_mut()
+                    .filter(|nd| nd.spent.is_some() && nd.spent_at_height.is_none())
+                    .for_each(|nd| {
+                        nd.spent_at_height = spent_txid_map.get(&nd.spent.unwrap()).map(|b| *b);
+                    })
+            });
 
         // Go over all the Utxos that might need updating
-        self.txs.write().unwrap().values_mut().for_each(|wtx| {
-            wtx.utxos.iter_mut()
-                .filter(|utxo| utxo.spent.is_some() && utxo.spent_at_height.is_none())
-                .for_each(|utxo| {
-                    utxo.spent_at_height = spent_txid_map.get(&utxo.spent.unwrap()).map(|b| *b);
-                })
-        });
+        self.current_txs.write().unwrap().values_mut().chain(
+                self.archive_txs.write().unwrap().values_mut())
+            .for_each(|wtx| {
+                wtx.utxos.iter_mut()
+                    .filter(|utxo| utxo.spent.is_some() && utxo.spent_at_height.is_none())
+                    .for_each(|utxo| {
+                        utxo.spent_at_height = spent_txid_map.get(&utxo.spent.unwrap()).map(|b| *b);
+                    })
+            });
     }
 
     pub fn send_to_address<F, P: TxProver> (
@@ -2153,7 +2198,7 @@ impl LightWallet {
         let mut candidate_notes: Vec<_> = if transparent_only {
             vec![]
         } else {
-            self.txs.read().unwrap().iter()
+            self.current_txs.read().unwrap().iter()
                 .flat_map(|(txid, tx)| tx.notes.iter().map(move |note| (*txid, note)))
                 .filter(|(_, note)| note.note.value > 0)
                 .filter_map(|(txid, note)| {
@@ -2331,7 +2376,7 @@ impl LightWallet {
         // Mark notes as spent.
         {
             // Mark sapling notes as unconfirmed spent
-            let mut txs = self.txs.write().unwrap();
+            let mut txs = self.current_txs.write().unwrap();
             for selected in notes {
                 let mut spent_note = txs.get_mut(&selected.txid).unwrap()
                                         .notes.iter_mut()
@@ -2415,7 +2460,7 @@ impl LightWallet {
         {
             // Remove all txns where the txid is added to the wallet directly
             self.mempool_txs.write().unwrap().retain ( |txid, _| {
-                self.txs.read().unwrap().get(txid).is_none()
+                self.current_txs.read().unwrap().get(txid).is_none()
             });
         }
     }
