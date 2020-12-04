@@ -61,6 +61,7 @@ mod extended_key;
 pub(crate) mod message;
 pub mod utils;
 mod walletzkey;
+pub(crate) mod base58;
 
 pub mod fee;
 
@@ -75,38 +76,8 @@ fn now() -> f64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
 }
 
-/// Sha256(Sha256(value))
-pub fn double_sha256(payload: &[u8]) -> Vec<u8> {
-    let h1 = Sha256::digest(&payload);
-    let h2 = Sha256::digest(&h1);
-    h2.to_vec()
-}
+use self::{base58::ToBase58Check, base58::{FromBase58Check, double_sha256}, message::Message};
 
-use base58::{ToBase58};
-
-use self::message::Message;
-
-/// A trait for converting a [u8] to base58 encoded string.
-pub trait ToBase58Check {
-    /// Converts a value of `self` to a base58 value, returning the owned string.
-    /// The version is a coin-specific prefix that is added.
-    /// The suffix is any bytes that we want to add at the end (like the "iscompressed" flag for
-    /// Secret key encoding)
-    fn to_base58check(&self, version: &[u8], suffix: &[u8]) -> String;
-}
-
-impl ToBase58Check for [u8] {
-    fn to_base58check(&self, version: &[u8], suffix: &[u8]) -> String {
-        let mut payload: Vec<u8> = Vec::new();
-        payload.extend_from_slice(version);
-        payload.extend_from_slice(self);
-        payload.extend_from_slice(suffix);
-
-        let checksum = double_sha256(&payload);
-        payload.append(&mut checksum[..4].to_vec());
-        payload.to_base58()
-    }
-}
 
 pub struct LightWallet {
     // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
@@ -596,6 +567,26 @@ impl LightWallet {
         self.taddresses.write().unwrap().push(address.clone());
 
         address
+    }
+
+    // Sweep all the funds from this t address private key into our shielded address
+    pub fn decode_taddr_key(&self, sk: String) -> Result<(secp256k1::SecretKey, String), String> {
+        // 0. Decode the secret key string
+        let sk = match sk.from_base58check(&self.config.base58_secretkey_prefix(), &[0x01]) {
+            Ok(b) => {
+                match secp256k1::SecretKey::from_slice(&b) {
+                    Ok(sk) => sk,
+                    Err(e) => return Err(format!("{}", e))
+                }
+            },
+            Err(e) => return Err(format!("{}", e))
+        };
+
+        // 1. Determine the address
+        let taddr = self.address_from_sk(&sk);
+
+        // 2. Get all address's UTXOs
+        Ok((sk, taddr))
     }
 
     // Add a new imported spending key to the wallet

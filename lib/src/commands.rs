@@ -224,6 +224,32 @@ impl Command for BalanceCommand {
     }
 }
 
+struct SweepTaddrCommand {}
+impl Command for SweepTaddrCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Sweep funds from a t address private key into the wallet's shielded address");
+        h.push("Usage:");
+        h.push("sweep <taddress private key>");
+        h.push("");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Sweep funds from a t address private key into the wallet".to_string()
+    }
+
+    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+        if args.len() != 1 {
+            return self.help();
+        }
+
+        let taddr_sk = args[0].to_string();
+
+        format!("{}", lightclient.do_sweep_taddrkey(taddr_sk).pretty(2))
+    }
+}
 
 struct AddressCommand {}
 impl Command for AddressCommand {
@@ -1025,6 +1051,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("balance".to_string(),           Box::new(BalanceCommand{}));
     map.insert("addresses".to_string(),         Box::new(AddressCommand{}));
     map.insert("height".to_string(),            Box::new(HeightCommand{}));
+    map.insert("sweep".to_string(),             Box::new(SweepTaddrCommand{}));
     map.insert("import".to_string(),            Box::new(ImportCommand{}));
     map.insert("export".to_string(),            Box::new(ExportCommand{}));
     map.insert("info".to_string(),              Box::new(InfoCommand{}));

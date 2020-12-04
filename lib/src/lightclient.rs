@@ -595,7 +595,7 @@ impl LightClient {
 
         let phrase = if encrypted {
             use sodiumoxide::crypto::secretbox;
-            use crate::lightwallet::double_sha256;
+            use crate::lightwallet::base58::double_sha256;
 
             // Get the doublesha256 of the password, which is the right length
             let key = secretbox::Key::from_slice(&double_sha256(password.unwrap().as_bytes())).unwrap();
@@ -822,6 +822,26 @@ impl LightClient {
             "seed"     => wallet.get_seed_phrase(),
             "birthday" => wallet.get_birthday()
         })
+    }
+
+    // Sweep funds from a t address private key into our sheilded address
+    pub fn do_sweep_taddrkey(&self, taddr_sk: String) -> JsonValue {
+        let (sk, taddr) = match self.wallet.read().unwrap().decode_taddr_key(taddr_sk) {
+            Ok((sk, taddr)) => (sk, taddr),
+            Err(e) => return object!{
+                "error" => e
+            }
+        };
+
+        // Fetch all UTXOs
+        // let r = fetch_transparent_txids(&self.get_server_uri(), taddr, 0, self.last_scanned_height(), 
+        // move |tx_bytes: &[u8], height: u64| {
+        //     let tx = Transaction::read(tx_bytes).unwrap();
+        // });
+
+        object!{
+            "taddr" => taddr
+        }
     }
 
     // Return a list of all notes, spent and unspent
