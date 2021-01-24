@@ -42,7 +42,7 @@ tokio-rustls = { version = "0.13.0" }
 webpki = "0.21.0"
 webpki-roots = "0.18.0"
 
-bellman = { version = "0.8", default-features = false, features = ["groth16"] }
+bellman = { version = "0.8.1", default-features = false, features = ["groth16"] }
 pairing = "0.18.0"
 ff = "0.8"
 jubjub = "0.5.1"
