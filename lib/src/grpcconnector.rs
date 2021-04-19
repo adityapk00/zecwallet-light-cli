@@ -137,7 +137,7 @@ async fn get_address_txids<F : 'static + std::marker::Send>(uri: &http::Uri, add
 
     let request = Request::new(TransparentAddressBlockFilter{ address, range: Some(BlockRange{start, end}) });
 
-    let maybe_response = client.get_address_txids(request).await?;
+    let maybe_response = client.get_taddress_txids(request).await?;
     let mut response = maybe_response.into_inner();
 
     while let Some(tx) = response.message().await? {
