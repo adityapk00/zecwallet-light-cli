@@ -2,7 +2,7 @@ use log::{error};
 use zcash_primitives::transaction::{TxId};
 
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock,
-                         TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
+                         TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo, TreeState};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tokio_rustls::{rustls::ClientConfig};
 use tonic::{Request};
@@ -58,6 +58,19 @@ pub fn get_info(uri: &http::Uri) -> Result<LightdInfo, String> {
     rt.block_on(get_lightd_info(uri)).map_err( |e| e.to_string())
 }
 
+async fn get_sapling_tree_async(uri: &http::Uri, height: i32) -> Result<TreeState, Box<dyn std::error::Error>> {
+    let mut client = get_client(uri).await?;
+
+    let b = BlockId{ height: height as u64, hash: vec![]};
+    let response = client.get_tree_state(Request::new(b)).await?;
+
+    Ok(response.into_inner())
+}
+
+pub fn get_sapling_tree(uri: &http::Uri, height: i32) -> Result<TreeState, String> {
+    let mut rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(get_sapling_tree_async(uri, height)).map_err(|e| e.to_string())
+}
 
 async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, pool: ThreadPool, c: F) 
     -> Result<(), Box<dyn std::error::Error>> 
