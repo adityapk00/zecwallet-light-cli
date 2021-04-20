@@ -233,8 +233,29 @@ impl LightClientConfig {
         log_path.into_boxed_path()
     }
 
-    pub fn get_initial_state(&self, height: u64) -> Option<(u64, &str, &str)> {
-        checkpoints::get_closest_checkpoint(&self.chain_name, height)
+    pub fn get_initial_state(&self, uri: &http::Uri, height: u64) -> Option<(u64, String, String)> {
+        if height == 0 {
+            return checkpoints::get_closest_checkpoint(&self.chain_name, height).map(|(height, hash, tree)| 
+                (height, hash.to_string(), tree.to_string())
+            );
+        }
+
+        // We'll get the initial state from the server. Get it at height - 100 blocks, so there is no risk 
+        // of a reorg
+        match grpcconnector::get_sapling_tree(uri, (height - 100) as i32) {
+            Ok(tree_state) => {
+                let hash = tree_state.hash.clone();
+                let tree = tree_state.tree.clone();
+                Some((tree_state.height, hash, tree))
+            },
+            Err(e) => {
+                error!("Error getting sapling tree:{}\nWill return checkpoint instead.", e);
+                match checkpoints::get_closest_checkpoint(&self.chain_name, height) {
+                    Some((height, hash, tree)) => Some((height, hash.to_string(), tree.to_string())),
+                    None => None
+                }
+            }
+        }
     }
 
     pub fn get_server_or_default(server: Option<String>) -> http::Uri {
@@ -334,10 +355,14 @@ impl LightClient {
     pub fn set_wallet_initial_state(&self, height: u64) {
         use std::convert::TryInto;
 
-        let state = self.config.get_initial_state(height);
+        let state = self.config.get_initial_state(&self.get_server_uri(), height);
 
         match state {
-            Some((height, hash, tree)) => self.wallet.read().unwrap().set_initial_block(height.try_into().unwrap(), hash, tree),
+            Some((height, hash, tree)) => 
+                self.wallet.read().unwrap().set_initial_block(
+                    height.try_into().unwrap(), 
+                    &hash.as_str(), 
+                    &tree.as_str()),
             _ => true,
         };
     }
@@ -1251,8 +1276,16 @@ impl LightClient {
             None => return Err(format!("No checkpoint found"))
         };
         
+        // If the height is the same as the checkpoint, then just compare directly
+        if end_height as u64 == start_height {
+            info!("Verifying checkpoint directly. Verification = {}", end_tree == start_tree);
+            return Ok(end_tree == start_tree);
+        }
+
+        
         let sapling_tree = hex::decode(start_tree).unwrap();
 
+        // The comupted commitment tree will be here.
         let commit_tree_computed = Arc::new(RwLock::new(CommitmentTree::read(&sapling_tree[..]).map_err(|e| format!("{}", e))?));
 
         let pool = ThreadPool::new(2);
@@ -1297,6 +1330,15 @@ impl LightClient {
     }
 
     pub fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
+        // See if we need to verify first
+        if !self.wallet.read().unwrap().is_sapling_tree_verified() {
+            let v = self.do_verify_from_last_checkpoint()?;
+            if !v {
+                return Err(format!("Checkpoint failed to verify. You should rescan"));
+            }
+            self.wallet.write().unwrap().set_sapling_tree_verified();
+        }
+
         let mut retry_count = 0;
         loop {
             match self.do_sync_internal(print_updates, retry_count) {

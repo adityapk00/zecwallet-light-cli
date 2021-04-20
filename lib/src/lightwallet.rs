@@ -148,6 +148,9 @@ pub struct LightWallet {
     // will start from here.
     birthday: u64,
 
+    // If this wallet's initial block was verified
+    sapling_tree_verified: bool,
+
     // Non-serialized fields
     config: LightClientConfig,
 
@@ -156,8 +159,12 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 12;
+        return 13;
     }
+
+    pub fn is_sapling_tree_verified(&self) -> bool { self.sapling_tree_verified }
+
+    pub fn set_sapling_tree_verified(&mut self) { self.sapling_tree_verified = true; }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
         assert_eq!(bip39_seed.len(), 64);
@@ -250,6 +257,7 @@ impl LightWallet {
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday:    latest_block,
+            sapling_tree_verified: false,
             total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)]))
         };
 
@@ -391,6 +399,10 @@ impl LightWallet {
 
         let birthday = reader.read_u64::<LittleEndian>()?;
 
+        let sapling_tree_verified = if version <= 12 { true } else {
+            reader.read_u8()? == 1
+        };
+
         // If version <= 8, adjust the "is_spendable" status of each note data
         if version <= 8 {
             // Collect all spendable keys
@@ -421,6 +433,7 @@ impl LightWallet {
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday,
+            sapling_tree_verified,
             total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)])),
         };
 
@@ -501,7 +514,10 @@ impl LightWallet {
 
         // While writing the birthday, get it from the fn so we recalculate it properly
         // in case of rescans etc...
-        writer.write_u64::<LittleEndian>(self.get_birthday())
+        writer.write_u64::<LittleEndian>(self.get_birthday())?;
+
+        // If the sapling tree was verified
+        writer.write_u8( if self.sapling_tree_verified { 1 } else { 0 })
     }
 
     pub fn note_address(hrp: &str, note: &SaplingNoteData) -> Option<String> {

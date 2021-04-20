@@ -14,6 +14,10 @@ use crate::PubCertificate;
 use crate::grpc_client::compact_tx_streamer_client::CompactTxStreamerClient;
 
 async fn get_client(uri: &http::Uri) -> Result<CompactTxStreamerClient<Channel>, Box<dyn std::error::Error>> {
+    if uri.host().is_none() {
+        return Err(format!("No Host to connect to"))?;
+    }
+
     let channel = if uri.scheme_str() == Some("http") {
         //println!("http");
         Channel::builder(uri.clone()).connect().await?
