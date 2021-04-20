@@ -20,6 +20,8 @@ use json::{object, array, JsonValue};
 use zcash_primitives::{note_encryption::Memo, transaction::{TxId, Transaction}};
 use zcash_primitives::{constants::testnet, constants::mainnet, constants::regtest};
 use zcash_primitives::consensus::{BranchId, BlockHeight, MAIN_NETWORK};
+use zcash_primitives::merkle_tree::{CommitmentTree};
+use zcash_primitives::sapling::{Node};
 use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
 
 use log::{info, warn, error, LevelFilter};
@@ -34,7 +36,7 @@ use log4rs::append::rolling_file::policy::compound::{
 };
 
 use crate::grpcconnector::{self, *};
-use crate::lightwallet::fee;
+use crate::lightwallet::{fee, NodePosition};
 use crate::ANCHOR_OFFSET;
 
 mod checkpoints;
@@ -1234,6 +1236,61 @@ impl LightClient {
         response
     }
 
+    pub fn do_verify_from_last_checkpoint(&self) -> Result<bool, String> {
+        // Get the first block's details, and make sure we can compute it from the last checkpoint
+        // Note that we get the first block in the wallet (Not the last one). This is expected to be tip - 100 blocks.
+        // We use this block to prevent any reorg risk. 
+        let (end_height, _, end_tree) = match self.wallet.read().unwrap().get_sapling_tree(NodePosition::First) {
+            Ok(r) => r,
+            Err(e) => return Err(format!("No wallet block found: {}", e))
+        };
+
+        // Get the last checkpoint
+        let (start_height, _, start_tree) = match checkpoints::get_closest_checkpoint(&self.config.chain_name, end_height as u64) {
+            Some(r) => r,
+            None => return Err(format!("No checkpoint found"))
+        };
+        
+        let sapling_tree = hex::decode(start_tree).unwrap();
+
+        let commit_tree_computed = Arc::new(RwLock::new(CommitmentTree::read(&sapling_tree[..]).map_err(|e| format!("{}", e))?));
+
+        let pool = ThreadPool::new(2);
+        let commit_tree = commit_tree_computed.clone();
+        grpcconnector::fetch_blocks(&self.get_server_uri(), start_height+1, end_height as u64, pool, 
+            move |encoded_block: &[u8], height: u64| {
+                let block: Result<zcash_client_backend::proto::compact_formats::CompactBlock, _>
+                                        = parse_from_bytes(encoded_block);
+                if block.is_err() {
+                    error!("Error getting block, {}", block.err().unwrap());
+                    return;
+                }
+
+                // Go over all tx, all outputs. No need to do any processing, just update the commitment tree
+                for tx in block.unwrap().vtx.iter() {
+                    for so in tx.outputs.iter() {
+                        let node = Node::new(so.cmu().ok().unwrap().into());
+                        commit_tree.write().unwrap().append(node).unwrap();
+                    }
+                }
+
+                // Write updates every now and then.
+                if height % 10000 == 0 {
+                    info!("Verification at block {}", height);
+                }
+            }
+        )?;
+
+        // Get the string version of the tree
+        let mut write_buf = vec![];
+        commit_tree_computed.write().unwrap().write(&mut write_buf).map_err(|e| format!("{}", e))?;
+        let computed_tree = hex::encode(write_buf);
+        
+        info!("Verification Results:\nCalculated\n{}\nExpected\n{}\n", computed_tree, end_tree);
+        
+        Ok(computed_tree == end_tree)
+    }
+
     /// Return the syncing status of the wallet
     pub fn do_scan_status(&self) -> WalletStatus {
         self.sync_status.read().unwrap().clone()
@@ -1480,7 +1537,7 @@ impl LightClient {
         }
         
         // Make sure the tree is correct
-        let (h, _, tree) = self.wallet.read().unwrap().get_sapling_tree().unwrap();
+        let (h, _, tree) = self.wallet.read().unwrap().get_sapling_tree(NodePosition::Last).unwrap();
         let t = get_sapling_tree(&self.get_server_uri(), h).unwrap();
         if t.tree != tree {
             error!("Sapling commitment was different!. Computed\n{}\nFetched from Server\n{}\n", tree, t.tree);

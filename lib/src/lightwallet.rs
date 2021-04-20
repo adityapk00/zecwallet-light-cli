@@ -108,6 +108,12 @@ impl ToBase58Check for [u8] {
     }
 }
 
+// Enum to refer to the first or last position of the Node
+pub enum NodePosition {
+    First,
+    Last
+}
+
 pub struct LightWallet {
     // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
     // and the individual spending keys are not written    
@@ -717,14 +723,19 @@ impl LightWallet {
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
-    pub fn get_sapling_tree(&self) -> Result<(i32, String, String), String> {
+    pub fn get_sapling_tree(&self, block_pos: NodePosition) -> Result<(i32, String, String), String> {
         let blocks = self.blocks.read().unwrap();
 
-        let block = match blocks.last() {
-            Some(block) => block,
-            None => return Err("Couldn't get a block height!".to_string())
+        let block = match block_pos {
+            NodePosition::First => blocks.first(),
+            NodePosition::Last => blocks.last()
         };
 
+        if block.is_none() {
+            return Err("Couldn't get a block height!".to_string());
+        }
+
+        let block = block.unwrap();
         let mut write_buf = vec![];
         block.tree.write(&mut write_buf).map_err(|e| format!("Error writing commitment tree {}", e))?;
 
@@ -2055,7 +2066,7 @@ impl LightWallet {
 
         // Print info about the block every 10,000 blocks
         if height % 10_000 == 0 {
-            match self.get_sapling_tree() {
+            match self.get_sapling_tree(NodePosition::Last) {
                 Ok((h, hash, stree)) => info!("Sapling tree at height\n({}, \"{}\",\"{}\"),", h, hash, stree),
                 Err(e) => error!("Couldn't determine sapling tree: {}", e)
             }
