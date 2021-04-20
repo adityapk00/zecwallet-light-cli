@@ -359,7 +359,7 @@ impl LightClient {
 
         match state {
             Some((height, hash, tree)) => 
-                self.wallet.read().unwrap().set_initial_block(
+                self.wallet.write().unwrap().set_initial_block(
                     height.try_into().unwrap(), 
                     &hash.as_str(), 
                     &tree.as_str()),

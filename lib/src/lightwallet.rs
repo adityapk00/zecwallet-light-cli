@@ -704,7 +704,7 @@ impl LightWallet {
         self.mempool_txs.write().unwrap().clear();
     }
 
-    pub fn set_initial_block(&self, height: i32, hash: &str, sapling_tree: &str) -> bool {
+    pub fn set_initial_block(&mut self, height: i32, hash: &str, sapling_tree: &str) -> bool {
         let mut blocks = self.blocks.write().unwrap();
         if !blocks.is_empty() {
             return false;
@@ -730,12 +730,16 @@ impl LightWallet {
             }
         };
 
+        // Reset the verification status
+        self.sapling_tree_verified = false;
+        
         if let Ok(tree) = CommitmentTree::read(&sapling_tree[..]) {
             blocks.push(BlockData { height, hash, tree });
             true
         } else {
             false
         }
+
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
