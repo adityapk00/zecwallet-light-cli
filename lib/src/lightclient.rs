@@ -1330,15 +1330,6 @@ impl LightClient {
     }
 
     pub fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
-        // See if we need to verify first
-        if !self.wallet.read().unwrap().is_sapling_tree_verified() {
-            let v = self.do_verify_from_last_checkpoint()?;
-            if !v {
-                return Err(format!("Checkpoint failed to verify. You should rescan"));
-            }
-            self.wallet.write().unwrap().set_sapling_tree_verified();
-        }
-
         let mut retry_count = 0;
         loop {
             match self.do_sync_internal(print_updates, retry_count) {
@@ -1360,6 +1351,15 @@ impl LightClient {
         // We can only do one sync at a time because we sync blocks in serial order
         // If we allow multiple syncs, they'll all get jumbled up.
         let _lock = self.sync_lock.lock().unwrap();
+
+        // See if we need to verify first
+        if !self.wallet.read().unwrap().is_sapling_tree_verified() {
+            let v = self.do_verify_from_last_checkpoint();
+            if v.is_err() || !v.unwrap() {
+                return Err(format!("Checkpoint failed to verify. You should rescan."));
+            }
+            self.wallet.write().unwrap().set_sapling_tree_verified();
+        }
 
         // Sync is 3 parts
         // 1. Get the latest block
