@@ -1577,15 +1577,6 @@ impl LightClient {
         if print_updates{
             println!(""); // New line to finish up the updates
         }
-        
-        // Make sure the tree is correct
-        let (h, _, tree) = self.wallet.read().unwrap().get_sapling_tree(NodePosition::Last).unwrap();
-        let t = get_sapling_tree(&self.get_server_uri(), h).unwrap();
-        if t.tree != tree {
-            error!("Sapling commitment was different!. Computed\n{}\nFetched from Server\n{}\n", tree, t.tree);
-        } else {
-            info!("Trees matched");
-        }
 
         info!("Synced to {}, Downloaded {} kB", latest_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
         {

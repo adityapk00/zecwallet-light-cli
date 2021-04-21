@@ -152,9 +152,22 @@ async fn get_address_txids<F : 'static + std::marker::Send>(uri: &http::Uri, add
     let start = Some(BlockId{ height: start_height, hash: vec!()});
     let end   = Some(BlockId{ height: end_height,   hash: vec!()});
 
-    let request = Request::new(TransparentAddressBlockFilter{ address, range: Some(BlockRange{start, end}) });
+    let args = TransparentAddressBlockFilter{ address, range: Some(BlockRange{start, end}) };
+    let request = Request::new(args.clone());
 
-    let maybe_response = client.get_taddress_txids(request).await?;
+    let maybe_response = match client.get_taddress_txids(request).await {
+        Ok(r) => r,
+        Err(e) => {
+            if e.code() == tonic::Code::Unimplemented {
+                // Try the old, legacy API
+                let request = Request::new(args);
+                client.get_address_txids(request).await?
+            } else {
+                return Err(e)?;
+            }
+        }
+    };
+
     let mut response = maybe_response.into_inner();
 
     while let Some(tx) = response.message().await? {

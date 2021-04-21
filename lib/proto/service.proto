@@ -150,6 +150,10 @@ service CompactTxStreamer {
 
     // Return the txids corresponding to the given t-address within the given block range
     rpc GetTaddressTxids(TransparentAddressBlockFilter) returns (stream RawTransaction) {}
+
+    // Legacy API that is used as a fallback for t-Address support, if the server is running the old version (lwdv2)
+    rpc GetAddressTxids(TransparentAddressBlockFilter) returns (stream RawTransaction) {}
+
     rpc GetTaddressBalance(AddressList) returns (Balance) {}
     rpc GetTaddressBalanceStream(stream Address) returns (Balance) {}
 
