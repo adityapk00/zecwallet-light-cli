@@ -13,8 +13,6 @@ use log::{error, info, warn};
 use rand::{rngs::OsRng, Rng};
 use subtle::{ConditionallySelectable, ConstantTimeEq, CtOption};
 
-use protobuf::parse_from_bytes;
-
 use bip39::{Language, Mnemonic};
 use libflate::gzip::Decoder;
 use secp256k1::SecretKey;
@@ -1861,7 +1859,7 @@ impl LightWallet {
 
     // Scan a block. Will return an error with the block height that failed to scan
     pub fn scan_block_with_pool(&self, block_bytes: &[u8], pool: &ThreadPool) -> Result<Vec<TxId>, i32> {
-        let block: CompactBlock = match parse_from_bytes(block_bytes) {
+        let block: CompactBlock = match protobuf::Message::parse_from_bytes(block_bytes) {
             Ok(block) => block,
             Err(e) => {
                 error!("Could not parse CompactBlock from bytes: {}", e);

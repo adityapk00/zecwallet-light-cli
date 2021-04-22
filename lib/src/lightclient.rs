@@ -11,8 +11,6 @@ use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, Error, ErrorKind};
 
-use protobuf::parse_from_bytes;
-
 use threadpool::ThreadPool;
 
 use json::{object, array, JsonValue};
@@ -1316,7 +1314,7 @@ impl LightClient {
         grpcconnector::fetch_blocks(&self.get_server_uri(), start_height+1, end_height as u64, pool, 
             move |encoded_block: &[u8], height: u64| {
                 let block: Result<zcash_client_backend::proto::compact_formats::CompactBlock, _>
-                                        = parse_from_bytes(encoded_block);
+                                        = protobuf::Message::parse_from_bytes(encoded_block);
                 if block.is_err() {
                     error!("Error getting block, {}", block.err().unwrap());
                     return;
@@ -1485,7 +1483,7 @@ impl LightClient {
                     // Parse the block and save it's time. We'll use this timestamp for 
                     // transactions in this block that might belong to us.
                     let block: Result<zcash_client_backend::proto::compact_formats::CompactBlock, _>
-                                        = parse_from_bytes(encoded_block);
+                                        = protobuf::Message::parse_from_bytes(encoded_block);
                     match block {
                         Ok(b) => {
                             block_times_inner.write().unwrap().insert(b.height, b.time);
