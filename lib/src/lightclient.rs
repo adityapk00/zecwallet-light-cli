@@ -828,6 +828,7 @@ impl LightClient {
             Ok(i) => {
                 let o = object!{
                     "version" => i.version,
+                    "git_commit" => i.git_commit,
                     "server_uri" => self.get_server_uri().to_string(),
                     "vendor" => i.vendor,
                     "taddr_support" => i.taddr_support,
