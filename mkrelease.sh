@@ -45,9 +45,6 @@ rm -rf target/macOS-zecwallet-cli-v$APP_VERSION
 mkdir -p target/macOS-zecwallet-cli-v$APP_VERSION
 cp target/release/zecwallet-cli target/macOS-zecwallet-cli-v$APP_VERSION/
 
-# For Windows and Linux, build via docker
-docker run --rm -v $(pwd)/:/opt/zecwallet-light-cli rustbuild:latest bash -c "cd /opt/zecwallet-light-cli && cargo build --release && cargo build --release --target armv7-unknown-linux-gnueabihf && cargo build --release --target aarch64-unknown-linux-gnu && SODIUM_LIB_DIR='/opt/libsodium-win64/lib/' cargo build --release --target x86_64-pc-windows-gnu"
-
 # Now sign and zip the binaries
 # macOS
 gpg --batch --output target/macOS-zecwallet-cli-v$APP_VERSION/zecwallet-cli.sig --detach-sig target/macOS-zecwallet-cli-v$APP_VERSION/zecwallet-cli 
@@ -58,6 +55,8 @@ cd ..
 zip -r macOS-zecwallet-cli-v$APP_VERSION.zip macOS-zecwallet-cli-v$APP_VERSION 
 cd ..
 
+# For Windows and Linux, build via docker
+docker run --rm -v $(pwd)/:/opt/zecwallet-light-cli rustbuild:latest bash -c "cd /opt/zecwallet-light-cli && cargo build --release && cargo build --release --target armv7-unknown-linux-gnueabihf && cargo build --release --target aarch64-unknown-linux-gnu && SODIUM_LIB_DIR='/opt/libsodium-win64/lib/' cargo build --release --target x86_64-pc-windows-gnu"
 
 #Linux
 rm -rf target/linux-zecwallet-cli-v$APP_VERSION
