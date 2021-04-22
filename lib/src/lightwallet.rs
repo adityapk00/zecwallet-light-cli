@@ -731,6 +731,7 @@ impl LightWallet {
         };
 
         // Reset the verification status
+        info!("Reset the sapling tree verified to false");
         self.sapling_tree_verified = false;
         
         if let Ok(tree) = CommitmentTree::read(&sapling_tree[..]) {
@@ -743,7 +744,7 @@ impl LightWallet {
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
-    pub fn get_sapling_tree(&self, block_pos: NodePosition) -> Result<(i32, String, String), String> {
+    pub fn get_wallet_sapling_tree(&self, block_pos: NodePosition) -> Result<(i32, String, String), String> {
         let blocks = self.blocks.read().unwrap();
 
         let block = match block_pos {
@@ -2086,7 +2087,7 @@ impl LightWallet {
 
         // Print info about the block every 10,000 blocks
         if height % 10_000 == 0 {
-            match self.get_sapling_tree(NodePosition::Last) {
+            match self.get_wallet_sapling_tree(NodePosition::Last) {
                 Ok((h, hash, stree)) => info!("Sapling tree at height\n({}, \"{}\",\"{}\"),", h, hash, stree),
                 Err(e) => error!("Couldn't determine sapling tree: {}", e)
             }
