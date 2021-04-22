@@ -2,7 +2,7 @@ use log::{error};
 use zcash_primitives::transaction::{TxId};
 
 use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock,
-                         TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo};
+                         TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo, TreeState};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tokio_rustls::{rustls::ClientConfig};
 use tonic::{Request};
@@ -14,6 +14,10 @@ use crate::PubCertificate;
 use crate::grpc_client::compact_tx_streamer_client::CompactTxStreamerClient;
 
 async fn get_client(uri: &http::Uri) -> Result<CompactTxStreamerClient<Channel>, Box<dyn std::error::Error>> {
+    if uri.host().is_none() {
+        return Err(format!("No Host to connect to"))?;
+    }
+
     let channel = if uri.scheme_str() == Some("http") {
         //println!("http");
         Channel::builder(uri.clone()).connect().await?
@@ -58,6 +62,19 @@ pub fn get_info(uri: &http::Uri) -> Result<LightdInfo, String> {
     rt.block_on(get_lightd_info(uri)).map_err( |e| e.to_string())
 }
 
+async fn get_sapling_tree_async(uri: &http::Uri, height: i32) -> Result<TreeState, Box<dyn std::error::Error>> {
+    let mut client = get_client(uri).await?;
+
+    let b = BlockId{ height: height as u64, hash: vec![]};
+    let response = client.get_tree_state(Request::new(b)).await?;
+
+    Ok(response.into_inner())
+}
+
+pub fn get_sapling_tree(uri: &http::Uri, height: i32) -> Result<TreeState, String> {
+    let mut rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(get_sapling_tree_async(uri, height)).map_err(|e| e.to_string())
+}
 
 async fn get_block_range<F : 'static + std::marker::Send>(uri: &http::Uri, start_height: u64, end_height: u64, pool: ThreadPool, c: F) 
     -> Result<(), Box<dyn std::error::Error>> 
@@ -135,9 +152,22 @@ async fn get_address_txids<F : 'static + std::marker::Send>(uri: &http::Uri, add
     let start = Some(BlockId{ height: start_height, hash: vec!()});
     let end   = Some(BlockId{ height: end_height,   hash: vec!()});
 
-    let request = Request::new(TransparentAddressBlockFilter{ address, range: Some(BlockRange{start, end}) });
+    let args = TransparentAddressBlockFilter{ address, range: Some(BlockRange{start, end}) };
+    let request = Request::new(args.clone());
 
-    let maybe_response = client.get_address_txids(request).await?;
+    let maybe_response = match client.get_taddress_txids(request).await {
+        Ok(r) => r,
+        Err(e) => {
+            if e.code() == tonic::Code::Unimplemented {
+                // Try the old, legacy API
+                let request = Request::new(args);
+                client.get_address_txids(request).await?
+            } else {
+                return Err(e)?;
+            }
+        }
+    };
+
     let mut response = maybe_response.into_inner();
 
     while let Some(tx) = response.message().await? {

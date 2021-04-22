@@ -84,6 +84,34 @@ impl Command for SyncStatusCommand {
     }
 }
 
+struct VerifyCommand {}
+impl Command for VerifyCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Verify the current blocks from the latest checkpoint.");
+        h.push("Usage:");
+        h.push("verify");
+        h.push("");
+        h.push("This command will download all blocks since the last checkpoint and make sure we have the currect block at the tip.");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Verify from the latest checkpoint".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        match lightclient.do_verify_from_last_checkpoint() {
+            Ok(v) => {
+                let j = object!{ "result" => v };
+                j.pretty(2)
+            },
+            Err(e) => e
+        }
+    }
+}
+
 struct RescanCommand {}
 impl Command for RescanCommand {
     fn help(&self) -> String {
@@ -1041,6 +1069,8 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("decrypt".to_string(),           Box::new(DecryptCommand{}));
     map.insert("unlock".to_string(),            Box::new(UnlockCommand{}));
     map.insert("lock".to_string(),              Box::new(LockCommand{}));
+
+    map.insert("verify".to_string(),            Box::new(VerifyCommand{}));
 
     Box::new(map)
 }

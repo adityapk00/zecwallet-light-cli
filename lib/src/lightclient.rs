@@ -20,6 +20,8 @@ use json::{object, array, JsonValue};
 use zcash_primitives::{note_encryption::Memo, transaction::{TxId, Transaction}};
 use zcash_primitives::{constants::testnet, constants::mainnet, constants::regtest};
 use zcash_primitives::consensus::{BranchId, BlockHeight, MAIN_NETWORK};
+use zcash_primitives::merkle_tree::{CommitmentTree};
+use zcash_primitives::sapling::{Node};
 use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
 
 use log::{info, warn, error, LevelFilter};
@@ -34,12 +36,12 @@ use log4rs::append::rolling_file::policy::compound::{
 };
 
 use crate::grpcconnector::{self, *};
-use crate::lightwallet::fee;
+use crate::lightwallet::{fee, NodePosition};
 use crate::ANCHOR_OFFSET;
 
 mod checkpoints;
 
-pub const DEFAULT_SERVER: &str = "https://lwdv2.zecwallet.co:1443";
+pub const DEFAULT_SERVER: &str = "https://lwdv3.zecwallet.co";
 pub const WALLET_NAME: &str    = "zecwallet-light-wallet.dat";
 pub const LOGFILE_NAME: &str   = "zecwallet-light-wallet.debug.log";
 
@@ -76,7 +78,7 @@ impl LightClientConfig {
         LightClientConfig {
             server                      : http::Uri::default(),
             chain_name                  : chain_name,
-            sapling_activation_height   : 0,
+            sapling_activation_height   : 1,
             anchor_offset               : ANCHOR_OFFSET,
             data_dir                    : dir,
         }
@@ -231,8 +233,31 @@ impl LightClientConfig {
         log_path.into_boxed_path()
     }
 
-    pub fn get_initial_state(&self, height: u64) -> Option<(u64, &str, &str)> {
-        checkpoints::get_closest_checkpoint(&self.chain_name, height)
+    pub fn get_initial_state(&self, uri: &http::Uri, height: u64) -> Option<(u64, String, String)> {
+        if height <= self.sapling_activation_height {
+            return checkpoints::get_closest_checkpoint(&self.chain_name, height).map(|(height, hash, tree)| 
+                (height, hash.to_string(), tree.to_string())
+            );
+        }
+
+        // We'll get the initial state from the server. Get it at height - 100 blocks, so there is no risk 
+        // of a reorg
+        let fetch_height = std::cmp::max(height - 100, self.sapling_activation_height);
+        info!("Getting sapling tree from LightwalletD at height {}", fetch_height);
+        match grpcconnector::get_sapling_tree(uri, fetch_height as i32) {
+            Ok(tree_state) => {
+                let hash = tree_state.hash.clone();
+                let tree = tree_state.tree.clone();
+                Some((tree_state.height, hash, tree))
+            },
+            Err(e) => {
+                error!("Error getting sapling tree:{}\nWill return checkpoint instead.", e);
+                match checkpoints::get_closest_checkpoint(&self.chain_name, height) {
+                    Some((height, hash, tree)) => Some((height, hash.to_string(), tree.to_string())),
+                    None => None
+                }
+            }
+        }
     }
 
     pub fn get_server_or_default(server: Option<String>) -> http::Uri {
@@ -332,11 +357,17 @@ impl LightClient {
     pub fn set_wallet_initial_state(&self, height: u64) {
         use std::convert::TryInto;
 
-        let state = self.config.get_initial_state(height);
+        let state = self.config.get_initial_state(&self.get_server_uri(), height);
 
         match state {
-            Some((height, hash, tree)) => self.wallet.read().unwrap().set_initial_block(height.try_into().unwrap(), hash, tree),
-            _ => true,
+            Some((height, hash, tree)) => {
+                info!("Setting initial state to height {}, tree {}", height, tree);
+                self.wallet.write().unwrap().set_initial_block(
+                    height.try_into().unwrap(), 
+                    &hash.as_str(), 
+                    &tree.as_str());
+                },
+            _ => {},
         };
     }
 
@@ -1212,8 +1243,9 @@ impl LightClient {
         self.wallet.read().unwrap().clear_blocks();
 
         // Then set the initial block
-        self.set_wallet_initial_state(self.wallet.read().unwrap().get_birthday());
-        info!("Cleared wallet state");        
+        let birthday = self.wallet.read().unwrap().get_birthday();
+        self.set_wallet_initial_state(birthday);
+        info!("Cleared wallet state, with birthday at {}", birthday);
     }
 
     pub fn do_rescan(&self) -> Result<JsonValue, String> {
@@ -1232,6 +1264,93 @@ impl LightClient {
         info!("Rescan finished");
 
         response
+    }
+
+    pub fn do_verify_from_last_checkpoint(&self) -> Result<bool, String> {
+        // If there are no blocks in the wallet, then we are starting from scratch, so no need to verify anything.
+        let last_height = self.wallet.read().unwrap().last_scanned_height() as u64;
+        if last_height == self.config.sapling_activation_height -1 {
+            info!("Reset the sapling tree verified to true. (Block height is at the begining ({}))", last_height);
+            self.wallet.write().unwrap().set_sapling_tree_verified();
+
+            return Ok(true);
+        }
+
+        // Get the first block's details, and make sure we can compute it from the last checkpoint
+        // Note that we get the first block in the wallet (Not the last one). This is expected to be tip - 100 blocks.
+        // We use this block to prevent any reorg risk. 
+        let (end_height, _, end_tree) = match self.wallet.read().unwrap().get_wallet_sapling_tree(NodePosition::First) {
+            Ok(r) => r,
+            Err(e) => return Err(format!("No wallet block found: {}", e))
+        };
+
+        // Get the last checkpoint
+        let (start_height, _, start_tree) = match checkpoints::get_closest_checkpoint(&self.config.chain_name, end_height as u64) {
+            Some(r) => r,
+            None => return Err(format!("No checkpoint found"))
+        };
+        
+        // If the height is the same as the checkpoint, then just compare directly
+        if end_height as u64 == start_height {
+            let verified = end_tree == start_tree;
+            
+            if verified {
+                info!("Reset the sapling tree verified to true");
+                self.wallet.write().unwrap().set_sapling_tree_verified();
+            } else {
+                warn!("Sapling tree verification failed!");
+                warn!("Verification Results:\nCalculated\n{}\nExpected\n{}\n", start_tree, end_tree);
+            }
+
+            return Ok(verified);
+        }
+        
+        let sapling_tree = hex::decode(start_tree).unwrap();
+
+        // The comupted commitment tree will be here.
+        let commit_tree_computed = Arc::new(RwLock::new(CommitmentTree::read(&sapling_tree[..]).map_err(|e| format!("{}", e))?));
+
+        let pool = ThreadPool::new(2);
+        let commit_tree = commit_tree_computed.clone();
+        grpcconnector::fetch_blocks(&self.get_server_uri(), start_height+1, end_height as u64, pool, 
+            move |encoded_block: &[u8], height: u64| {
+                let block: Result<zcash_client_backend::proto::compact_formats::CompactBlock, _>
+                                        = parse_from_bytes(encoded_block);
+                if block.is_err() {
+                    error!("Error getting block, {}", block.err().unwrap());
+                    return;
+                }
+
+                // Go over all tx, all outputs. No need to do any processing, just update the commitment tree
+                for tx in block.unwrap().vtx.iter() {
+                    for so in tx.outputs.iter() {
+                        let node = Node::new(so.cmu().ok().unwrap().into());
+                        commit_tree.write().unwrap().append(node).unwrap();
+                    }
+                }
+
+                // Write updates every now and then.
+                if height % 10000 == 0 {
+                    info!("Verification at block {}", height);
+                }
+            }
+        )?;
+
+        // Get the string version of the tree
+        let mut write_buf = vec![];
+        commit_tree_computed.write().unwrap().write(&mut write_buf).map_err(|e| format!("{}", e))?;
+        let computed_tree = hex::encode(write_buf);
+        
+        let verified = computed_tree == end_tree;
+        if verified {
+            info!("Reset the sapling tree verified to true");
+            self.wallet.write().unwrap().set_sapling_tree_verified();
+        } else {
+            warn!("Sapling tree verification failed!");
+            warn!("Verification Results:\nCalculated\n{}\nExpected\n{}\n", computed_tree, end_tree);
+        }
+
+        return Ok(verified);
     }
 
     /// Return the syncing status of the wallet
@@ -1261,6 +1380,15 @@ impl LightClient {
         // We can only do one sync at a time because we sync blocks in serial order
         // If we allow multiple syncs, they'll all get jumbled up.
         let _lock = self.sync_lock.lock().unwrap();
+
+        // See if we need to verify first
+        if !self.wallet.read().unwrap().is_sapling_tree_verified() {
+            match self.do_verify_from_last_checkpoint() {
+                Err(e) => return Err(format!("Checkpoint failed to verify with eror:{}.\nYou should rescan.", e)),
+                Ok(false) => return Err(format!("Checkpoint failed to verify: Verification returned false.\nYou should rescan.")),
+                _ => {}
+            }
+        }
 
         // Sync is 3 parts
         // 1. Get the latest block
@@ -1322,7 +1450,6 @@ impl LightClient {
             let local_bytes_downloaded = bytes_downloaded.clone();
 
             let start_height = last_scanned_height + 1;
-            info!("Start height is {}", start_height);
 
             // Show updates only if we're syncing a lot of blocks
             if print_updates && (latest_block - start_height) > 100 {
@@ -1478,7 +1605,7 @@ impl LightClient {
         if print_updates{
             println!(""); // New line to finish up the updates
         }
-        
+
         info!("Synced to {}, Downloaded {} kB", latest_block, bytes_downloaded.load(Ordering::SeqCst) / 1024);
         {
             let mut status = self.sync_status.write().unwrap();
@@ -1773,5 +1900,34 @@ pub mod tests {
             SaplingParams::get("sapling-output.params").unwrap().as_ref(), 
             SaplingParams::get("sapling-spend.params").unwrap().as_ref()).is_ok());
     }
+
+
+    #[test]
+    fn test_checkpoint_block_verification() {
+        let tmp = TempDir::new("lctest").unwrap();
+        let dir_name = tmp.path().to_str().map(|s| s.to_string());
+        let config = LightClientConfig::create_unconnected("test".to_string(), dir_name);
+        let lc = LightClient::new(&config, 0).unwrap();
+
+        assert_eq!(lc.wallet.read().unwrap().is_sapling_tree_verified(), false);
+    
+        // Verifying it immediately should succeed because there are no blocks, and start height is sapling activation height
+        assert!(lc.do_verify_from_last_checkpoint().is_ok());
+        assert_eq!(lc.wallet.read().unwrap().is_sapling_tree_verified(), true);
+    
+        // Test data
+        let (height, hash, tree) =  (650000, "003f7e09a357a75c3742af1b7e1189a9038a360cebb9d55e158af94a1c5aa682",
+        "010113f257f93a40e25cfc8161022f21c06fa2bc7fb03ee9f9399b3b30c636715301ef5b99706e40a19596d758bf7f4fd1b83c3054557bf7fab4801985642c317d41100001b2ad599fd7062af72bea99438dc5d8c3aa66ab52ed7dee3e066c4e762bd4e42b0001599dd114ec6c4c5774929a342d530bf109b131b48db2d20855afa9d37c92d6390000019159393c84b1bf439d142ed2c54ee8d5f7599a8b8f95e4035a75c30b0ec0fa4c0128e3a018bd08b2a98ed8b6995826f5857a9dc2777ce6af86db1ae68b01c3c53d0000000001e3ec5d790cc9acc2586fc6e9ce5aae5f5aba32d33e386165c248c4a03ec8ed670000011f8322ef806eb2430dc4a7a41c1b344bea5be946efc7b4349c1c9edb14ff9d39");
+    
+        assert!(lc.wallet.write().unwrap().set_initial_block(height, hash, tree));
+
+        // Setting inital block should make the verification status false
+        assert_eq!(lc.wallet.read().unwrap().is_sapling_tree_verified(), false);
+    
+        // Now, verifying it immediately should succeed because it should just verify the checkpoint
+        assert!(lc.do_verify_from_last_checkpoint().is_ok());
+        assert_eq!(lc.wallet.read().unwrap().is_sapling_tree_verified(), true);
+    }
+    
 
 }

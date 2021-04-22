@@ -108,6 +108,12 @@ impl ToBase58Check for [u8] {
     }
 }
 
+// Enum to refer to the first or last position of the Node
+pub enum NodePosition {
+    First,
+    Last
+}
+
 pub struct LightWallet {
     // Is the wallet encrypted? If it is, then when writing to disk, the seed is always encrypted 
     // and the individual spending keys are not written    
@@ -142,6 +148,9 @@ pub struct LightWallet {
     // will start from here.
     birthday: u64,
 
+    // If this wallet's initial block was verified
+    sapling_tree_verified: bool,
+
     // Non-serialized fields
     config: LightClientConfig,
 
@@ -150,8 +159,12 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 12;
+        return 13;
     }
+
+    pub fn is_sapling_tree_verified(&self) -> bool { self.sapling_tree_verified }
+
+    pub fn set_sapling_tree_verified(&mut self) { self.sapling_tree_verified = true; }
 
     fn get_taddr_from_bip39seed(config: &LightClientConfig, bip39_seed: &[u8], pos: u32) -> SecretKey {
         assert_eq!(bip39_seed.len(), 64);
@@ -244,6 +257,7 @@ impl LightWallet {
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday:    latest_block,
+            sapling_tree_verified: false,
             total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)]))
         };
 
@@ -385,6 +399,10 @@ impl LightWallet {
 
         let birthday = reader.read_u64::<LittleEndian>()?;
 
+        let sapling_tree_verified = if version <= 12 { true } else {
+            reader.read_u8()? == 1
+        };
+
         // If version <= 8, adjust the "is_spendable" status of each note data
         if version <= 8 {
             // Collect all spendable keys
@@ -415,6 +433,7 @@ impl LightWallet {
             mempool_txs: Arc::new(RwLock::new(HashMap::new())),
             config:      config.clone(),
             birthday,
+            sapling_tree_verified,
             total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)])),
         };
 
@@ -495,7 +514,10 @@ impl LightWallet {
 
         // While writing the birthday, get it from the fn so we recalculate it properly
         // in case of rescans etc...
-        writer.write_u64::<LittleEndian>(self.get_birthday())
+        writer.write_u64::<LittleEndian>(self.get_birthday())?;
+
+        // If the sapling tree was verified
+        writer.write_u8( if self.sapling_tree_verified { 1 } else { 0 })
     }
 
     pub fn note_address(hrp: &str, note: &SaplingNoteData) -> Option<String> {
@@ -682,7 +704,7 @@ impl LightWallet {
         self.mempool_txs.write().unwrap().clear();
     }
 
-    pub fn set_initial_block(&self, height: i32, hash: &str, sapling_tree: &str) -> bool {
+    pub fn set_initial_block(&mut self, height: i32, hash: &str, sapling_tree: &str) -> bool {
         let mut blocks = self.blocks.write().unwrap();
         if !blocks.is_empty() {
             return false;
@@ -708,23 +730,33 @@ impl LightWallet {
             }
         };
 
+        // Reset the verification status
+        info!("Reset the sapling tree verified to false");
+        self.sapling_tree_verified = false;
+        
         if let Ok(tree) = CommitmentTree::read(&sapling_tree[..]) {
             blocks.push(BlockData { height, hash, tree });
             true
         } else {
             false
         }
+
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
-    pub fn get_sapling_tree(&self) -> Result<(i32, String, String), String> {
+    pub fn get_wallet_sapling_tree(&self, block_pos: NodePosition) -> Result<(i32, String, String), String> {
         let blocks = self.blocks.read().unwrap();
 
-        let block = match blocks.last() {
-            Some(block) => block,
-            None => return Err("Couldn't get a block height!".to_string())
+        let block = match block_pos {
+            NodePosition::First => blocks.first(),
+            NodePosition::Last => blocks.last()
         };
 
+        if block.is_none() {
+            return Err("Couldn't get a block height!".to_string());
+        }
+
+        let block = block.unwrap();
         let mut write_buf = vec![];
         block.tree.write(&mut write_buf).map_err(|e| format!("Error writing commitment tree {}", e))?;
 
@@ -2055,7 +2087,7 @@ impl LightWallet {
 
         // Print info about the block every 10,000 blocks
         if height % 10_000 == 0 {
-            match self.get_sapling_tree() {
+            match self.get_wallet_sapling_tree(NodePosition::Last) {
                 Ok((h, hash, stree)) => info!("Sapling tree at height\n({}, \"{}\",\"{}\"),", h, hash, stree),
                 Err(e) => error!("Couldn't determine sapling tree: {}", e)
             }
