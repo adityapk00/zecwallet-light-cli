@@ -8,7 +8,7 @@ RUN apt install -y build-essential mingw-w64 gcc-aarch64-linux-gnu gcc-arm-linux
 RUN curl https://sh.rustup.rs -sSf | bash -s -- --default-toolchain none -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-RUN rustup toolchain install 1.46.0
+RUN rustup toolchain install 1.49.0
 
 RUN rustup target add x86_64-pc-windows-gnu
 RUN rustup target add aarch64-unknown-linux-gnu
@@ -36,7 +36,7 @@ RUN cd /opt && wget https://download.libsodium.org/libsodium/releases/libsodium-
 RUN apt install -y git
 
 # Cargo fetch the dependencies so we don't download them over and over again
-RUN cd /tmp && git clone https://github.com/adityapk00/zecwallet-light-cli.git && \
+RUN cd /tmp && git clone --depth=1 https://github.com/adityapk00/zecwallet-light-cli.git && \
     cd zecwallet-light-cli && \
     cargo fetch && \
     cd /tmp && rm -rf zecwallet-light-cli
