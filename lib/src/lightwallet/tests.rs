@@ -2242,6 +2242,7 @@ fn test_bad_send() {
     let raw_tx = send_wallet_funds(&wallet, 
                                         vec![(&"badaddress", 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Invalid recipient address"));
+    assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
 
     // Insufficient funds
     let raw_tx = send_wallet_funds(&wallet, 

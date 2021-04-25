@@ -844,16 +844,12 @@ impl LightClient {
     pub fn do_send_progress(&self) -> Result<JsonValue, String> {
         let progress = self.wallet.read().unwrap().get_send_progress();
 
-        Ok(if progress.is_send_in_progress {
-            object!{
-                "sending" => true,
-                "finished" => progress.finished,
-                "total" => progress.total,
-            }
-        } else {
-            object!{
-                "sending" => false,
-            }
+        Ok(object! {
+            "sending" => progress.is_send_in_progress,
+            "finished" => progress.finished,
+            "total" => progress.total,
+            "txid" => progress.last_txid,
+            "error" => progress.last_error,
         })
     }
 
@@ -1702,14 +1698,21 @@ impl LightClient {
     }
 
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
-        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
-            error!("Wallet is locked");
-            return Err("Wallet is locked".to_string());
-        }
+        // Grab a wallet lock and reset all the state and do some checks
+        {
+            let w = self.wallet.read().unwrap();
+            w.reset_send_progress();
 
+            if !w.is_unlocked_for_spending() {
+                let e = "Wallet is locked".to_string();
+                error!("{}", e);
+                w.set_send_error(e.clone());
+
+                return Err(e);
+            }
+        }
         // First, get the concensus branch ID
         let branch_id = self.consensus_branch_id();
-
         info!("Creating transaction");
 
         let result = {
@@ -1725,7 +1728,16 @@ impl LightClient {
             )
         };
         
-        result.map(|(txid, _)| txid)
+        match result {
+            Ok((txid, _)) => {
+                self.wallet.read().unwrap().set_send_success(txid.clone());
+                Ok(txid)
+            },
+            Err(e) => {
+                self.wallet.read().unwrap().set_send_error(format!("{}", e));
+                Err(e)
+            }
+        }
     }
 }
 

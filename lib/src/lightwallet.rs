@@ -112,6 +112,8 @@ pub struct SendProgress {
     pub is_send_in_progress: bool,
     pub finished: u32,
     pub total: u32,
+    pub last_error: Option<String>,
+    pub last_txid: Option<String>,
 }
 
 impl SendProgress {
@@ -120,6 +122,8 @@ impl SendProgress {
             is_send_in_progress: false,
             finished: 0,
             total: 0,
+            last_error: None,
+            last_txid: None,
         }
     }
 }
@@ -761,6 +765,30 @@ impl LightWallet {
     // Get the current sending status.
     pub fn get_send_progress(&self) -> SendProgress {
         self.send_progress.read().unwrap().clone()
+    }
+
+    // Set the previous send's status as an error
+    pub fn set_send_error(&self, e: String) {
+        let mut p = self.send_progress.write().unwrap();
+
+        p.is_send_in_progress = false;
+        p.last_error = Some(e);
+    }
+
+    // Set the previous send's status as success
+    pub fn set_send_success(&self, txid: String) {
+        let mut p = self.send_progress.write().unwrap();
+
+        p.is_send_in_progress = false;
+        p.last_txid = Some(txid);
+    }
+
+    // Reset the send progress status to blank
+    pub fn reset_send_progress(&self) {
+        let mut g = self.send_progress.write().unwrap();
+        
+        // Discard the old value, since we are replacing it
+        let _ = std::mem::replace(&mut *g, SendProgress::new());
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
