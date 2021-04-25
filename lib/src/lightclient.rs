@@ -1505,16 +1505,6 @@ impl LightClient {
                     local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
             })?;
 
-            {
-                // println!("Total scan duration: {:?}", self.wallet.read().unwrap().total_scan_duration.read().unwrap().get(0).unwrap().as_millis());
-            
-                let t = self.wallet.read().unwrap();
-                let mut d = t.total_scan_duration.write().unwrap();
-                d.clear();
-                d.push(std::time::Duration::new(0, 0));
-            }
-            
-
             // Check if there was any invalid block, which means we might have to do a reorg
             let invalid_height = last_invalid_height.load(Ordering::SeqCst);
             if invalid_height > 0 {

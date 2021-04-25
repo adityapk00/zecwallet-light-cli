@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 use std::io::{self, Read, Write};
 use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time::{SystemTime};
 
 use std::sync::mpsc::channel;
 use threadpool::ThreadPool;
@@ -106,6 +106,22 @@ impl ToBase58Check for [u8] {
     }
 }
 
+struct SendProgress {
+    pub is_send_in_progress: bool,
+    pub finished: u32,
+    pub total: u32,
+}
+
+impl SendProgress {
+    fn new() -> Self {
+        SendProgress {
+            is_send_in_progress: false,
+            finished: 0,
+            total: 0,
+        }
+    }
+}
+
 // Enum to refer to the first or last position of the Node
 pub enum NodePosition {
     First,
@@ -152,7 +168,7 @@ pub struct LightWallet {
     // Non-serialized fields
     config: LightClientConfig,
 
-    pub total_scan_duration: Arc<RwLock<Vec<Duration>>>,
+    send_progress: Arc<RwLock<SendProgress>>,
 }
 
 impl LightWallet {
@@ -256,7 +272,7 @@ impl LightWallet {
             config:      config.clone(),
             birthday:    latest_block,
             sapling_tree_verified: false,
-            total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)]))
+            send_progress: Arc::new(RwLock::new(SendProgress::new())),
         };
 
         // If restoring from seed, make sure we are creating 5 addresses for users
@@ -432,7 +448,7 @@ impl LightWallet {
             config:      config.clone(),
             birthday,
             sapling_tree_verified,
-            total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)])),
+            send_progress: Arc::new(RwLock::new(SendProgress::new())),  // This is not persisted
         };
 
         // Do a one-time fix of the spent_at_height for older wallets
@@ -2336,6 +2352,26 @@ impl LightWallet {
             }
         }
         
+        let (tx, rx) = channel::<u32>();
+        builder.set_progress_notifier(tx);
+        let progress = self.send_progress.clone();
+        std::thread::spawn(move || {
+            while let Ok(r) = rx.recv() {
+                println!("Progress: {}", r);
+                progress.write().unwrap().finished = r;
+            }
+
+            println!("Progress finished");
+            progress.write().unwrap().is_send_in_progress = false;
+        });
+
+        {
+            let mut p = self.send_progress.write().unwrap();
+            p.is_send_in_progress = true;
+            p.finished = 0;
+            p.total = notes.len() as u32 + tos.len() as u32;
+        }
+        
 
         println!("{}: Building transaction", now() - start_time);
         let (tx, _) = match builder.build(
@@ -2346,11 +2382,16 @@ impl LightWallet {
             Err(e) => {
                 let e = format!("Error creating transaction: {:?}", e);
                 error!("{}", e);
+                self.send_progress.write().unwrap().is_send_in_progress = false;
                 return Err(e);
             }
         };
         println!("{}: Transaction created", now() - start_time);
         println!("Transaction ID: {}", tx.txid());
+
+        {
+            self.send_progress.write().unwrap().is_send_in_progress = false;
+        }
 
         // Create the TX bytes
         let mut raw_tx = vec![];

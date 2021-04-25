@@ -674,7 +674,6 @@ checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
 [[package]]
 name = "equihash"
 version = "0.1.0"
-source = "git+https://github.com/adityapk00/librustzcash?rev=c31a04a4dbfa5a2ac013139db229f41cd421754d#c31a04a4dbfa5a2ac013139db229f41cd421754d"
 dependencies = [
  "blake2b_simd",
  "byteorder",
@@ -3103,7 +3102,6 @@ dependencies = [
 [[package]]
 name = "zcash_client_backend"
 version = "0.4.0"
-source = "git+https://github.com/adityapk00/librustzcash?rev=c31a04a4dbfa5a2ac013139db229f41cd421754d#c31a04a4dbfa5a2ac013139db229f41cd421754d"
 dependencies = [
  "base64 0.12.3",
  "bech32",
@@ -3124,7 +3122,6 @@ dependencies = [
 [[package]]
 name = "zcash_primitives"
 version = "0.4.0"
-source = "git+https://github.com/adityapk00/librustzcash?rev=c31a04a4dbfa5a2ac013139db229f41cd421754d#c31a04a4dbfa5a2ac013139db229f41cd421754d"
 dependencies = [
  "aes",
  "bitvec",
@@ -3152,7 +3149,6 @@ dependencies = [
 [[package]]
 name = "zcash_proofs"
 version = "0.4.0"
-source = "git+https://github.com/adityapk00/librustzcash?rev=c31a04a4dbfa5a2ac013139db229f41cd421754d#c31a04a4dbfa5a2ac013139db229f41cd421754d"
 dependencies = [
  "bellman",
  "blake2b_simd",
