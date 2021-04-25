@@ -1698,19 +1698,6 @@ impl LightClient {
     }
 
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
-        // Grab a wallet lock and reset all the state and do some checks
-        {
-            let w = self.wallet.read().unwrap();
-            w.reset_send_progress();
-
-            if !w.is_unlocked_for_spending() {
-                let e = "Wallet is locked".to_string();
-                error!("{}", e);
-                w.set_send_error(e.clone());
-
-                return Err(e);
-            }
-        }
         // First, get the concensus branch ID
         let branch_id = self.consensus_branch_id();
         info!("Creating transaction");
@@ -1728,16 +1715,7 @@ impl LightClient {
             )
         };
         
-        match result {
-            Ok((txid, _)) => {
-                self.wallet.read().unwrap().set_send_success(txid.clone());
-                Ok(txid)
-            },
-            Err(e) => {
-                self.wallet.read().unwrap().set_send_error(format!("{}", e));
-                Err(e)
-            }
-        }
+        result.map(|(txid, _)| txid)
     }
 }
 

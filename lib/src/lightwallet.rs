@@ -768,7 +768,7 @@ impl LightWallet {
     }
 
     // Set the previous send's status as an error
-    pub fn set_send_error(&self, e: String) {
+    fn set_send_error(&self, e: String) {
         let mut p = self.send_progress.write().unwrap();
 
         p.is_send_in_progress = false;
@@ -776,7 +776,7 @@ impl LightWallet {
     }
 
     // Set the previous send's status as success
-    pub fn set_send_success(&self, txid: String) {
+    fn set_send_success(&self, txid: String) {
         let mut p = self.send_progress.write().unwrap();
 
         p.is_send_in_progress = false;
@@ -784,7 +784,7 @@ impl LightWallet {
     }
 
     // Reset the send progress status to blank
-    pub fn reset_send_progress(&self) {
+    fn reset_send_progress(&self) {
         let mut g = self.send_progress.write().unwrap();
         
         // Discard the old value, since we are replacing it
@@ -2179,6 +2179,32 @@ impl LightWallet {
     ) -> Result<(String, Vec<u8>), String> 
         where F: Fn(Box<[u8]>) -> Result<String, String>
     {
+        // Reset the progress to start. Any errors will get recorded here
+        self.reset_send_progress();
+
+        // Call the internal function
+        match self.send_to_address_internal(consensus_branch_id, prover, transparent_only, tos, broadcast_fn) {
+            Ok((txid, rawtx)) => {
+                self.set_send_success(txid.clone());
+                Ok((txid, rawtx))
+            },
+            Err(e) => {
+                self.set_send_error(format!("{}", e));
+                Err(e)
+            }
+        }
+    }
+
+    fn send_to_address_internal<F, P: TxProver> (
+        &self,
+        consensus_branch_id: u32,
+        prover: P,
+        transparent_only: bool,
+        tos: Vec<(&str, u64, Option<String>)>,
+        broadcast_fn: F
+    ) -> Result<(String, Vec<u8>), String> 
+        where F: Fn(Box<[u8]>) -> Result<String, String>
+    {
         if !self.unlocked {
             return Err("Cannot spend while wallet is locked".to_string());
         }
@@ -2352,7 +2378,7 @@ impl LightWallet {
 
         // TODO: We're using the first ovk to encrypt outgoing Txns. Is that Ok?
         let ovk = self.zkeys.read().unwrap()[0].extfvk.fvk.ovk;
-
+        let mut total_z_recepients = 0u32;
         for (to, value, memo) in recepients {
             // Compute memo if it exists
             let encoded_memo = match memo {
@@ -2374,6 +2400,7 @@ impl LightWallet {
 
             if let Err(e) = match to {
                 address::RecipientAddress::Shielded(to) => {
+                    total_z_recepients += 1;
                     builder.add_sapling_output(Some(ovk), to.clone(), value, encoded_memo)
                 }
                 address::RecipientAddress::Transparent(to) => {
@@ -2403,7 +2430,7 @@ impl LightWallet {
             let mut p = self.send_progress.write().unwrap();
             p.is_send_in_progress = true;
             p.finished = 0;
-            p.total = notes.len() as u32 + tos.len() as u32;
+            p.total = notes.len() as u32 + total_z_recepients;
         }
         
 

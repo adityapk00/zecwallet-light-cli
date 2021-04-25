@@ -2117,7 +2117,12 @@ fn test_multi_spends() {
                     (taddr2.as_str(), TAMOUNT2, None),
                     (taddr3.as_str(), TAMOUNT3, None) ];
     
-    let (_, raw_tx) = send_wallet_funds(&wallet,  tos).unwrap();
+    let (txid, raw_tx) = send_wallet_funds(&wallet,  tos).unwrap();
+    assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
+    assert_eq!(wallet.get_send_progress().last_error, None);
+    assert_eq!(wallet.get_send_progress().last_txid, Some(txid));
+    assert!(wallet.get_send_progress().finished >= wallet.get_send_progress().total);
+
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();
 
@@ -2242,6 +2247,7 @@ fn test_bad_send() {
     let raw_tx = send_wallet_funds(&wallet, 
                                         vec![(&"badaddress", 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Invalid recipient address"));
+    assert!(wallet.get_send_progress().last_error.unwrap().contains("Invalid recipient address"));
     assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
 
     // Insufficient funds
@@ -2249,17 +2255,23 @@ fn test_bad_send() {
                                         vec![(&ext_taddr, AMOUNT1 + 10, None)]);
     assert!(raw_tx.err().unwrap().contains("Insufficient verified funds"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
+    assert!(wallet.get_send_progress().last_error.unwrap().contains("Insufficient verified funds"));
+    assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
 
     // No addresses
     let raw_tx = send_wallet_funds(&wallet,  vec![]);
     assert!(raw_tx.err().unwrap().contains("at least one"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
+    assert!(wallet.get_send_progress().last_error.unwrap().contains("at least one"));
+    assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
 
     // Broadcast error
     let raw_tx = wallet.send_to_address(*BRANCH_ID, FakeTxProver{}, false,
         vec![(&ext_taddr, 10, None)], |_| Err("broadcast failed".to_string()));
     assert!(raw_tx.err().unwrap().contains("broadcast failed"));
     assert_eq!(wallet.mempool_txs.read().unwrap().len(), 0);
+    assert!(wallet.get_send_progress().last_error.unwrap().contains("broadcast failed"));
+    assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
 }
 
 #[test]
