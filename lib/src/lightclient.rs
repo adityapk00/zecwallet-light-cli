@@ -841,6 +841,22 @@ impl LightClient {
         }
     }
 
+    pub fn do_send_progress(&self) -> Result<JsonValue, String> {
+        let progress = self.wallet.read().unwrap().get_send_progress();
+
+        Ok(if progress.is_send_in_progress {
+            object!{
+                "sending" => true,
+                "finished" => progress.finished,
+                "total" => progress.total,
+            }
+        } else {
+            object!{
+                "sending" => false,
+            }
+        })
+    }
+
     pub fn do_seed_phrase(&self) -> Result<JsonValue, &str> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
@@ -1700,7 +1716,7 @@ impl LightClient {
             let _lock = self.sync_lock.lock().unwrap();
             let prover = LocalTxProver::from_bytes(&self.sapling_spend, &self.sapling_output);
 
-            self.wallet.write().unwrap().send_to_address(
+            self.wallet.read().unwrap().send_to_address(
                 branch_id, 
                 prover,
                 false,

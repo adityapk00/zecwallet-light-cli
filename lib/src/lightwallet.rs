@@ -106,7 +106,9 @@ impl ToBase58Check for [u8] {
     }
 }
 
-struct SendProgress {
+
+#[derive(Debug, Clone)]
+pub struct SendProgress {
     pub is_send_in_progress: bool,
     pub finished: u32,
     pub total: u32,
@@ -754,7 +756,11 @@ impl LightWallet {
         } else {
             false
         }
+    }
 
+    // Get the current sending status.
+    pub fn get_send_progress(&self) -> SendProgress {
+        self.send_progress.read().unwrap().clone()
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
