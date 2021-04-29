@@ -1501,7 +1501,7 @@ impl LightWallet {
                     None => continue,
                 };
    
-                info!("A sapling note was sent to wallet in {}", tx.txid());
+                info!("A sapling note was received into the wallet in {}", tx.txid());
                 
                 // Do it in a short scope because of the write lock.   
                 let mut txs = self.txs.write().unwrap();
@@ -1647,7 +1647,7 @@ impl LightWallet {
                                 utxo.spent_at_height = None;
                             }
 
-                            if utxo.unconfirmed_spent.is_some() && txids_to_remove.contains(&utxo.unconfirmed_spent.unwrap()) {
+                            if utxo.unconfirmed_spent.is_some() && txids_to_remove.contains(&utxo.unconfirmed_spent.unwrap().0) {
                                 utxo.unconfirmed_spent = None;
                             }
                         })
@@ -2085,7 +2085,7 @@ impl LightWallet {
                 info!("Marked a note as spent");
                 spent_note.spent = Some(tx.txid);
                 spent_note.spent_at_height = Some(height);
-                spent_note.unconfirmed_spent = None::<TxId>;
+                spent_note.unconfirmed_spent = None;
 
                 total_shielded_value_spent += spent_note.note.value;
             }
@@ -2133,7 +2133,7 @@ impl LightWallet {
         
         {
             // Cleanup mempool tx after adding a block, to remove all txns that got mined
-            self.cleanup_mempool();
+            self.cleanup_mempool_unconfirmedtx();
         }
 
         // Print info about the block every 10,000 blocks
@@ -2416,8 +2416,8 @@ impl LightWallet {
             }
         }
         
+        // Set up a channel to recieve updates on the progress of building the transaction.
         let (tx, rx) = channel::<u32>();
-        builder.set_progress_notifier(tx);
         let progress = self.send_progress.clone();
         std::thread::spawn(move || {
             while let Ok(r) = rx.recv() {
@@ -2438,9 +2438,10 @@ impl LightWallet {
         
 
         println!("{}: Building transaction", now() - start_time);
-        let (tx, _) = match builder.build(
+        let (tx, _) = match builder.build_with_progress_notifier(
             BranchId::try_from(consensus_branch_id).unwrap(),
             &prover,
+            Some(tx)
         ) {
             Ok(res) => res,
             Err(e) => {
@@ -2472,7 +2473,7 @@ impl LightWallet {
                                         .notes.iter_mut()
                                         .find(|nd| &nd.nullifier[..] == &selected.nullifier[..])
                                         .unwrap();
-                spent_note.unconfirmed_spent = Some(tx.txid());
+                spent_note.unconfirmed_spent = Some((tx.txid(), height));
             }
 
             // Mark this utxo as unconfirmed spent
@@ -2480,7 +2481,7 @@ impl LightWallet {
                 let mut spent_utxo = txs.get_mut(&utxo.txid).unwrap().utxos.iter_mut()
                                         .find(|u| utxo.txid == u.txid && utxo.output_index == u.output_index)
                                         .unwrap();
-                spent_utxo.unconfirmed_spent = Some(tx.txid());
+                spent_utxo.unconfirmed_spent = Some((tx.txid(), height));
             }
         }
 
@@ -2535,7 +2536,8 @@ impl LightWallet {
     // if they :
     // 1. Have expired
     // 2. The Tx has been added to the wallet via a mined block
-    pub fn cleanup_mempool(&self) {
+    // We also clean up any expired unconfirmed transactions
+    pub fn cleanup_mempool_unconfirmedtx(&self) {
         const DEFAULT_TX_EXPIRY_DELTA: i32 = 20;
 
         let current_height = self.blocks.read().unwrap().last().map(|b| b.height).unwrap_or(0);
@@ -2552,6 +2554,26 @@ impl LightWallet {
             self.mempool_txs.write().unwrap().retain ( |txid, _| {
                 self.txs.read().unwrap().get(txid).is_none()
             });
+        }
+
+        // Also remove any dangling unconfirmed_spent after the default expiry height
+        {
+            self.txs.write().unwrap().values_mut()
+                .for_each(|wtx| {
+                    wtx.notes.iter_mut().for_each(|note| {
+                        if note.unconfirmed_spent.is_some() &&
+                            note.unconfirmed_spent.unwrap().1 as i32 + DEFAULT_TX_EXPIRY_DELTA < current_height {
+                            note.unconfirmed_spent = None;
+                        }
+                    });
+
+                    wtx.utxos.iter_mut().for_each(|utxo| {
+                        if utxo.unconfirmed_spent.is_some() &&
+                            utxo.unconfirmed_spent.unwrap().1 as i32 + DEFAULT_TX_EXPIRY_DELTA < current_height {
+                            utxo.unconfirmed_spent = None;
+                        }
+                    });
+                });
         }
     }
 }

@@ -57,19 +57,26 @@ impl BlockData {
 
 pub struct SaplingNoteData {
     pub(super) account: usize,
-    pub(super) extfvk: ExtendedFullViewingKey, // Technically, this should be recoverable from the account number, but we're going to refactor this in the future, so I'll write it again here.
+
+    // Technically, this should be recoverable from the account number, 
+    // but we're going to refactor this in the future, so I'll write it again here.
+    pub(super) extfvk: ExtendedFullViewingKey, 
+    
     pub diversifier: Diversifier,
     pub note: Note,
     pub(super) witnesses: Vec<IncrementalWitness<Node>>,
     pub(super) nullifier: [u8; 32],
     pub spent: Option<TxId>,             // If this note was confirmed spent
     pub spent_at_height: Option<i32>,    // The height at which this note was spent
-    pub unconfirmed_spent: Option<TxId>, // If this note was spent in a send, but has not yet been confirmed.
+
+    // If this note was spent in a send, but has not yet been confirmed.
+    // Contains the txid and height at which it was broadcast
+    pub unconfirmed_spent: Option<(TxId, u32)>, 
     pub memo:  Option<Memo>,
     pub is_change: bool,
-    pub have_spending_key: bool,         // If the spending key is available in the wallet (i.e., whether to keep witness up-to-date)
-    
-    // TODO: We need to remove the unconfirmed_spent (i.e., set it to None) if the Tx has expired
+
+    // If the spending key is available in the wallet (i.e., whether to keep witness up-to-date)
+    pub have_spending_key: bool,         
 }
 
 // Reading a note also needs the corresponding address to read from.
@@ -107,7 +114,7 @@ fn write_rseed<W: Write>(mut writer: W, rseed: &Rseed) -> io::Result<()> {
 
 impl SaplingNoteData {
     fn serialized_version() -> u64 {
-        4
+        5
     }
 
     pub fn new(
@@ -201,6 +208,16 @@ impl SaplingNoteData {
             None
         };
 
+        let unconfirmed_spent = if version <= 4 { None } else {
+            Optional::read(&mut reader, |r| {
+                let mut txbytes = [0u8; 32];
+                r.read_exact(&mut txbytes)?;
+
+                let height = r.read_u32::<LittleEndian>()?;
+                Ok((TxId{0: txbytes}, height))
+            })?
+        };
+
         let memo = Optional::read(&mut reader, |r| {
             let mut memo_bytes = [0u8; 512];
             r.read_exact(&mut memo_bytes)?;
@@ -227,7 +244,7 @@ impl SaplingNoteData {
             nullifier,
             spent,
             spent_at_height,
-            unconfirmed_spent: None,
+            unconfirmed_spent,
             memo,
             is_change,
             have_spending_key,
@@ -257,6 +274,11 @@ impl SaplingNoteData {
 
         Optional::write(&mut writer, &self.spent_at_height, |w, h| w.write_i32::<LittleEndian>(*h))?;
 
+        Optional::write(&mut writer, &self.unconfirmed_spent, |w, (txid, height)| {
+            w.write_all(&txid.0)?;
+            w.write_u32::<LittleEndian>(*height)
+        })?;
+
         Optional::write(&mut writer, &self.memo, |w, m| w.write_all(m.as_bytes()))?;
 
         writer.write_u8(if self.is_change {1} else {0})?;
@@ -282,12 +304,15 @@ pub struct Utxo {
 
     pub spent_at_height: Option<i32>,
     pub spent: Option<TxId>,             // If this utxo was confirmed spent
-    pub unconfirmed_spent: Option<TxId>, // If this utxo was spent in a send, but has not yet been confirmed.
+
+    // If this utxo was spent in a send, but has not yet been confirmed.
+    // Contains the txid and height at which the Tx was broadcast
+    pub unconfirmed_spent: Option<(TxId, u32)>, 
 }
 
 impl Utxo {
     pub fn serialized_version() -> u64 {
-        return 2;
+        return 3;
     }
 
     pub fn to_outpoint(&self) -> OutPoint {
@@ -330,7 +355,17 @@ impl Utxo {
             })?
         };
 
-        // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
+        let unconfirmed_spent = if version <= 2 {
+            None
+        } else {
+            Optional::read(&mut reader, |r| {
+                let mut txbytes = [0u8; 32];
+                r.read_exact(&mut txbytes)?;
+
+                let height = r.read_u32::<LittleEndian>()?;
+                Ok((TxId{0: txbytes}, height))
+            })?
+        };
 
         Ok(Utxo {
             address,
@@ -341,7 +376,7 @@ impl Utxo {
             height,
             spent_at_height,
             spent,
-            unconfirmed_spent: None::<TxId>,
+            unconfirmed_spent,
         })
     }
 
@@ -363,7 +398,10 @@ impl Utxo {
 
         Optional::write(&mut writer, &self.spent_at_height, |w, s| w.write_i32::<LittleEndian>(*s))?;
 
-        // Note that we don't write the unconfirmed spent field, because if the wallet is restarted, we'll reset any unconfirmed stuff.
+        Optional::write(&mut writer, &self.unconfirmed_spent, |w, (txid, height)| {
+            w.write_all(&txid.0)?;
+            w.write_u32::<LittleEndian>(*height)
+        })?;
 
         Ok(())
     }

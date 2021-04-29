@@ -907,7 +907,7 @@ impl LightClient {
                                 "spendable"          => spendable,
                                 "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
                                 "spent_at_height"    => nd.spent_at_height.map(|h| format!("{}", h)),
-                                "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => nd.unconfirmed_spent.map(|(spent_txid, _)| format!("{}", spent_txid)),
                             })
                         }
                     )
@@ -945,7 +945,7 @@ impl LightClient {
                                 "address"            => utxo.address.clone(),
                                 "spent_at_height"    => utxo.spent_at_height,
                                 "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|(spent_txid, _)| format!("{}", spent_txid)),
                             })
                         }
                     )

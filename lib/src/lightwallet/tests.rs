@@ -1195,7 +1195,7 @@ fn test_z_spend_to_z() {
         assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
         assert_eq!(txs[&txid1].notes[0].is_change, false);
         assert_eq!(txs[&txid1].notes[0].spent, None);
-        assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
+        assert_eq!(txs[&txid1].notes[0].unconfirmed_spent.unwrap().0, sent_txid);
     }
 
     // It should also be in the mempool structure
@@ -1541,7 +1541,7 @@ fn test_z_spend_to_taddr() {
         assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT1);
         assert_eq!(txs[&txid1].notes[0].is_change, false);
         assert_eq!(txs[&txid1].notes[0].spent, None);
-        assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
+        assert_eq!(txs[&txid1].notes[0].unconfirmed_spent.unwrap().0, sent_txid);
     }
 
     let mut cb3 = FakeCompactBlock::new(2, block_hash);
@@ -1742,12 +1742,12 @@ fn test_t_spend_to_z() {
         assert_eq!(txs[&txid_t].utxos.len(), 1);
         assert_eq!(txs[&txid_t].utxos[0].address, taddr);
         assert_eq!(txs[&txid_t].utxos[0].spent, None);
-        assert_eq!(txs[&txid_t].utxos[0].unconfirmed_spent, Some(sent_txid));
+        assert_eq!(txs[&txid_t].utxos[0].unconfirmed_spent.unwrap().0, sent_txid);
 
         // Note
         assert_eq!(txs[&txid1].notes[0].note.value, AMOUNT_Z);
         assert_eq!(txs[&txid1].notes[0].spent, None);
-        assert_eq!(txs[&txid1].notes[0].unconfirmed_spent, Some(sent_txid));
+        assert_eq!(txs[&txid1].notes[0].unconfirmed_spent.unwrap().0, sent_txid);
     }
 
     let mut cb3 = FakeCompactBlock::new(2, block_hash);
