@@ -2121,7 +2121,7 @@ fn test_multi_spends() {
     assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
     assert_eq!(wallet.get_send_progress().last_error, None);
     assert_eq!(wallet.get_send_progress().last_txid, Some(txid));
-    assert!(wallet.get_send_progress().finished >= wallet.get_send_progress().total);
+    assert!(wallet.get_send_progress().progress >= wallet.get_send_progress().total);
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();

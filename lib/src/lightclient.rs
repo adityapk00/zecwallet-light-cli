@@ -845,8 +845,9 @@ impl LightClient {
         let progress = self.wallet.read().unwrap().get_send_progress();
 
         Ok(object! {
+            "id" => progress.id,
             "sending" => progress.is_send_in_progress,
-            "finished" => progress.finished,
+            "progress" => progress.progress,
             "total" => progress.total,
             "txid" => progress.last_txid,
             "error" => progress.last_error,

@@ -109,18 +109,20 @@ impl ToBase58Check for [u8] {
 
 #[derive(Debug, Clone)]
 pub struct SendProgress {
+    pub id: u32,
     pub is_send_in_progress: bool,
-    pub finished: u32,
+    pub progress: u32,
     pub total: u32,
     pub last_error: Option<String>,
     pub last_txid: Option<String>,
 }
 
 impl SendProgress {
-    fn new() -> Self {
-        SendProgress {
+    fn new(id: u32) -> Self {
+        SendProgress {            
+            id,
             is_send_in_progress: false,
-            finished: 0,
+            progress: 0,
             total: 0,
             last_error: None,
             last_txid: None,
@@ -278,7 +280,7 @@ impl LightWallet {
             config:      config.clone(),
             birthday:    latest_block,
             sapling_tree_verified: false,
-            send_progress: Arc::new(RwLock::new(SendProgress::new())),
+            send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
         };
 
         // If restoring from seed, make sure we are creating 5 addresses for users
@@ -454,7 +456,7 @@ impl LightWallet {
             config:      config.clone(),
             birthday,
             sapling_tree_verified,
-            send_progress: Arc::new(RwLock::new(SendProgress::new())),  // This is not persisted
+            send_progress: Arc::new(RwLock::new(SendProgress::new(0))),  // This is not persisted
         };
 
         // Do a one-time fix of the spent_at_height for older wallets
@@ -786,9 +788,10 @@ impl LightWallet {
     // Reset the send progress status to blank
     fn reset_send_progress(&self) {
         let mut g = self.send_progress.write().unwrap();
+        let next_id = g.id + 1;
         
         // Discard the old value, since we are replacing it
-        let _ = std::mem::replace(&mut *g, SendProgress::new());
+        let _ = std::mem::replace(&mut *g, SendProgress::new(next_id));
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
@@ -2419,7 +2422,7 @@ impl LightWallet {
         std::thread::spawn(move || {
             while let Ok(r) = rx.recv() {
                 println!("Progress: {}", r);
-                progress.write().unwrap().finished = r;
+                progress.write().unwrap().progress = r;
             }
 
             println!("Progress finished");
@@ -2429,7 +2432,7 @@ impl LightWallet {
         {
             let mut p = self.send_progress.write().unwrap();
             p.is_send_in_progress = true;
-            p.finished = 0;
+            p.progress = 0;
             p.total = notes.len() as u32 + total_z_recepients;
         }
         
