@@ -112,6 +112,29 @@ impl Command for VerifyCommand {
     }
 }
 
+struct SendProgressCommand {}
+impl Command for SendProgressCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Get the progress of any send transactions that are currently computing");
+        h.push("Usage:");
+        h.push("sendprogress");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Get the progress of any send transactions that are currently computing".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        match lightclient.do_send_progress() {
+            Ok(j) => j.pretty(2),
+            Err(e) => e
+        }
+    }
+}
+
 struct RescanCommand {}
 impl Command for RescanCommand {
     fn help(&self) -> String {
@@ -1053,6 +1076,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("balance".to_string(),           Box::new(BalanceCommand{}));
     map.insert("addresses".to_string(),         Box::new(AddressCommand{}));
     map.insert("height".to_string(),            Box::new(HeightCommand{}));
+    map.insert("sendprogress".to_string(),      Box::new(SendProgressCommand{}));
     map.insert("import".to_string(),            Box::new(ImportCommand{}));
     map.insert("export".to_string(),            Box::new(ExportCommand{}));
     map.insert("info".to_string(),              Box::new(InfoCommand{}));

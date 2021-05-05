@@ -841,6 +841,19 @@ impl LightClient {
         }
     }
 
+    pub fn do_send_progress(&self) -> Result<JsonValue, String> {
+        let progress = self.wallet.read().unwrap().get_send_progress();
+
+        Ok(object! {
+            "id" => progress.id,
+            "sending" => progress.is_send_in_progress,
+            "progress" => progress.progress,
+            "total" => progress.total,
+            "txid" => progress.last_txid,
+            "error" => progress.last_error,
+        })
+    }
+
     pub fn do_seed_phrase(&self) -> Result<JsonValue, &str> {
         if !self.wallet.read().unwrap().is_unlocked_for_spending() {
             error!("Wallet is locked");
@@ -894,7 +907,7 @@ impl LightClient {
                                 "spendable"          => spendable,
                                 "spent"              => nd.spent.map(|spent_txid| format!("{}", spent_txid)),
                                 "spent_at_height"    => nd.spent_at_height.map(|h| format!("{}", h)),
-                                "unconfirmed_spent"  => nd.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => nd.unconfirmed_spent.map(|(spent_txid, _)| format!("{}", spent_txid)),
                             })
                         }
                     )
@@ -932,7 +945,7 @@ impl LightClient {
                                 "address"            => utxo.address.clone(),
                                 "spent_at_height"    => utxo.spent_at_height,
                                 "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
-                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|spent_txid| format!("{}", spent_txid)),
+                                "unconfirmed_spent"  => utxo.unconfirmed_spent.map(|(spent_txid, _)| format!("{}", spent_txid)),
                             })
                         }
                     )
@@ -1505,16 +1518,6 @@ impl LightClient {
                     local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
             })?;
 
-            {
-                // println!("Total scan duration: {:?}", self.wallet.read().unwrap().total_scan_duration.read().unwrap().get(0).unwrap().as_millis());
-            
-                let t = self.wallet.read().unwrap();
-                let mut d = t.total_scan_duration.write().unwrap();
-                d.clear();
-                d.push(std::time::Duration::new(0, 0));
-            }
-            
-
             // Check if there was any invalid block, which means we might have to do a reorg
             let invalid_height = last_invalid_height.load(Ordering::SeqCst);
             if invalid_height > 0 {
@@ -1696,21 +1699,15 @@ impl LightClient {
     }
 
     pub fn do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
-        if !self.wallet.read().unwrap().is_unlocked_for_spending() {
-            error!("Wallet is locked");
-            return Err("Wallet is locked".to_string());
-        }
-
         // First, get the concensus branch ID
         let branch_id = self.consensus_branch_id();
-
         info!("Creating transaction");
 
         let result = {
             let _lock = self.sync_lock.lock().unwrap();
             let prover = LocalTxProver::from_bytes(&self.sapling_spend, &self.sapling_output);
 
-            self.wallet.write().unwrap().send_to_address(
+            self.wallet.read().unwrap().send_to_address(
                 branch_id, 
                 prover,
                 false,

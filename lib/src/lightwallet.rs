@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 use std::io::{self, Read, Write};
 use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time::{SystemTime};
 
 use std::sync::mpsc::channel;
 use threadpool::ThreadPool;
@@ -106,6 +106,30 @@ impl ToBase58Check for [u8] {
     }
 }
 
+
+#[derive(Debug, Clone)]
+pub struct SendProgress {
+    pub id: u32,
+    pub is_send_in_progress: bool,
+    pub progress: u32,
+    pub total: u32,
+    pub last_error: Option<String>,
+    pub last_txid: Option<String>,
+}
+
+impl SendProgress {
+    fn new(id: u32) -> Self {
+        SendProgress {            
+            id,
+            is_send_in_progress: false,
+            progress: 0,
+            total: 0,
+            last_error: None,
+            last_txid: None,
+        }
+    }
+}
+
 // Enum to refer to the first or last position of the Node
 pub enum NodePosition {
     First,
@@ -152,7 +176,7 @@ pub struct LightWallet {
     // Non-serialized fields
     config: LightClientConfig,
 
-    pub total_scan_duration: Arc<RwLock<Vec<Duration>>>,
+    send_progress: Arc<RwLock<SendProgress>>,
 }
 
 impl LightWallet {
@@ -256,7 +280,7 @@ impl LightWallet {
             config:      config.clone(),
             birthday:    latest_block,
             sapling_tree_verified: false,
-            total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)]))
+            send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
         };
 
         // If restoring from seed, make sure we are creating 5 addresses for users
@@ -432,7 +456,7 @@ impl LightWallet {
             config:      config.clone(),
             birthday,
             sapling_tree_verified,
-            total_scan_duration: Arc::new(RwLock::new(vec![Duration::new(0, 0)])),
+            send_progress: Arc::new(RwLock::new(SendProgress::new(0))),  // This is not persisted
         };
 
         // Do a one-time fix of the spent_at_height for older wallets
@@ -738,7 +762,36 @@ impl LightWallet {
         } else {
             false
         }
+    }
 
+    // Get the current sending status.
+    pub fn get_send_progress(&self) -> SendProgress {
+        self.send_progress.read().unwrap().clone()
+    }
+
+    // Set the previous send's status as an error
+    fn set_send_error(&self, e: String) {
+        let mut p = self.send_progress.write().unwrap();
+
+        p.is_send_in_progress = false;
+        p.last_error = Some(e);
+    }
+
+    // Set the previous send's status as success
+    fn set_send_success(&self, txid: String) {
+        let mut p = self.send_progress.write().unwrap();
+
+        p.is_send_in_progress = false;
+        p.last_txid = Some(txid);
+    }
+
+    // Reset the send progress status to blank
+    fn reset_send_progress(&self) {
+        let mut g = self.send_progress.write().unwrap();
+        let next_id = g.id + 1;
+        
+        // Discard the old value, since we are replacing it
+        let _ = std::mem::replace(&mut *g, SendProgress::new(next_id));
     }
 
     // Get the latest sapling commitment tree. It will return the height and the hex-encoded sapling commitment tree at that height
@@ -1448,7 +1501,7 @@ impl LightWallet {
                     None => continue,
                 };
    
-                info!("A sapling note was sent to wallet in {}", tx.txid());
+                info!("A sapling note was received into the wallet in {}", tx.txid());
                 
                 // Do it in a short scope because of the write lock.   
                 let mut txs = self.txs.write().unwrap();
@@ -1594,7 +1647,7 @@ impl LightWallet {
                                 utxo.spent_at_height = None;
                             }
 
-                            if utxo.unconfirmed_spent.is_some() && txids_to_remove.contains(&utxo.unconfirmed_spent.unwrap()) {
+                            if utxo.unconfirmed_spent.is_some() && txids_to_remove.contains(&utxo.unconfirmed_spent.unwrap().0) {
                                 utxo.unconfirmed_spent = None;
                             }
                         })
@@ -2032,7 +2085,7 @@ impl LightWallet {
                 info!("Marked a note as spent");
                 spent_note.spent = Some(tx.txid);
                 spent_note.spent_at_height = Some(height);
-                spent_note.unconfirmed_spent = None::<TxId>;
+                spent_note.unconfirmed_spent = None;
 
                 total_shielded_value_spent += spent_note.note.value;
             }
@@ -2080,7 +2133,7 @@ impl LightWallet {
         
         {
             // Cleanup mempool tx after adding a block, to remove all txns that got mined
-            self.cleanup_mempool();
+            self.cleanup_mempool_unconfirmedtx();
         }
 
         // Print info about the block every 10,000 blocks
@@ -2120,6 +2173,32 @@ impl LightWallet {
     }
 
     pub fn send_to_address<F, P: TxProver> (
+        &self,
+        consensus_branch_id: u32,
+        prover: P,
+        transparent_only: bool,
+        tos: Vec<(&str, u64, Option<String>)>,
+        broadcast_fn: F
+    ) -> Result<(String, Vec<u8>), String> 
+        where F: Fn(Box<[u8]>) -> Result<String, String>
+    {
+        // Reset the progress to start. Any errors will get recorded here
+        self.reset_send_progress();
+
+        // Call the internal function
+        match self.send_to_address_internal(consensus_branch_id, prover, transparent_only, tos, broadcast_fn) {
+            Ok((txid, rawtx)) => {
+                self.set_send_success(txid.clone());
+                Ok((txid, rawtx))
+            },
+            Err(e) => {
+                self.set_send_error(format!("{}", e));
+                Err(e)
+            }
+        }
+    }
+
+    fn send_to_address_internal<F, P: TxProver> (
         &self,
         consensus_branch_id: u32,
         prover: P,
@@ -2302,7 +2381,7 @@ impl LightWallet {
 
         // TODO: We're using the first ovk to encrypt outgoing Txns. Is that Ok?
         let ovk = self.zkeys.read().unwrap()[0].extfvk.fvk.ovk;
-
+        let mut total_z_recepients = 0u32;
         for (to, value, memo) in recepients {
             // Compute memo if it exists
             let encoded_memo = match memo {
@@ -2324,6 +2403,7 @@ impl LightWallet {
 
             if let Err(e) = match to {
                 address::RecipientAddress::Shielded(to) => {
+                    total_z_recepients += 1;
                     builder.add_sapling_output(Some(ovk), to.clone(), value, encoded_memo)
                 }
                 address::RecipientAddress::Transparent(to) => {
@@ -2336,21 +2416,47 @@ impl LightWallet {
             }
         }
         
+        // Set up a channel to recieve updates on the progress of building the transaction.
+        let (tx, rx) = channel::<u32>();
+        let progress = self.send_progress.clone();
+        std::thread::spawn(move || {
+            while let Ok(r) = rx.recv() {
+                println!("Progress: {}", r);
+                progress.write().unwrap().progress = r;
+            }
+
+            println!("Progress finished");
+            progress.write().unwrap().is_send_in_progress = false;
+        });
+
+        {
+            let mut p = self.send_progress.write().unwrap();
+            p.is_send_in_progress = true;
+            p.progress = 0;
+            p.total = notes.len() as u32 + total_z_recepients;
+        }
+        
 
         println!("{}: Building transaction", now() - start_time);
-        let (tx, _) = match builder.build(
+        let (tx, _) = match builder.build_with_progress_notifier(
             BranchId::try_from(consensus_branch_id).unwrap(),
             &prover,
+            Some(tx)
         ) {
             Ok(res) => res,
             Err(e) => {
                 let e = format!("Error creating transaction: {:?}", e);
                 error!("{}", e);
+                self.send_progress.write().unwrap().is_send_in_progress = false;
                 return Err(e);
             }
         };
         println!("{}: Transaction created", now() - start_time);
         println!("Transaction ID: {}", tx.txid());
+
+        {
+            self.send_progress.write().unwrap().is_send_in_progress = false;
+        }
 
         // Create the TX bytes
         let mut raw_tx = vec![];
@@ -2367,7 +2473,7 @@ impl LightWallet {
                                         .notes.iter_mut()
                                         .find(|nd| &nd.nullifier[..] == &selected.nullifier[..])
                                         .unwrap();
-                spent_note.unconfirmed_spent = Some(tx.txid());
+                spent_note.unconfirmed_spent = Some((tx.txid(), height));
             }
 
             // Mark this utxo as unconfirmed spent
@@ -2375,7 +2481,7 @@ impl LightWallet {
                 let mut spent_utxo = txs.get_mut(&utxo.txid).unwrap().utxos.iter_mut()
                                         .find(|u| utxo.txid == u.txid && utxo.output_index == u.output_index)
                                         .unwrap();
-                spent_utxo.unconfirmed_spent = Some(tx.txid());
+                spent_utxo.unconfirmed_spent = Some((tx.txid(), height));
             }
         }
 
@@ -2430,7 +2536,8 @@ impl LightWallet {
     // if they :
     // 1. Have expired
     // 2. The Tx has been added to the wallet via a mined block
-    pub fn cleanup_mempool(&self) {
+    // We also clean up any expired unconfirmed transactions
+    pub fn cleanup_mempool_unconfirmedtx(&self) {
         const DEFAULT_TX_EXPIRY_DELTA: i32 = 20;
 
         let current_height = self.blocks.read().unwrap().last().map(|b| b.height).unwrap_or(0);
@@ -2447,6 +2554,26 @@ impl LightWallet {
             self.mempool_txs.write().unwrap().retain ( |txid, _| {
                 self.txs.read().unwrap().get(txid).is_none()
             });
+        }
+
+        // Also remove any dangling unconfirmed_spent after the default expiry height
+        {
+            self.txs.write().unwrap().values_mut()
+                .for_each(|wtx| {
+                    wtx.notes.iter_mut().for_each(|note| {
+                        if note.unconfirmed_spent.is_some() &&
+                            note.unconfirmed_spent.unwrap().1 as i32 + DEFAULT_TX_EXPIRY_DELTA < current_height {
+                            note.unconfirmed_spent = None;
+                        }
+                    });
+
+                    wtx.utxos.iter_mut().for_each(|utxo| {
+                        if utxo.unconfirmed_spent.is_some() &&
+                            utxo.unconfirmed_spent.unwrap().1 as i32 + DEFAULT_TX_EXPIRY_DELTA < current_height {
+                            utxo.unconfirmed_spent = None;
+                        }
+                    });
+                });
         }
     }
 }
