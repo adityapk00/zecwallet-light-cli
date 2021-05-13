@@ -1,7 +1,7 @@
 use log::{error};
 use zcash_primitives::transaction::{TxId};
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock,
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock, PriceResponse,
                          TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo, TreeState};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tokio_rustls::{rustls::ClientConfig};
@@ -61,6 +61,27 @@ pub fn get_info(uri: &http::Uri) -> Result<LightdInfo, String> {
 
     rt.block_on(get_lightd_info(uri)).map_err( |e| e.to_string())
 }
+
+
+async fn get_current_zec_price_async(uri: &http::Uri) ->  Result<PriceResponse, Box<dyn std::error::Error>> {
+    let mut client = get_client(uri).await?;
+
+    let request = Request::new(Empty {});
+
+    let response = client.get_current_zec_price(request).await?;
+
+    Ok(response.into_inner())
+}
+
+
+pub fn get_current_zec_price(uri: &http::Uri) -> Result<f64, String> {
+    let mut rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+
+    rt.block_on(get_current_zec_price_async(uri))
+        .map(|r| r.price)
+        .map_err( |e| e.to_string())
+}
+
 
 async fn get_sapling_tree_async(uri: &http::Uri, height: i32) -> Result<TreeState, Box<dyn std::error::Error>> {
     let mut client = get_client(uri).await?;

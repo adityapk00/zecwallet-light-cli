@@ -1539,7 +1539,7 @@ impl LightClient {
             if invalid_height > 0 {
                 // Reset the scanning heights
                 last_scanned_height = (invalid_height - 1) as u64;
-                end_height = std::cmp::min(last_scanned_height + 1000, latest_block);
+                end_height = std::cmp::min(last_scanned_height + scan_batch_size, latest_block);
 
                 warn!("Reorg: reset scanning from {} to {}", last_scanned_height, end_height);
 
@@ -1599,7 +1599,7 @@ impl LightClient {
             
             // Do block height accounting
             last_scanned_height = end_height;
-            end_height = last_scanned_height + 1000;
+            end_height = last_scanned_height + scan_batch_size;
 
             if last_scanned_height >= latest_block {
                 break;
