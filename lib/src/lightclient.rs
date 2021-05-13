@@ -1,4 +1,4 @@
-use crate::lightwallet::{message::Message, LightWallet};
+use crate::lightwallet::{self, LightWallet, message::Message};
 
 use zcash_proofs::prover::LocalTxProver;
 use std::sync::{Arc, RwLock, Mutex, mpsc::channel};
@@ -1374,11 +1374,79 @@ impl LightClient {
         self.sync_status.read().unwrap().clone()
     }
 
+    // Update the historical prices in the wallet, if any are present. 
+    fn update_historical_prices(&self) {
+        let price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        // First, if the retry count has exceeded 5, we give up. Something is wrong, and will need to be 
+        // fixed in a later version
+        if price_info.historical_prices_retry_count > 5 {
+            warn!("Not getting historical prices because retry count has exceeded");
+            return
+        }
+
+        // If the prices were fetched recently, don't try again soon
+        if price_info.historical_prices_retry_count > 0 && 
+            price_info.last_historical_prices_fetched_at.is_some() && 
+            (price_info.last_historical_prices_fetched_at.unwrap() as i64 - lightwallet::now() as i64).abs() > 24 * 60 * 60 {
+            warn!("Last retry failed, not trying again till tomorrow!");
+            return;
+        }
+
+        // Gather all transactions that need historical prices
+        let txids_to_fetch = self.wallet.read().unwrap().txs.read().unwrap().iter().filter_map(|(txid, wtx)|
+            match wtx.zec_price {
+                None => Some((txid.clone(), wtx.datetime)),
+                Some(_) => None,
+            }
+        ).collect::<Vec<(TxId, u64)>>();
+        info!("Fetching historical prices for {} txids", txids_to_fetch.len());
+
+        let retry_count_increase = match grpcconnector::get_historical_zec_prices(&self.get_server_uri(), txids_to_fetch, price_info.currency) {
+            Ok(prices) => {
+                let w = self.wallet.read().unwrap();
+                let mut txns = w.txs.write().unwrap();
+                
+                let any_failed = prices.iter().map(|(txid, p)| {
+                    match p {
+                        None => true,
+                        Some(p) => {
+                            // Update the price
+                            info!("Historical price at txid {} was {}", txid, p);
+                            txns.get_mut(txid).unwrap().zec_price = Some(*p);
+                            
+                            // Not failed, so return false
+                            false
+                        }
+                    }
+                }).find(|s| *s).is_some();
+
+                // If any of the txids failed, increase the retry_count by 1.
+                if any_failed { 1 } else { 0 }
+            },
+            Err(_) => {
+                1
+            }
+        };
+
+        {
+            let w = self.wallet.read().unwrap();
+            let mut p = w.price_info.write().unwrap();
+            p.last_historical_prices_fetched_at = Some(lightwallet::now());
+            p.historical_prices_retry_count += retry_count_increase;
+        }
+           
+    }
+
     pub fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
         let mut retry_count = 0;
         loop {
             match self.do_sync_internal(print_updates, retry_count) {
-                Ok(j) => return Ok(j),
+                Ok(j) => {
+                    // If sync was successfull, also try to get historical prices
+                    self.update_historical_prices();
+
+                    return Ok(j)
+                },
                 Err(e) => {
                     retry_count += 1;
                     if retry_count > 5 {
