@@ -1511,6 +1511,14 @@ impl LightClient {
 
         // Count how many bytes we've downloaded
         let bytes_downloaded = Arc::new(AtomicUsize::new(0));
+        
+        // Get the zec price from the server
+        match grpcconnector::get_current_zec_price(&self.get_server_uri()) {
+            Ok(p) => {
+                self.wallet.write().unwrap().set_latest_zec_price(p);
+            }
+            Err(s) => error!("Error fetching latest price: {}", s)
+        }
 
         let mut total_reorg = 0;
 
@@ -1686,14 +1694,6 @@ impl LightClient {
             status.is_syncing = false;
             status.synced_blocks = latest_block;
             status.total_blocks = latest_block;
-        }
-
-        // Get the zec price from the server
-        match grpcconnector::get_current_zec_price(&self.get_server_uri()) {
-            Ok(p) => {
-                self.wallet.write().unwrap().set_latest_zec_price(p);
-            }
-            Err(s) => error!("Error fetching latest price: {}", s)
         }
 
         // Get the Raw transaction for all the wallet transactions
