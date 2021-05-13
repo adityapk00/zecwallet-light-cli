@@ -1061,6 +1061,7 @@ impl LightClient {
                         "block_height" => v.block,
                         "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
+                        "zec_price"    => v.zec_price,
                         "amount"       => total_change as i64 
                                             - v.total_shielded_value_spent as i64 
                                             - v.total_transparent_value_spent as i64,
@@ -1078,6 +1079,7 @@ impl LightClient {
                             "datetime"     => v.datetime,
                             "position"     => i,
                             "txid"         => format!("{}", v.txid),
+                            "zec_price"    => v.zec_price,
                             "amount"       => nd.note.value as i64,
                             "address"      => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
                             "memo"         => LightWallet::memo_str(nd.memo.clone())
@@ -1102,6 +1104,7 @@ impl LightClient {
                         "block_height" => v.block,
                         "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
+                        "zec_price"    => v.zec_price,
                         "amount"       => total_transparent_received as i64 - v.total_transparent_value_spent as i64,
                         "address"      => v.utxos.iter().map(|u| u.address.clone()).collect::<Vec<String>>().join(","),
                         "memo"         => None::<String>
@@ -1131,12 +1134,13 @@ impl LightClient {
                     }
 
                     return o;
-                }).collect::<Vec<JsonValue>>();                    
+                }).collect::<Vec<JsonValue>>();
 
             object! {
                 "block_height" => wtx.block,
                 "datetime"     => wtx.datetime,
                 "txid"         => format!("{}", wtx.txid),
+                "zec_price"    => wtx.zec_price,
                 "amount"       => -1 * (fee + amount) as i64,
                 "unconfirmed"  => true,
                 "outgoing_metadata" => outgoing_json,
@@ -1614,6 +1618,14 @@ impl LightClient {
             status.is_syncing = false;
             status.synced_blocks = latest_block;
             status.total_blocks = latest_block;
+        }
+
+        // Get the zec price from the server
+        match grpcconnector::get_current_zec_price(&self.get_server_uri()) {
+            Ok(p) => {
+                self.wallet.write().unwrap().set_latest_zec_price(p);
+            }
+            Err(s) => error!("Error fetching latest price: {}", s)
         }
 
         // Get the Raw transaction for all the wallet transactions

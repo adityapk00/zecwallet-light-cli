@@ -474,14 +474,30 @@ pub struct WalletTx {
 
     // Whether this TxID was downloaded from the server and scanned for Memos
     pub full_tx_scanned: bool,
+
+    // Price of Zec when this Tx was created
+    pub zec_price: Option<f64>,
 }
 
 impl WalletTx {
     pub fn serialized_version() -> u64 {
-        return 4;
+        return 5;
     }
 
-    pub fn new(height: i32, datetime: u64, txid: &TxId) -> Self {
+    pub fn new(height: i32, datetime: u64, txid: &TxId, price: Option<(u64, f64)>) -> Self {
+        let zec_price = match price {
+            None => None,
+            Some((t, p)) => {
+                // If the price was fetched within 1 hour of this Tx, we use the "current" price
+                // else, we mark it as None, for the historical price fetcher to get
+                if (t as i64 - datetime as i64).abs() < 1 * 60 * 60 {
+                    Some(p)
+                } else {
+                    None
+                }
+            }
+        };
+
         WalletTx {
             block: height,
             datetime,
@@ -492,6 +508,7 @@ impl WalletTx {
             total_transparent_value_spent: 0,
             outgoing_metadata: vec![],
             full_tx_scanned: false,
+            zec_price,
         }
     }
 
@@ -522,6 +539,12 @@ impl WalletTx {
         let outgoing_metadata = Vector::read(&mut reader, |r| OutgoingTxMetadata::read(r))?;
 
         let full_tx_scanned = reader.read_u8()? > 0;
+
+        let zec_price = if version <= 4 { 
+            None 
+        } else { 
+            Optional::read(&mut reader, |r| r.read_f64::<LittleEndian>())? 
+        };
             
         Ok(WalletTx{
             block,
@@ -532,7 +555,8 @@ impl WalletTx {
             total_shielded_value_spent,
             total_transparent_value_spent,
             outgoing_metadata,
-            full_tx_scanned
+            full_tx_scanned,
+            zec_price,
         })
     }
 
@@ -555,6 +579,8 @@ impl WalletTx {
         Vector::write(&mut writer, &self.outgoing_metadata, |w, om| om.write(w))?;
 
         writer.write_u8(if self.full_tx_scanned {1} else {0})?;
+
+        Optional::write(&mut writer, &self.zec_price, |w, p| w.write_f64::<LittleEndian>(*p))?;
 
         Ok(())
     }

@@ -69,8 +69,8 @@ use walletzkey::{WalletZKey, WalletZKeyType};
 pub const MAX_REORG: usize = 100;
 pub const GAP_RULE_UNUSED_ADDRESSES: usize = if cfg!(any(target_os="ios", target_os="android")) { 0 } else { 5 };
 
-fn now() -> f64 {
-    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
+fn now() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
 }
 
 /// Sha256(Sha256(value))
@@ -176,7 +176,11 @@ pub struct LightWallet {
     // Non-serialized fields
     config: LightClientConfig,
 
+    // Progress of an outgoing tx
     send_progress: Arc<RwLock<SendProgress>>,
+
+    // The current price of ZEC. (time_fetched, price in USD)
+    zec_price: Option<(u64, f64)>,
 }
 
 impl LightWallet {
@@ -281,6 +285,7 @@ impl LightWallet {
             birthday:    latest_block,
             sapling_tree_verified: false,
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
+            zec_price:   None,
         };
 
         // If restoring from seed, make sure we are creating 5 addresses for users
@@ -457,6 +462,7 @@ impl LightWallet {
             birthday,
             sapling_tree_verified,
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),  // This is not persisted
+            zec_price:   None,
         };
 
         // Do a one-time fix of the spent_at_height for older wallets
@@ -555,6 +561,11 @@ impl LightWallet {
         } else {
             cmp::min(self.get_first_tx_block(), self.birthday)
         }
+    }
+
+    pub fn set_latest_zec_price(&mut self, price: f64) {
+        info!("Set current ZEC Price to USD {}", price);
+        self.zec_price = Some((now(), price));
     }
 
     // Get the first block that this wallet has a tx in. This is often used as the wallet's "birthday"
@@ -1224,7 +1235,7 @@ impl LightWallet {
 
         // Find the existing transaction entry, or create a new one.
         if !txs.contains_key(&txid) {
-            let tx_entry = WalletTx::new(height, timestamp, &txid);
+            let tx_entry = WalletTx::new(height, timestamp, &txid, self.zec_price);
             txs.insert(txid.clone(), tx_entry);
         }
         let tx_entry = txs.get_mut(&txid).unwrap();
@@ -1413,7 +1424,7 @@ impl LightWallet {
             let mut txs = self.txs.write().unwrap();
 
             if !txs.contains_key(&tx.txid()) {
-                let tx_entry = WalletTx::new(height, datetime, &tx.txid());
+                let tx_entry = WalletTx::new(height, datetime, &tx.txid(), self.zec_price);
                 txs.insert(tx.txid().clone(), tx_entry);
             }
             
@@ -2092,7 +2103,7 @@ impl LightWallet {
 
             // Find the existing transaction entry, or create a new one.
             if !txs.contains_key(&tx.txid) {
-                let tx_entry = WalletTx::new(block_data.height as i32, block.time as u64, &tx.txid);
+                let tx_entry = WalletTx::new(block_data.height as i32, block.time as u64, &tx.txid, self.zec_price);
                 txs.insert(tx.txid, tx_entry);
             }
             let tx_entry = txs.get_mut(&tx.txid).unwrap();
@@ -2517,7 +2528,7 @@ impl LightWallet {
                     }).collect::<Vec<_>>();
 
                     // Create a new WalletTx
-                    let mut wtx = WalletTx::new(height as i32, now() as u64, &tx.txid());
+                    let mut wtx = WalletTx::new(height as i32, now() as u64, &tx.txid(), self.zec_price);
                     wtx.outgoing_metadata = outgoing_metadata;
 
                     // Add it into the mempool 
