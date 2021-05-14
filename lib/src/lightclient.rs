@@ -821,6 +821,22 @@ impl LightClient {
         self.config.server.clone()
     }
 
+    pub fn do_zec_price(&self) -> String {
+        let price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        if price_info.zec_price.is_none() {
+            return "Error: no price!".to_string()
+        } else {
+            let (ts, p) = price_info.zec_price.unwrap();
+            let o = object! {
+                "zec_price" => p,
+                "fetched_at" =>  ts,
+                "currency" => price_info.currency
+            };
+
+            o.pretty(2)
+        }
+    }
+
     pub fn do_info(&self) -> String {
         match get_info(&self.get_server_uri()) {
             Ok(i) => {
@@ -1374,6 +1390,16 @@ impl LightClient {
         self.sync_status.read().unwrap().clone()
     }
 
+    fn update_current_price(&self) {
+        // Get the zec price from the server
+        match grpcconnector::get_current_zec_price(&self.get_server_uri()) {
+            Ok(p) => {
+                self.wallet.write().unwrap().set_latest_zec_price(p);
+            }
+            Err(s) => error!("Error fetching latest price: {}", s)
+        }
+    }
+
     // Update the historical prices in the wallet, if any are present. 
     fn update_historical_prices(&self) {
         let price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
@@ -1512,13 +1538,7 @@ impl LightClient {
         // Count how many bytes we've downloaded
         let bytes_downloaded = Arc::new(AtomicUsize::new(0));
         
-        // Get the zec price from the server
-        match grpcconnector::get_current_zec_price(&self.get_server_uri()) {
-            Ok(p) => {
-                self.wallet.write().unwrap().set_latest_zec_price(p);
-            }
-            Err(s) => error!("Error fetching latest price: {}", s)
-        }
+        self.update_current_price();
 
         let mut total_reorg = 0;
 
