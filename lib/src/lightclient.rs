@@ -822,18 +822,25 @@ impl LightClient {
     }
 
     pub fn do_zec_price(&self) -> String {
-        let price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        let mut price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        
+        // If there is no price, try to fetch it first.
         if price_info.zec_price.is_none() {
-            return "Error: no price!".to_string()
-        } else {
-            let (ts, p) = price_info.zec_price.unwrap();
-            let o = object! {
-                "zec_price" => p,
-                "fetched_at" =>  ts,
-                "currency" => price_info.currency
-            };
+            self.update_current_price();
+            price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        }
+         
+        match price_info.zec_price {
+            None => return "Error: No price".to_string(),
+            Some((ts, p)) => {
+                let o = object! {
+                    "zec_price" => p,
+                    "fetched_at" =>  ts,
+                    "currency" => price_info.currency
+                };
 
-            o.pretty(2)
+                o.pretty(2)
+            }
         }
     }
 
