@@ -1410,21 +1410,7 @@ impl LightClient {
     // Update the historical prices in the wallet, if any are present. 
     fn update_historical_prices(&self) {
         let price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
-        // First, if the retry count has exceeded 5, we give up. Something is wrong, and will need to be 
-        // fixed in a later version
-        if price_info.historical_prices_retry_count > 5 {
-            warn!("Not getting historical prices because retry count has exceeded");
-            return
-        }
-
-        // If the prices were fetched recently, don't try again soon
-        if price_info.historical_prices_retry_count > 0 && 
-            price_info.last_historical_prices_fetched_at.is_some() && 
-            (price_info.last_historical_prices_fetched_at.unwrap() as i64 - lightwallet::now() as i64).abs() > 24 * 60 * 60 {
-            warn!("Last retry failed, not trying again till tomorrow!");
-            return;
-        }
-
+        
         // Gather all transactions that need historical prices
         let txids_to_fetch = self.wallet.read().unwrap().txs.read().unwrap().iter().filter_map(|(txid, wtx)|
             match wtx.zec_price {
@@ -1549,11 +1535,6 @@ impl LightClient {
 
         let mut total_reorg = 0;
 
-        // Collect all txns in blocks that we have a tx in. We'll fetch all these
-        // txs along with our own, so that the server doesn't learn which ones
-        // belong to us.
-        let all_new_txs = Arc::new(RwLock::new(vec![]));
-
         // Create a new threadpool (upto 8, atleast 2 threads) to scan with
         let pool = ThreadPool::new(max(2, min(8, num_cpus::get())));
 
@@ -1585,8 +1566,6 @@ impl LightClient {
 
             // Fetch compact blocks
             info!("Fetching blocks {}-{}", start_height, end_height);
-
-            let all_txs = all_new_txs.clone();
             let block_times_inner = block_times.clone();
 
             let last_invalid_height = Arc::new(AtomicI32::new(0));
@@ -1594,7 +1573,7 @@ impl LightClient {
 
             let tpool = pool.clone();
             fetch_blocks(&self.get_server_uri(), start_height, end_height, pool.clone(),
-                move |encoded_block: &[u8], height: u64| {
+                move |encoded_block: &[u8], _| {
                     // Process the block only if there were no previous errors
                     if last_invalid_height_inner.load(Ordering::SeqCst) > 0 {
                         return;
@@ -1611,15 +1590,9 @@ impl LightClient {
                         Err(_) => {}
                     }
 
-                    match local_light_wallet.read().unwrap().scan_block_with_pool(encoded_block, &tpool) {
-                        Ok(block_txns) => {
-                            // Add to global tx list
-                            all_txs.write().unwrap().extend_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
-                        },
-                        Err(invalid_height) => {
-                            // Block at this height seems to be invalid, so invalidate up till that point
-                            last_invalid_height_inner.store(invalid_height, Ordering::SeqCst);
-                        }
+                    if let Err(invalid_height) = local_light_wallet.read().unwrap().scan_block_with_pool(encoded_block, &tpool) {
+                        // Block at this height seems to be invalid, so invalidate up till that point
+                        last_invalid_height_inner.store(invalid_height, Ordering::SeqCst);
                     };
 
                     local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
@@ -1732,8 +1705,7 @@ impl LightClient {
                                                         .map(|wtx| (wtx.txid.clone(), wtx.block))
                                                         .collect::<Vec<(TxId, i32)>>();
 
-        info!("Fetching {} new txids, total {} with decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
-        txids_to_fetch.extend_from_slice(&all_new_txs.read().unwrap()[..]);
+        info!("Fetching {} new txids", txids_to_fetch.len());
         txids_to_fetch.sort();
         txids_to_fetch.dedup();
 

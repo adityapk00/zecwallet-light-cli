@@ -1931,12 +1931,12 @@ impl LightWallet {
         wtxs
     }
 
-    pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
+    pub fn scan_block(&self, block_bytes: &[u8]) -> Result<(), i32> {
         self.scan_block_with_pool(&block_bytes, &ThreadPool::new(1))
     }
 
     // Scan a block. Will return an error with the block height that failed to scan
-    pub fn scan_block_with_pool(&self, block_bytes: &[u8], pool: &ThreadPool) -> Result<Vec<TxId>, i32> {
+    pub fn scan_block_with_pool(&self, block_bytes: &[u8], pool: &ThreadPool) -> Result<(), i32> {
         let block: CompactBlock = match protobuf::Message::parse_from_bytes(block_bytes) {
             Ok(block) => block,
             Err(e) => {
@@ -1955,7 +1955,7 @@ impl LightWallet {
                     return Err(height);
                 }
             }
-            return Ok(vec![]);
+            return Ok(());
         } else if height != (self.last_scanned_height() + 1) {
             error!(
                 "Block is not height-sequential (expected {}, found {})",
@@ -2071,18 +2071,6 @@ impl LightWallet {
             };
         }
         
-        // If this block had any new Txs, return the list of ALL txids in this block, 
-        // so the wallet can fetch them all as a decoy.
-        let all_txs = if !new_txs.is_empty() {
-            block.vtx.iter().map(|vtx| {
-                let mut t = [0u8; 32];
-                t.copy_from_slice(&vtx.hash[..]);
-                TxId{0: t}
-            }).collect::<Vec<TxId>>()
-        } else {
-            vec![]
-        };
-
         for tx in new_txs {
             // Create a write lock 
             let mut txs = self.txs.write().unwrap();
@@ -2169,7 +2157,7 @@ impl LightWallet {
             }
         }
 
-        Ok(all_txs)
+        Ok(())
     }
 
     // Add the spent_at_height for each sapling note that has been spent. This field was added in wallet version 8, 
