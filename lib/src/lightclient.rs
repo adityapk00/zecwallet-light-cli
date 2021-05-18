@@ -1418,6 +1418,11 @@ impl LightClient {
                 Some(_) => None,
             }
         ).collect::<Vec<(TxId, u64)>>();
+
+        if txids_to_fetch.is_empty() {
+            return;
+        }
+
         info!("Fetching historical prices for {} txids", txids_to_fetch.len());
 
         let retry_count_increase = match grpcconnector::get_historical_zec_prices(&self.get_server_uri(), txids_to_fetch, price_info.currency) {
