@@ -1,4 +1,4 @@
-use crate::lightwallet::{message::Message, LightWallet};
+use crate::lightwallet::{self, LightWallet, message::Message};
 
 use zcash_proofs::prover::LocalTxProver;
 use std::sync::{Arc, RwLock, Mutex, mpsc::channel};
@@ -821,6 +821,29 @@ impl LightClient {
         self.config.server.clone()
     }
 
+    pub fn do_zec_price(&self) -> String {
+        let mut price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        
+        // If there is no price, try to fetch it first.
+        if price_info.zec_price.is_none() {
+            self.update_current_price();
+            price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        }
+         
+        match price_info.zec_price {
+            None => return "Error: No price".to_string(),
+            Some((ts, p)) => {
+                let o = object! {
+                    "zec_price" => p,
+                    "fetched_at" =>  ts,
+                    "currency" => price_info.currency
+                };
+
+                o.pretty(2)
+            }
+        }
+    }
+
     pub fn do_info(&self) -> String {
         match get_info(&self.get_server_uri()) {
             Ok(i) => {
@@ -1061,6 +1084,7 @@ impl LightClient {
                         "block_height" => v.block,
                         "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
+                        "zec_price"    => v.zec_price,
                         "amount"       => total_change as i64 
                                             - v.total_shielded_value_spent as i64 
                                             - v.total_transparent_value_spent as i64,
@@ -1078,6 +1102,7 @@ impl LightClient {
                             "datetime"     => v.datetime,
                             "position"     => i,
                             "txid"         => format!("{}", v.txid),
+                            "zec_price"    => v.zec_price,
                             "amount"       => nd.note.value as i64,
                             "address"      => LightWallet::note_address(self.config.hrp_sapling_address(), nd),
                             "memo"         => LightWallet::memo_str(nd.memo.clone())
@@ -1102,6 +1127,7 @@ impl LightClient {
                         "block_height" => v.block,
                         "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
+                        "zec_price"    => v.zec_price,
                         "amount"       => total_transparent_received as i64 - v.total_transparent_value_spent as i64,
                         "address"      => v.utxos.iter().map(|u| u.address.clone()).collect::<Vec<String>>().join(","),
                         "memo"         => None::<String>
@@ -1131,12 +1157,13 @@ impl LightClient {
                     }
 
                     return o;
-                }).collect::<Vec<JsonValue>>();                    
+                }).collect::<Vec<JsonValue>>();
 
             object! {
                 "block_height" => wtx.block,
                 "datetime"     => wtx.datetime,
                 "txid"         => format!("{}", wtx.txid),
+                "zec_price"    => wtx.zec_price,
                 "amount"       => -1 * (fee + amount) as i64,
                 "unconfirmed"  => true,
                 "outgoing_metadata" => outgoing_json,
@@ -1370,11 +1397,80 @@ impl LightClient {
         self.sync_status.read().unwrap().clone()
     }
 
+    fn update_current_price(&self) {
+        // Get the zec price from the server
+        match grpcconnector::get_current_zec_price(&self.get_server_uri()) {
+            Ok(p) => {
+                self.wallet.write().unwrap().set_latest_zec_price(p);
+            }
+            Err(s) => error!("Error fetching latest price: {}", s)
+        }
+    }
+
+    // Update the historical prices in the wallet, if any are present. 
+    fn update_historical_prices(&self) {
+        let price_info = self.wallet.read().unwrap().price_info.read().unwrap().clone();
+        
+        // Gather all transactions that need historical prices
+        let txids_to_fetch = self.wallet.read().unwrap().txs.read().unwrap().iter().filter_map(|(txid, wtx)|
+            match wtx.zec_price {
+                None => Some((txid.clone(), wtx.datetime)),
+                Some(_) => None,
+            }
+        ).collect::<Vec<(TxId, u64)>>();
+
+        if txids_to_fetch.is_empty() {
+            return;
+        }
+
+        info!("Fetching historical prices for {} txids", txids_to_fetch.len());
+
+        let retry_count_increase = match grpcconnector::get_historical_zec_prices(&self.get_server_uri(), txids_to_fetch, price_info.currency) {
+            Ok(prices) => {
+                let w = self.wallet.read().unwrap();
+                let mut txns = w.txs.write().unwrap();
+                
+                let any_failed = prices.iter().map(|(txid, p)| {
+                    match p {
+                        None => true,
+                        Some(p) => {
+                            // Update the price
+                            info!("Historical price at txid {} was {}", txid, p);
+                            txns.get_mut(txid).unwrap().zec_price = Some(*p);
+                            
+                            // Not failed, so return false
+                            false
+                        }
+                    }
+                }).find(|s| *s).is_some();
+
+                // If any of the txids failed, increase the retry_count by 1.
+                if any_failed { 1 } else { 0 }
+            },
+            Err(_) => {
+                1
+            }
+        };
+
+        {
+            let w = self.wallet.read().unwrap();
+            let mut p = w.price_info.write().unwrap();
+            p.last_historical_prices_fetched_at = Some(lightwallet::now());
+            p.historical_prices_retry_count += retry_count_increase;
+        }
+           
+    }
+
     pub fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
         let mut retry_count = 0;
         loop {
             match self.do_sync_internal(print_updates, retry_count) {
-                Ok(j) => return Ok(j),
+                Ok(j) => {
+                    // If sync was successfull, also try to get historical prices
+                    self.update_historical_prices();
+
+                    return Ok(j)
+                },
                 Err(e) => {
                     retry_count += 1;
                     if retry_count > 5 {
@@ -1439,13 +1535,10 @@ impl LightClient {
 
         // Count how many bytes we've downloaded
         let bytes_downloaded = Arc::new(AtomicUsize::new(0));
+        
+        self.update_current_price();
 
         let mut total_reorg = 0;
-
-        // Collect all txns in blocks that we have a tx in. We'll fetch all these
-        // txs along with our own, so that the server doesn't learn which ones
-        // belong to us.
-        let all_new_txs = Arc::new(RwLock::new(vec![]));
 
         // Create a new threadpool (upto 8, atleast 2 threads) to scan with
         let pool = ThreadPool::new(max(2, min(8, num_cpus::get())));
@@ -1478,8 +1571,6 @@ impl LightClient {
 
             // Fetch compact blocks
             info!("Fetching blocks {}-{}", start_height, end_height);
-
-            let all_txs = all_new_txs.clone();
             let block_times_inner = block_times.clone();
 
             let last_invalid_height = Arc::new(AtomicI32::new(0));
@@ -1487,7 +1578,7 @@ impl LightClient {
 
             let tpool = pool.clone();
             fetch_blocks(&self.get_server_uri(), start_height, end_height, pool.clone(),
-                move |encoded_block: &[u8], height: u64| {
+                move |encoded_block: &[u8], _| {
                     // Process the block only if there were no previous errors
                     if last_invalid_height_inner.load(Ordering::SeqCst) > 0 {
                         return;
@@ -1504,15 +1595,9 @@ impl LightClient {
                         Err(_) => {}
                     }
 
-                    match local_light_wallet.read().unwrap().scan_block_with_pool(encoded_block, &tpool) {
-                        Ok(block_txns) => {
-                            // Add to global tx list
-                            all_txs.write().unwrap().extend_from_slice(&block_txns.iter().map(|txid| (txid.clone(), height as i32)).collect::<Vec<_>>()[..]);
-                        },
-                        Err(invalid_height) => {
-                            // Block at this height seems to be invalid, so invalidate up till that point
-                            last_invalid_height_inner.store(invalid_height, Ordering::SeqCst);
-                        }
+                    if let Err(invalid_height) = local_light_wallet.read().unwrap().scan_block_with_pool(encoded_block, &tpool) {
+                        // Block at this height seems to be invalid, so invalidate up till that point
+                        last_invalid_height_inner.store(invalid_height, Ordering::SeqCst);
                     };
 
                     local_bytes_downloaded.fetch_add(encoded_block.len(), Ordering::SeqCst);
@@ -1535,7 +1620,7 @@ impl LightClient {
             if invalid_height > 0 {
                 // Reset the scanning heights
                 last_scanned_height = (invalid_height - 1) as u64;
-                end_height = std::cmp::min(last_scanned_height + 1000, latest_block);
+                end_height = std::cmp::min(last_scanned_height + scan_batch_size, latest_block);
 
                 warn!("Reorg: reset scanning from {} to {}", last_scanned_height, end_height);
 
@@ -1595,7 +1680,7 @@ impl LightClient {
             
             // Do block height accounting
             last_scanned_height = end_height;
-            end_height = last_scanned_height + 1000;
+            end_height = last_scanned_height + scan_batch_size;
 
             if last_scanned_height >= latest_block {
                 break;
@@ -1625,8 +1710,7 @@ impl LightClient {
                                                         .map(|wtx| (wtx.txid.clone(), wtx.block))
                                                         .collect::<Vec<(TxId, i32)>>();
 
-        info!("Fetching {} new txids, total {} with decoy", txids_to_fetch.len(), all_new_txs.read().unwrap().len());
-        txids_to_fetch.extend_from_slice(&all_new_txs.read().unwrap()[..]);
+        info!("Fetching {} new txids", txids_to_fetch.len());
         txids_to_fetch.sort();
         txids_to_fetch.dedup();
 

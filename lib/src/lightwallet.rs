@@ -62,15 +62,15 @@ mod walletzkey;
 
 pub mod fee;
 
-use data::{BlockData, OutgoingTxMetadata, SaplingNoteData, SpendableNote, Utxo, WalletTx};
+use data::{BlockData, OutgoingTxMetadata, SaplingNoteData, SpendableNote, Utxo, WalletTx, WalletZecPriceInfo};
 use extended_key::{ExtendedPrivKey, KeyIndex};
 use walletzkey::{WalletZKey, WalletZKeyType};
 
 pub const MAX_REORG: usize = 100;
 pub const GAP_RULE_UNUSED_ADDRESSES: usize = if cfg!(any(target_os="ios", target_os="android")) { 0 } else { 5 };
 
-fn now() -> f64 {
-    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as f64
+pub fn now() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
 }
 
 /// Sha256(Sha256(value))
@@ -176,12 +176,16 @@ pub struct LightWallet {
     // Non-serialized fields
     config: LightClientConfig,
 
+    // Progress of an outgoing tx
     send_progress: Arc<RwLock<SendProgress>>,
+
+    // The current price of ZEC. (time_fetched, price in USD)
+    pub price_info: Arc<RwLock<WalletZecPriceInfo>>,
 }
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 13;
+        return 14;
     }
 
     pub fn is_sapling_tree_verified(&self) -> bool { self.sapling_tree_verified }
@@ -281,6 +285,7 @@ impl LightWallet {
             birthday:    latest_block,
             sapling_tree_verified: false,
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
+            price_info:       Arc::new(RwLock::new(WalletZecPriceInfo::new())),
         };
 
         // If restoring from seed, make sure we are creating 5 addresses for users
@@ -296,7 +301,7 @@ impl LightWallet {
 
     pub fn read<R: Read>(mut inp: R, config: &LightClientConfig) -> io::Result<Self> {
         let version = inp.read_u64::<LittleEndian>()?;
-        if version > LightWallet::serialized_version() {
+        if version > Self::serialized_version() {
             let e = format!("Don't know how to read wallet version {}. Do you have the latest version?", version);
             error!("{}", e);
             return Err(io::Error::new(ErrorKind::InvalidData, e));
@@ -441,6 +446,10 @@ impl LightWallet {
             });
         }
 
+        let price_info = if version <= 13 { WalletZecPriceInfo::new() } else {
+            WalletZecPriceInfo::read(&mut reader)?
+        };
+
         let lw = LightWallet{
             encrypted:   encrypted,
             unlocked:    !encrypted, // When reading from disk, if wallet is encrypted, it starts off locked. 
@@ -457,6 +466,7 @@ impl LightWallet {
             birthday,
             sapling_tree_verified,
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),  // This is not persisted
+            price_info:  Arc::new(RwLock::new(price_info)),
         };
 
         // Do a one-time fix of the spent_at_height for older wallets
@@ -485,7 +495,7 @@ impl LightWallet {
         }
 
         // Write the version
-        writer.write_u64::<LittleEndian>(LightWallet::serialized_version())?;
+        writer.write_u64::<LittleEndian>(Self::serialized_version())?;
 
         // Write if it is locked
         writer.write_u8(if self.encrypted {1} else {0})?;
@@ -539,7 +549,12 @@ impl LightWallet {
         writer.write_u64::<LittleEndian>(self.get_birthday())?;
 
         // If the sapling tree was verified
-        writer.write_u8( if self.sapling_tree_verified { 1 } else { 0 })
+        writer.write_u8( if self.sapling_tree_verified { 1 } else { 0 })?;
+
+        // Price info
+        self.price_info.read().unwrap().write(&mut writer)?;
+
+        Ok(())
     }
 
     pub fn note_address(hrp: &str, note: &SaplingNoteData) -> Option<String> {
@@ -555,6 +570,16 @@ impl LightWallet {
         } else {
             cmp::min(self.get_first_tx_block(), self.birthday)
         }
+    }
+
+    pub fn set_latest_zec_price(&self, price: f64) {
+        if price <= 0 as f64 {
+            warn!("Tried to set a bad current zec price {}", price);
+            return;
+        }
+
+        self.price_info.write().unwrap().zec_price = Some((now(), price));
+        info!("Set current ZEC Price to USD {}", price);
     }
 
     // Get the first block that this wallet has a tx in. This is often used as the wallet's "birthday"
@@ -1224,7 +1249,7 @@ impl LightWallet {
 
         // Find the existing transaction entry, or create a new one.
         if !txs.contains_key(&txid) {
-            let tx_entry = WalletTx::new(height, timestamp, &txid);
+            let tx_entry = WalletTx::new(height, timestamp, &txid, &self.price_info.read().unwrap().zec_price);
             txs.insert(txid.clone(), tx_entry);
         }
         let tx_entry = txs.get_mut(&txid).unwrap();
@@ -1413,7 +1438,7 @@ impl LightWallet {
             let mut txs = self.txs.write().unwrap();
 
             if !txs.contains_key(&tx.txid()) {
-                let tx_entry = WalletTx::new(height, datetime, &tx.txid());
+                let tx_entry = WalletTx::new(height, datetime, &tx.txid(), &self.price_info.read().unwrap().zec_price);
                 txs.insert(tx.txid().clone(), tx_entry);
             }
             
@@ -1906,12 +1931,12 @@ impl LightWallet {
         wtxs
     }
 
-    pub fn scan_block(&self, block_bytes: &[u8]) -> Result<Vec<TxId>, i32> {
+    pub fn scan_block(&self, block_bytes: &[u8]) -> Result<(), i32> {
         self.scan_block_with_pool(&block_bytes, &ThreadPool::new(1))
     }
 
     // Scan a block. Will return an error with the block height that failed to scan
-    pub fn scan_block_with_pool(&self, block_bytes: &[u8], pool: &ThreadPool) -> Result<Vec<TxId>, i32> {
+    pub fn scan_block_with_pool(&self, block_bytes: &[u8], pool: &ThreadPool) -> Result<(), i32> {
         let block: CompactBlock = match protobuf::Message::parse_from_bytes(block_bytes) {
             Ok(block) => block,
             Err(e) => {
@@ -1930,7 +1955,7 @@ impl LightWallet {
                     return Err(height);
                 }
             }
-            return Ok(vec![]);
+            return Ok(());
         } else if height != (self.last_scanned_height() + 1) {
             error!(
                 "Block is not height-sequential (expected {}, found {})",
@@ -2046,18 +2071,6 @@ impl LightWallet {
             };
         }
         
-        // If this block had any new Txs, return the list of ALL txids in this block, 
-        // so the wallet can fetch them all as a decoy.
-        let all_txs = if !new_txs.is_empty() {
-            block.vtx.iter().map(|vtx| {
-                let mut t = [0u8; 32];
-                t.copy_from_slice(&vtx.hash[..]);
-                TxId{0: t}
-            }).collect::<Vec<TxId>>()
-        } else {
-            vec![]
-        };
-
         for tx in new_txs {
             // Create a write lock 
             let mut txs = self.txs.write().unwrap();
@@ -2092,7 +2105,7 @@ impl LightWallet {
 
             // Find the existing transaction entry, or create a new one.
             if !txs.contains_key(&tx.txid) {
-                let tx_entry = WalletTx::new(block_data.height as i32, block.time as u64, &tx.txid);
+                let tx_entry = WalletTx::new(block_data.height as i32, block.time as u64, &tx.txid, &self.price_info.read().unwrap().zec_price);
                 txs.insert(tx.txid, tx_entry);
             }
             let tx_entry = txs.get_mut(&tx.txid).unwrap();
@@ -2144,7 +2157,7 @@ impl LightWallet {
             }
         }
 
-        Ok(all_txs)
+        Ok(())
     }
 
     // Add the spent_at_height for each sapling note that has been spent. This field was added in wallet version 8, 
@@ -2517,7 +2530,7 @@ impl LightWallet {
                     }).collect::<Vec<_>>();
 
                     // Create a new WalletTx
-                    let mut wtx = WalletTx::new(height as i32, now() as u64, &tx.txid());
+                    let mut wtx = WalletTx::new(height as i32, now() as u64, &tx.txid(), &self.price_info.read().unwrap().zec_price);
                     wtx.outgoing_metadata = outgoing_metadata;
 
                     // Add it into the mempool 

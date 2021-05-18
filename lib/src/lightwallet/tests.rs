@@ -1,5 +1,7 @@
 use rand::{rngs::OsRng, RngCore};
 use std::convert::TryInto;
+use std::{thread, time};
+
 
 use ff::{Field, PrimeField};
 use group::GroupEncoding;
@@ -2118,10 +2120,23 @@ fn test_multi_spends() {
                     (taddr3.as_str(), TAMOUNT3, None) ];
     
     let (txid, raw_tx) = send_wallet_funds(&wallet,  tos).unwrap();
-    assert_eq!(wallet.get_send_progress().is_send_in_progress, false);
-    assert_eq!(wallet.get_send_progress().last_error, None);
-    assert_eq!(wallet.get_send_progress().last_txid, Some(txid));
-    assert!(wallet.get_send_progress().progress >= wallet.get_send_progress().total);
+    
+    // Wait for send to finish
+    for _ in 0..5 {
+        let progress = wallet.get_send_progress();
+        if progress.progress < progress.total {
+            thread::yield_now();
+            thread::sleep(time::Duration::from_millis(100));
+        } else {
+            break;
+        }
+    }    
+
+    let progress = wallet.get_send_progress();
+    assert_eq!(progress.is_send_in_progress, false);
+    assert_eq!(progress.last_error, None);
+    assert_eq!(progress.last_txid, Some(txid));
+    assert!(progress.progress >= progress.total);
 
     let sent_tx = Transaction::read(&raw_tx[..]).unwrap();
     let sent_txid = sent_tx.txid();

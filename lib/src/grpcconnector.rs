@@ -1,14 +1,14 @@
-use log::{error};
+use log::{error, warn};
 use zcash_primitives::transaction::{TxId};
 
-use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock,
+use crate::grpc_client::{ChainSpec, BlockId, BlockRange, RawTransaction, CompactBlock, PriceResponse, PriceRequest,
                          TransparentAddressBlockFilter, TxFilter, Empty, LightdInfo, TreeState};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tokio_rustls::{rustls::ClientConfig};
 use tonic::{Request};
 
 use threadpool::ThreadPool;
-use std::sync::mpsc::channel;
+use std::{collections::HashMap, sync::mpsc::channel};
 
 use crate::PubCertificate;
 use crate::grpc_client::compact_tx_streamer_client::CompactTxStreamerClient;
@@ -61,6 +61,65 @@ pub fn get_info(uri: &http::Uri) -> Result<LightdInfo, String> {
 
     rt.block_on(get_lightd_info(uri)).map_err( |e| e.to_string())
 }
+
+
+async fn get_current_zec_price_async(uri: &http::Uri) ->  Result<PriceResponse, Box<dyn std::error::Error>> {
+    let mut client = get_client(uri).await?;
+
+    let request = Request::new(Empty {});
+
+    let response = client.get_current_zec_price(request).await?;
+
+    Ok(response.into_inner())
+}
+
+
+pub fn get_current_zec_price(uri: &http::Uri) -> Result<f64, String> {
+    let mut rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+
+    rt.block_on(get_current_zec_price_async(uri))
+        .map(|r| r.price)
+        .map_err( |e| e.to_string())
+}
+
+async fn get_historical_zec_prices_async(uri: &http::Uri, txids: Vec<(TxId, u64)>, currency: String) 
+    -> Result<HashMap<TxId, Option<f64>>, Box<dyn std::error::Error>> 
+{
+    let mut client = get_client(uri).await?;
+    let mut prices = HashMap::new();
+
+    for (txid, ts) in txids {
+        let r = Request::new(PriceRequest{timestamp: ts, currency: currency.clone()});
+        match client.get_zec_price(r).await {
+            Ok(response) => {
+                let price_response = response.into_inner();
+                prices.insert(txid, Some(price_response.price));
+            },
+            Err(e) => {
+                // If the server doesn't support this, bail
+                if e.code() == tonic::Code::Unimplemented {
+                    return Err(Box::new(e))
+                }
+
+                // Ignore other errors, these are probably just for the particular date/time
+                // and will be retried anyway
+                warn!("Ignoring grpc error: {}", e);
+                prices.insert(txid, None);
+            }
+        }
+    }
+
+    Ok(prices)
+}
+
+pub fn get_historical_zec_prices(uri: &http::Uri, txids: Vec<(TxId, u64)>, currency: String) 
+    -> Result<HashMap<TxId, Option<f64>>, String> 
+{
+    let mut rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+
+    rt.block_on(get_historical_zec_prices_async(uri, txids, currency)).map_err( |e| e.to_string())
+}
+
 
 async fn get_sapling_tree_async(uri: &http::Uri, height: i32) -> Result<TreeState, Box<dyn std::error::Error>> {
     let mut client = get_client(uri).await?;
