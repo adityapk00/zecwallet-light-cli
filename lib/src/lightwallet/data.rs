@@ -488,9 +488,9 @@ impl WalletTx {
         let zec_price = match price {
             None => None,
             Some((t, p)) => {
-                // If the price was fetched within 1 hour of this Tx, we use the "current" price
+                // If the price was fetched within 24 hours of this Tx, we use the "current" price
                 // else, we mark it as None, for the historical price fetcher to get
-                if (*t as i64 - datetime as i64).abs() < 1 * 60 * 60 {
+                if (*t as i64 - datetime as i64).abs() < 24 * 60 * 60 {
                     Some(*p)
                 } else {
                     None
