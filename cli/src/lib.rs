@@ -1,12 +1,11 @@
 use std::io::{self};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::sync::mpsc::{channel, Sender, Receiver};
 
-use log::{info, error};
+use log::{error, info};
 
-use zecwalletlitelib::{commands,
-    lightclient::{LightClient, LightClientConfig},
-};
+use zecwalletlitelib::lightclient::lightclient_config::LightClientConfig;
+use zecwalletlitelib::{commands, lightclient::LightClient};
 
 pub mod version;
 
@@ -43,7 +42,7 @@ macro_rules! configure_clapapp {
                 .value_name("server")
                 .help("Lightwalletd server to connect to.")
                 .takes_value(true)
-                .default_value(lightclient::DEFAULT_SERVER))
+                .default_value(lightclient::lightclient_config::DEFAULT_SERVER))
             .arg(Arg::with_name("COMMAND")
                 .help("Command to execute. If a command is not specified, zecwallet-cli will start in interactive mode.")
                 .required(false)
@@ -57,28 +56,26 @@ macro_rules! configure_clapapp {
 
 /// This function is only tested against Linux.
 pub fn report_permission_error() {
-    let user = std::env::var("USER").expect(
-        "Unexpected error reading value of $USER!");
-    let home = std::env::var("HOME").expect(
-        "Unexpected error reading value of $HOME!");
-    let current_executable = std::env::current_exe()
-        .expect("Unexpected error reporting executable path!");
+    let user = std::env::var("USER").expect("Unexpected error reading value of $USER!");
+    let home = std::env::var("HOME").expect("Unexpected error reading value of $HOME!");
+    let current_executable = std::env::current_exe().expect("Unexpected error reporting executable path!");
     eprintln!("USER: {}", user);
     eprintln!("HOME: {}", home);
     eprintln!("Executable: {}", current_executable.display());
     if home == "/" {
-        eprintln!("User {} must have permission to write to '{}.zcash/' .",
-                  user,
-                  home);
+        eprintln!("User {} must have permission to write to '{}.zcash/' .", user, home);
     } else {
-        eprintln!("User {} must have permission to write to '{}/.zcash/' .",
-                  user,
-                  home);
+        eprintln!("User {} must have permission to write to '{}/.zcash/' .", user, home);
     }
 }
 
-pub fn startup(server: http::Uri, seed: Option<String>, birthday: u64, first_sync: bool, print_updates: bool)
-        -> io::Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
+pub fn startup(
+    server: http::Uri,
+    seed: Option<String>,
+    birthday: u64,
+    first_sync: bool,
+    print_updates: bool,
+) -> io::Result<(Sender<(String, Vec<String>)>, Receiver<String>)> {
     // Try to get the configuration
     let (config, latest_block_height) = LightClientConfig::create(server.clone())?;
 
@@ -108,14 +105,9 @@ pub fn startup(server: http::Uri, seed: Option<String>, birthday: u64, first_syn
 
     // At startup, run a sync.
     if first_sync {
-        let update = lightclient.do_sync(true);
+        let update = commands::do_user_command("sync", &vec![], lightclient.as_ref());
         if print_updates {
-            match update {
-                Ok(j) => {
-                    println!("{}", j.pretty(2));
-                },
-                Err(e) => println!("{}", e)
-            }
+            println!("{}", update);
         }
     }
 
@@ -139,7 +131,7 @@ pub fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Rec
                 let e = format!("Error executing command {}: {}", cmd, e);
                 eprintln!("{}", e);
                 error!("{}", e);
-                return "".to_string()
+                return "".to_string();
             }
         }
     };
@@ -149,17 +141,18 @@ pub fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Rec
 
     loop {
         // Read the height first
-        let height = json::parse(&send_command("height".to_string(), vec!["false".to_string()])).unwrap()["height"].as_i64().unwrap();
+        let height = json::parse(&send_command("height".to_string(), vec!["false".to_string()])).unwrap()["height"]
+            .as_i64()
+            .unwrap();
 
-        let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ",
-                                                    chain_name, height));
+        let readline = rl.readline(&format!("({}) Block:{} (type 'help') >> ", chain_name, height));
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
                 // Parse command line arguments
                 let mut cmd_args = match shellwords::split(&line) {
                     Ok(args) => args,
-                    Err(_)   => {
+                    Err(_) => {
                         println!("Mismatched Quotes");
                         continue;
                     }
@@ -178,27 +171,26 @@ pub fn start_interactive(command_tx: Sender<(String, Vec<String>)>, resp_rx: Rec
                 if line == "quit" {
                     break;
                 }
-            },
+            }
             Err(rustyline::error::ReadlineError::Interrupted) => {
                 println!("CTRL-C");
                 info!("CTRL-C");
                 println!("{}", send_command("save".to_string(), vec![]));
-                break
-            },
+                break;
+            }
             Err(rustyline::error::ReadlineError::Eof) => {
                 println!("CTRL-D");
                 info!("CTRL-D");
                 println!("{}", send_command("save".to_string(), vec![]));
-                break
-            },
+                break;
+            }
             Err(err) => {
                 println!("Error: {:?}", err);
-                break
+                break;
             }
         }
     }
 }
-
 
 pub fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<String>)>, Receiver<String>) {
     let (command_tx, command_rx) = channel::<(String, Vec<String>)>();
@@ -218,14 +210,11 @@ pub fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<Strin
                         info!("Quit");
                         break;
                     }
-                },
+                }
                 Err(_) => {
                     // Timeout. Do a sync to keep the wallet up-to-date. False to whether to print updates on the console
                     info!("Timeout, doing a sync");
-                    match lc.do_sync(false) {
-                        Ok(_) => {},
-                        Err(e) => {error!("{}", e)}
-                    }
+                    commands::do_user_command("sync", &vec![], lc.as_ref());
                 }
             }
         }
@@ -234,9 +223,9 @@ pub fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<Strin
     (command_tx, resp_rx)
 }
 
-pub fn attempt_recover_seed(password: Option<String>) {
+pub fn attempt_recover_seed(_password: Option<String>) {
     // Create a Light Client Config in an attempt to recover the file.
-    let config = LightClientConfig {
+    let _config = LightClientConfig {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "main".to_string(),
         sapling_activation_height: 0,
@@ -244,42 +233,42 @@ pub fn attempt_recover_seed(password: Option<String>) {
         data_dir: None,
     };
 
-    match LightClient::attempt_recover_seed(&config, password) {
-        Ok(seed) => {
-            println!("Recovered seed: '{}'", seed);
-            println!("Do you want to use this seed to re-create a new wallet?");
+    // match LightClient::attempt_recover_seed(&config, password) {
+    //     Ok(seed) => {
+    //         println!("Recovered seed: '{}'", seed);
+    //         println!("Do you want to use this seed to re-create a new wallet?");
 
-            let mut rl = rustyline::Editor::<()>::new();
-            match rl.readline("(Y / N): ") {
-                Ok(response) => {
-                    if response.to_ascii_uppercase() == "Y" {
-                        match  attempt_save_recovered(&config, seed){
-                            Ok(backup_path) => {
-                                eprintln!("Backed up existing wallet to {}", backup_path);
-                                eprintln!("Saved a new wallet. Please start Zecwallet Lite to rescan your wallet.");
-                            },
-                            Err(e) => {
-                                eprintln!("Failed to save recovered seed. Error: {}", e)
-                            }
-                        };
-                    } else {
-                        println!("Leaving wallet unchanged");
-                    }
-                },
-                Err(_) => {
-                    println!("Leaving wallet unchanged");
-                }
-            }            
-        },
-        Err(e)   => eprintln!("Failed to recover seed. Error: {}", e)
-    };
+    //         let mut rl = rustyline::Editor::<()>::new();
+    //         match rl.readline("(Y / N): ") {
+    //             Ok(response) => {
+    //                 if response.to_ascii_uppercase() == "Y" {
+    //                     match attempt_save_recovered(&config, seed) {
+    //                         Ok(backup_path) => {
+    //                             eprintln!("Backed up existing wallet to {}", backup_path);
+    //                             eprintln!("Saved a new wallet. Please start Zecwallet Lite to rescan your wallet.");
+    //                         }
+    //                         Err(e) => {
+    //                             eprintln!("Failed to save recovered seed. Error: {}", e)
+    //                         }
+    //                     };
+    //                 } else {
+    //                     println!("Leaving wallet unchanged");
+    //                 }
+    //             }
+    //             Err(_) => {
+    //                 println!("Leaving wallet unchanged");
+    //             }
+    //         }
+    //     }
+    //     Err(e) => eprintln!("Failed to recover seed. Error: {}", e),
+    // };
 }
 
-fn attempt_save_recovered(config: &LightClientConfig, seed: String) -> Result<String, String> {
-    let backup_path = config.backup_existing_wallet()?;
-    let lightclient = LightClient::new_from_phrase(seed, &config, 0, true).map_err(|e| format!("{}", e))?;
+// fn attempt_save_recovered(config: &LightClientConfig, seed: String) -> Result<String, String> {
+//     let backup_path = config.backup_existing_wallet()?;
+//     let lightclient = LightClient::new_from_phrase(seed, &config, 0, true).map_err(|e| format!("{}", e))?;
 
-    lightclient.do_save()?;
+//     lightclient.do_save()?;
 
-    Ok(backup_path)
-}
+//     Ok(backup_path)
+// }

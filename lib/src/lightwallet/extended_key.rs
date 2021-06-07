@@ -1,16 +1,13 @@
-use ring::{
-    hmac::{self, Context, Key},
-};
 use lazy_static::lazy_static;
-use secp256k1::{PublicKey, Secp256k1, SecretKey, SignOnly, VerifyOnly, Error};
+use ring::hmac::{self, Context, Key};
+use secp256k1::{Error, PublicKey, Secp256k1, SecretKey, SignOnly};
 
 lazy_static! {
     static ref SECP256K1_SIGN_ONLY: Secp256k1<SignOnly> = Secp256k1::signing_only();
-    static ref SECP256K1_VERIFY_ONLY: Secp256k1<VerifyOnly> = Secp256k1::verification_only();
+    //static ref SECP256K1_VERIFY_ONLY: Secp256k1<VerifyOnly> = Secp256k1::verification_only();
 }
 /// Random entropy, part of extended key.
 type ChainCode = Vec<u8>;
-
 
 const HARDENED_KEY_START_INDEX: u32 = 2_147_483_648; // 2 ** 31
 
@@ -24,7 +21,6 @@ pub enum KeyIndex {
 }
 
 impl KeyIndex {
-    
     /// Check index range.
     pub fn is_valid(self) -> bool {
         match self {
@@ -58,7 +54,6 @@ impl From<u32> for KeyIndex {
     }
 }
 
-
 /// ExtendedPrivKey is used for child key derivation.
 /// See [secp256k1 crate documentation](https://docs.rs/secp256k1) for SecretKey signatures usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,9 +62,7 @@ pub struct ExtendedPrivKey {
     pub chain_code: ChainCode,
 }
 
-
 impl ExtendedPrivKey {
-    
     /// Generate an ExtendedPrivKey from seed
     pub fn with_seed(seed: &[u8]) -> Result<ExtendedPrivKey, Error> {
         let signature = {
