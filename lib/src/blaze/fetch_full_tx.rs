@@ -352,7 +352,7 @@ impl FetchFullTxns {
             }
         }
 
-        println!("### Finished Fetching full tx {}", tx.txid());
+        info!("Finished Fetching full tx {}", tx.txid());
         Ok(())
     }
 }

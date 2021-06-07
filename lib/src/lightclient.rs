@@ -1287,7 +1287,7 @@ impl LightClient {
         let (fulltx_fetcher_handle, fulltx_fetcher_tx) = grpc_connector.start_fulltx_fetcher().await;
 
         // Transparent Transactions Fetcher
-        let (taddr_fetcher_handle, taddr_fetcher_tx) = grpc_connector.start_taddr_txid_fetcher().await;
+        let (taddr_fetcher_handle, taddr_fetcher_tx) = grpc_connector.start_taddr_txn_fetcher().await;
 
         // The processor to fetch the full transactions, and decode the memos and the outgoing metadata
         let fetch_full_tx_processor = FetchFullTxns::new(&self.config, self.wallet.keys(), self.wallet.txns());

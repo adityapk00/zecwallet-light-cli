@@ -6,7 +6,9 @@ use crate::compact_formats::{
     BlockId, BlockRange, ChainSpec, CompactBlock, Empty, LightdInfo, PriceRequest, PriceResponse, RawTransaction,
     TransparentAddressBlockFilter, TreeState, TxFilter,
 };
+use futures::future::join_all;
 use log::warn;
+use tokio::join;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -53,22 +55,88 @@ impl GrpcConnector {
         (h, tx)
     }
 
-    pub async fn start_taddr_txid_fetcher(
+    pub async fn start_taddr_txn_fetcher(
         &self,
     ) -> (
         JoinHandle<()>,
-        UnboundedSender<((String, u64, u64), oneshot::Sender<Result<Vec<RawTransaction>, String>>)>,
+        UnboundedSender<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>,
     ) {
         let (tx, mut rx) =
-            unbounded_channel::<((String, u64, u64), oneshot::Sender<Result<Vec<RawTransaction>, String>>)>();
+            unbounded_channel::<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>();
         let uri = self.uri.clone();
 
         let h = tokio::spawn(async move {
             let uri = uri.clone();
-            while let Some(((taddr, start_height, end_height), result_tx)) = rx.recv().await {
-                result_tx
-                    .send(Self::get_taddr_txids(uri.clone(), taddr, start_height, end_height).await)
-                    .unwrap()
+            while let Some(((taddrs, start_height, end_height), result_tx)) = rx.recv().await {
+                let mut tx_rs = vec![];
+                let mut tx_rs_workers = vec![];
+
+                // Create a stream for every t-addr
+                for taddr in taddrs {
+                    let (tx_s, tx_r) = unbounded_channel();
+                    tx_rs.push(tx_r);
+                    tx_rs_workers.push(tokio::spawn(Self::get_taddr_txns(
+                        uri.clone(),
+                        taddr,
+                        start_height,
+                        end_height,
+                        tx_s,
+                    )));
+                }
+
+                // Wait for all the t-addr transactions to be fetched from LightwalletD and sent to the h1 handle.
+                let h0 = tokio::spawn(async move { join_all(tx_rs_workers).await });
+
+                // Process every transparent address transaction, in order of height
+                let h1 = tokio::spawn(async move {
+                    // Now, read the transactions one-at-a-time, and then dispatch them in height order
+                    let mut txns_top = vec![];
+
+                    // Fill the array with the first transaction for every taddress
+                    for tx_r in tx_rs.iter_mut() {
+                        if let Some(Ok(txn)) = tx_r.recv().await {
+                            txns_top.push(Some(txn));
+                        } else {
+                            txns_top.push(None);
+                        }
+                    }
+
+                    // While at least one of them is still returning transactions
+                    while txns_top.iter().any(|t| t.is_some()) {
+                        // Find the txn with the lowest height
+                        let (_height, idx) =
+                            txns_top
+                                .iter()
+                                .enumerate()
+                                .fold((u64::MAX, 0), |(prev_height, prev_idx), (idx, t)| {
+                                    if let Some(txn) = t {
+                                        if txn.height < prev_height {
+                                            (txn.height, idx)
+                                        } else {
+                                            (prev_height, prev_idx)
+                                        }
+                                    } else {
+                                        (prev_height, prev_idx)
+                                    }
+                                });
+
+                        // Grab the tx at the index
+                        let txn = txns_top[idx].as_ref().unwrap().clone();
+
+                        // Replace the tx at the index that was just grabbed
+                        if let Some(Ok(txn)) = tx_rs[idx].recv().await {
+                            txns_top[idx] = Some(txn);
+                        } else {
+                            txns_top[idx] = None;
+                        }
+
+                        // Dispatch the result
+                        result_tx.send(Ok(txn)).unwrap();
+                    }
+                });
+
+                // Wait for senders and recievers
+                join!(h0, h1);
             }
         });
 
@@ -147,12 +215,13 @@ impl GrpcConnector {
         Transaction::read(&response.into_inner().data[..]).map_err(|e| format!("Error parsing Transaction: {}", e))
     }
 
-    async fn get_taddr_txids(
+    async fn get_taddr_txns(
         uri: http::Uri,
         taddr: String,
         start_height: u64,
         end_height: u64,
-    ) -> Result<Vec<RawTransaction>, String> {
+        txns_sender: UnboundedSender<Result<RawTransaction, String>>,
+    ) -> Result<(), String> {
         let client = Arc::new(GrpcConnector::new(uri));
 
         // Make sure start_height is smaller than end_height, because the API expects it like that
@@ -197,12 +266,11 @@ impl GrpcConnector {
 
         let mut response = maybe_response.into_inner();
 
-        let mut txns = vec![];
         while let Some(tx) = response.message().await.map_err(|e| format!("{}", e))? {
-            txns.push(tx);
+            txns_sender.send(Ok(tx)).unwrap();
         }
 
-        Ok(txns)
+        Ok(())
     }
 
     pub async fn get_info(uri: http::Uri) -> Result<LightdInfo, String> {
