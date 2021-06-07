@@ -28,7 +28,6 @@ use zcash_primitives::{
     transaction::{
         builder::Builder,
         components::{Amount, OutPoint, TxOut},
-        TxId,
     },
     zip32::ExtendedFullViewingKey,
 };
@@ -118,10 +117,6 @@ pub struct LightWallet {
 
     // The current price of ZEC. (time_fetched, price in USD)
     pub price_info: Arc<RwLock<WalletZecPriceInfo>>,
-
-    // Transactions that are only in the mempool, but haven't been confirmed yet.
-    // This is not stored to disk.
-    pub mempool_txs: Arc<RwLock<HashMap<TxId, WalletTx>>>,
 }
 
 impl LightWallet {
@@ -141,7 +136,6 @@ impl LightWallet {
             sapling_tree_verified: AtomicBool::new(false),
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
             price_info: Arc::new(RwLock::new(WalletZecPriceInfo::new())),
-            mempool_txs: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -210,20 +204,6 @@ impl LightWallet {
             WalletZecPriceInfo::read(&mut reader)?
         };
 
-        let mempool_txs = if version >= 20 {
-            Vector::read(&mut reader, |r| {
-                let mut txid_bytes = [0u8; 32];
-                r.read_exact(&mut txid_bytes)?;
-                let wtx = WalletTx::read(r)?;
-
-                Ok((TxId { 0: txid_bytes }, wtx))
-            })?
-            .into_iter()
-            .collect()
-        } else {
-            HashMap::new()
-        };
-
         Ok(Self {
             keys: Arc::new(RwLock::new(keys)),
             txns: Arc::new(RwLock::new(txns)),
@@ -233,7 +213,6 @@ impl LightWallet {
             sapling_tree_verified: AtomicBool::new(sapling_tree_verified),
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
             price_info: Arc::new(RwLock::new(price_info)),
-            mempool_txs: Arc::new(RwLock::new(mempool_txs)),
         })
     }
 
@@ -266,16 +245,6 @@ impl LightWallet {
 
         // Price info
         self.price_info.read().await.write(&mut writer)?;
-
-        // Write out the mempool txns as well
-        {
-            let rl = self.mempool_txs.read().await;
-            let mempool: Vec<_> = rl.iter().collect();
-            Vector::write(&mut writer, &mempool, |w, (txid, wtx)| {
-                w.write_all(&txid.0)?;
-                wtx.write(w)
-            })?;
-        }
 
         Ok(())
     }
@@ -520,7 +489,6 @@ impl LightWallet {
     pub async fn clear_all(&self) {
         self.blocks.write().await.clear();
         self.txns.write().await.clear();
-        self.mempool_txs.write().await.clear();
     }
 
     pub async fn set_initial_block(&self, height: u64, hash: &str, sapling_tree: &str) -> bool {
@@ -1257,63 +1225,50 @@ impl LightWallet {
 
         // Add this Tx to the mempool structure
         {
-            let mut mempool_txs = self.mempool_txs.write().await;
-
-            match mempool_txs.get_mut(&tx.txid()) {
-                None => {
-                    // Collect the outgoing metadata
-                    let outgoing_metadata = tos
-                        .iter()
-                        .map(|(addr, amt, maybe_memo)| {
-                            OutgoingTxMetadata {
-                                address: addr.to_string(),
-                                value: *amt,
-                                memo: match maybe_memo {
-                                    None => Memo::default(),
-                                    Some(s) => {
-                                        // If the address is not a z-address, then drop the memo
-                                        if !Keys::is_shielded_address(&addr.to_string(), &self.config) {
-                                            Memo::default()
-                                        } else {
-                                            match utils::interpret_memo_string(s.clone()) {
-                                                Ok(m) => match m.try_into() {
-                                                    Ok(m) => m,
-                                                    Err(e) => {
-                                                        error!("{}", e);
-                                                        Memo::default()
-                                                    }
-                                                },
-                                                Err(e) => {
-                                                    error!("{}", e);
-                                                    Memo::default()
-                                                }
+            // Collect the outgoing metadata
+            let outgoing_metadata = tos
+                .iter()
+                .map(|(addr, amt, maybe_memo)| {
+                    OutgoingTxMetadata {
+                        address: addr.to_string(),
+                        value: *amt,
+                        memo: match maybe_memo {
+                            None => Memo::default(),
+                            Some(s) => {
+                                // If the address is not a z-address, then drop the memo
+                                if !Keys::is_shielded_address(&addr.to_string(), &self.config) {
+                                    Memo::default()
+                                } else {
+                                    match utils::interpret_memo_string(s.clone()) {
+                                        Ok(m) => match m.try_into() {
+                                            Ok(m) => m,
+                                            Err(e) => {
+                                                error!("{}", e);
+                                                Memo::default()
                                             }
+                                        },
+                                        Err(e) => {
+                                            error!("{}", e);
+                                            Memo::default()
                                         }
                                     }
-                                },
+                                }
                             }
-                        })
-                        .collect::<Vec<_>>();
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
 
-                    // Create a new WalletTx
-                    let mut wtx = WalletTx::new(
-                        height.into(),
-                        now() as u64,
-                        &tx.txid(),
-                        &self.price_info.read().await.zec_price,
-                    );
-                    wtx.outgoing_metadata = outgoing_metadata;
+            // Create a new WalletTx
+            let mut wtx = WalletTx::new(
+                height.into(),
+                now() as u64,
+                &tx.txid(),
+                &self.price_info.read().await.zec_price,
+            );
+            wtx.outgoing_metadata = outgoing_metadata;
 
-                    // Add it into the mempool
-                    mempool_txs.insert(tx.txid(), wtx);
-                }
-                Some(_) => {
-                    warn!(
-                        "A newly created Tx was already in the mempool! How's that possible? Txid: {}",
-                        tx.txid()
-                    );
-                }
-            }
+            self.txns.write().await.add_mempool(wtx);
         }
 
         Ok((txid, raw_tx))

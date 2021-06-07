@@ -852,7 +852,7 @@ impl LightClient {
 
         // Add in all mempool txns
         let last_scanned_height = self.wallet.last_scanned_height().await;
-        tx_list.extend(self.wallet.mempool_txs.read().await.iter().map(|(_, wtx)| {
+        tx_list.extend(self.wallet.txns.read().await.mempool.iter().map(|(_, wtx)| {
             let amount: u64 = wtx.outgoing_metadata.iter().map(|om| om.value).sum::<u64>();
             let fee = fee::get_default_fee(last_scanned_height as i32);
 

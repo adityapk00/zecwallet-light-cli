@@ -23,6 +23,7 @@ use super::data::{OutgoingTxMetadata, SaplingNoteData, Utxo, WalletTx};
 /// this struct are threadsafe/locked properly.
 pub struct WalletTxns {
     pub(crate) current: HashMap<TxId, WalletTx>,
+    pub(crate) mempool: HashMap<TxId, WalletTx>,
 }
 
 impl WalletTxns {
@@ -33,6 +34,7 @@ impl WalletTxns {
     pub fn new() -> Self {
         Self {
             current: HashMap::new(),
+            mempool: HashMap::new(),
         }
     }
 
@@ -46,7 +48,10 @@ impl WalletTxns {
 
         let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
 
-        Ok(Self { current: txs })
+        Ok(Self {
+            current: txs,
+            mempool: HashMap::new(),
+        })
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -65,8 +70,19 @@ impl WalletTxns {
             Ok((TxId { 0: txid_bytes }, WalletTx::read(r).unwrap()))
         })?;
 
-        let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
-        Ok(Self { current: txs })
+        let current = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
+
+        let mempool = Vector::read(&mut reader, |r| {
+            let mut txid_bytes = [0u8; 32];
+            r.read_exact(&mut txid_bytes)?;
+            let wtx = WalletTx::read(r)?;
+
+            Ok((TxId { 0: txid_bytes }, wtx))
+        })?
+        .into_iter()
+        .collect();
+
+        Ok(Self { current, mempool })
     }
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
@@ -75,20 +91,41 @@ impl WalletTxns {
 
         // The hashmap, write as a set of tuples. Store them sorted so that wallets are
         // deterministically saved
+        {
+            let mut txns = self.current.iter().collect::<Vec<(&TxId, &WalletTx)>>();
+            txns.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
 
-        let mut txns = self.current.iter().collect::<Vec<(&TxId, &WalletTx)>>();
-        txns.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
+            Vector::write(&mut writer, &txns, |w, (k, v)| {
+                w.write_all(&k.0)?;
+                v.write(w)
+            })?;
+        }
 
-        Vector::write(&mut writer, &txns, |w, (k, v)| {
-            w.write_all(&k.0)?;
-            v.write(w)
-        })?;
+        // Write out the mempool txns as well
+        {
+            let mut mempool = self.mempool.iter().collect::<Vec<(&TxId, &WalletTx)>>();
+            mempool.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap());
+
+            Vector::write(&mut writer, &mempool, |w, (txid, wtx)| {
+                w.write_all(&txid.0)?;
+                wtx.write(w)
+            })?;
+        }
 
         Ok(())
     }
 
     pub fn clear(&mut self) {
         self.current.clear();
+        self.mempool.clear();
+    }
+
+    pub fn add_mempool(&mut self, mem_tx: WalletTx) {
+        self.mempool.insert(mem_tx.txid, mem_tx);
+    }
+
+    pub fn remove_mempool(&mut self, txid: &TxId) {
+        self.mempool.remove(txid);
     }
 
     pub fn adjust_spendable_status(&mut self, spendable_keys: Vec<ExtendedFullViewingKey>) {

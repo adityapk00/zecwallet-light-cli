@@ -352,6 +352,9 @@ impl FetchFullTxns {
             }
         }
 
+        // Step 4: If this Tx is in the mempool, remove it from there
+        wallet_txns.write().await.remove_mempool(&tx.txid());
+
         info!("Finished Fetching full tx {}", tx.txid());
         Ok(())
     }
