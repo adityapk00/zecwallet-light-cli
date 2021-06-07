@@ -96,6 +96,7 @@ impl UpdateNotes {
         let tx_existing = tx.clone();
         let start_block = BlockHeight::from_u32(bsync_data.read().await.earliest_block() as u32);
         let h0 = tokio::spawn(async move {
+            // TODO: Wait for all nullifiers to be loaded and the reorgs to be settled before updating the existing notes
             let notes = wallet_txns.read().await.get_notes_for_updating();
             for (txid, nf) in notes {
                 tx_existing.send((txid, nf, start_block.clone(), None)).unwrap();

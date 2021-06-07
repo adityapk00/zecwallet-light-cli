@@ -135,12 +135,40 @@ impl FetchFullTxns {
         keys: Arc<RwLock<Keys>>,
         wallet_txns: Arc<RwLock<WalletTxns>>,
     ) -> Result<(), String> {
+        // Collect our t-addresses for easy checking
+        let taddrs = keys.read().await.get_all_taddrs();
+        let taddrs_set: HashSet<_> = taddrs.iter().map(|t| t.clone()).collect();
+
+        // Step 1: Scan all transparent outputs to see if we recieved any money
+        for (n, vout) in tx.vout.iter().enumerate() {
+            match vout.script_pubkey.address() {
+                Some(TransparentAddress::PublicKey(hash)) => {
+                    let output_taddr = hash.to_base58check(&config.base58_pubkey_address(), &[]);
+                    if taddrs_set.contains(&output_taddr) {
+                        // This is our address. Add this as an output to the txid
+
+                        wallet_txns.write().await.add_new_taddr_output(
+                            tx.txid(),
+                            output_taddr.clone(),
+                            height.into(),
+                            block_time as u64,
+                            &None,
+                            &vout,
+                            n as u32,
+                        );
+
+                        // Ensure that we add any new HD addresses
+                        keys.write().await.ensure_hd_taddresses(&output_taddr);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Remember if this is an outgoing Tx. Useful for when we want to grab the outgoing metadata.
         let mut is_outgoing_tx = false;
 
-        // Step 1. Scan transparent spends
-        let taddrs = keys.read().await.get_all_taddrs();
-        let taddrs_set: HashSet<_> = taddrs.iter().map(|t| t.clone()).collect();
+        // Step 2. Scan transparent spends
 
         // Scan all the inputs to see if we spent any transparent funds in this tx
         let mut total_transparent_value_spent = 0;
@@ -188,32 +216,6 @@ impl FetchFullTxns {
                 &None,
                 total_transparent_value_spent,
             );
-        }
-
-        // Step 2: Scan all transparent outputs to see if we recieved any money
-        for (n, vout) in tx.vout.iter().enumerate() {
-            match vout.script_pubkey.address() {
-                Some(TransparentAddress::PublicKey(hash)) => {
-                    let output_taddr = hash.to_base58check(&config.base58_pubkey_address(), &[]);
-                    if taddrs_set.contains(&output_taddr) {
-                        // This is our address. Add this as an output to the txid
-
-                        wallet_txns.write().await.add_new_taddr_output(
-                            tx.txid(),
-                            output_taddr.clone(),
-                            height.into(),
-                            block_time as u64,
-                            &None,
-                            &vout,
-                            n as u32,
-                        );
-
-                        // Ensure that we add any new HD addresses
-                        keys.write().await.ensure_hd_taddresses(&output_taddr);
-                    }
-                }
-                _ => {}
-            }
         }
 
         // Collect all our z addresses, to check for change
