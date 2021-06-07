@@ -86,7 +86,7 @@ impl UpdateNotes {
         JoinHandle<()>,
         UnboundedSender<(TxId, Nullifier, BlockHeight, Option<u32>)>,
     ) {
-        println!("Starting TxId processing");
+        println!("Starting Note Update processing");
 
         // Create a new channel where we'll be notified of TxIds that are to be processed
         let (tx, mut rx) = unbounded_channel::<(TxId, Nullifier, BlockHeight, Option<u32>)>();
@@ -166,7 +166,7 @@ impl UpdateNotes {
 
             // Wait for all the workers
             join_all(workers).await;
-            println!("Finished TxID processing");
+            println!("Finished Note Update processing");
         });
 
         let h = tokio::spawn(async move {

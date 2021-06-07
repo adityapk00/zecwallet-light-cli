@@ -30,7 +30,7 @@ impl BlazeSyncData {
         self.end_block
     }
 
-    pub async fn setup_for_sync(&mut self, start_block: u64, end_block: u64, blocks: Vec<BlockData>) {
+    pub async fn setup_for_sync(&mut self, start_block: u64, end_block: u64, existing_blocks: Vec<BlockData>) {
         if start_block < end_block {
             panic!("Blocks should be backwards");
         }
@@ -41,6 +41,6 @@ impl BlazeSyncData {
         self.in_progress = true;
 
         self.nullifier_data.setup_sync().await;
-        self.node_data.setup_sync(blocks).await;
+        self.node_data.setup_sync(existing_blocks).await;
     }
 }

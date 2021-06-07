@@ -48,19 +48,18 @@ impl NodeAndWitnessData {
         }
     }
 
-    pub async fn setup_sync(&self, blocks: Vec<BlockData>) {
-        if !blocks.is_empty() {
-            if blocks.first().unwrap().height < blocks.last().unwrap().height {
+    pub async fn setup_sync(&mut self, existing_blocks: Vec<BlockData>) {
+        if !existing_blocks.is_empty() {
+            if existing_blocks.first().unwrap().height < existing_blocks.last().unwrap().height {
                 panic!("Blocks are in wrong order");
             }
         }
-
         self.verification_list.write().await.clear();
 
         self.blocks.write().await.clear();
 
         self.existing_blocks.write().await.clear();
-        self.existing_blocks.write().await.extend(blocks);
+        self.existing_blocks.write().await.extend(existing_blocks);
     }
 
     // Finish up the sync. This method will delete all the elements in the blocks, and return
@@ -527,31 +526,54 @@ impl NodeAndWitnessData {
         };
 
         let (cb, mut tree) = {
-            while self.blocks.read().await.is_empty() {
-                yield_now().await;
-            }
-
-            while self.blocks.read().await.last().unwrap().height > prev_height {
-                yield_now().await;
-            }
-
-            {
-                let blocks = self.blocks.read().await;
-
-                let prev_pos = blocks.first().unwrap().height - prev_height;
-                let pos = prev_pos - 1;
-
-                let prev_bd = blocks.get(prev_pos as usize).unwrap();
-                if prev_bd.height != prev_height {
-                    panic!("Wrong block");
-                }
-                let bd = blocks.get(pos as usize).unwrap();
-                if bd.height != prev_height + 1 {
-                    panic!("Wrong block");
+            // First, get the current compact block
+            let cb = {
+                let height = height.into();
+                while self.blocks.read().await.is_empty() {
+                    yield_now().await;
                 }
 
-                (bd.cb(), prev_bd.tree.as_ref().unwrap().clone())
-            }
+                while self.blocks.read().await.last().unwrap().height > height {
+                    yield_now().await;
+                }
+
+                {
+                    let blocks = self.blocks.read().await;
+
+                    let pos = blocks.first().unwrap().height - height;
+                    let bd = blocks.get(pos as usize).unwrap();
+                    if bd.height != prev_height + 1 {
+                        panic!("Wrong block");
+                    }
+
+                    bd.cb()
+                }
+            };
+
+            // Prev height could be in the existing blocks, too, so check those before checking the current blocks.
+            let existing_blocks = self.existing_blocks.read().await;
+            let tree = {
+                if !existing_blocks.is_empty() && existing_blocks.first().unwrap().height == prev_height {
+                    existing_blocks.first().unwrap().tree.as_ref().unwrap().clone()
+                } else {
+                    while self.blocks.read().await.last().unwrap().height > prev_height {
+                        yield_now().await;
+                    }
+
+                    {
+                        let blocks = self.blocks.read().await;
+
+                        let prev_pos = blocks.first().unwrap().height - prev_height;
+                        let prev_bd = blocks.get(prev_pos as usize).unwrap();
+                        if prev_bd.height != prev_height {
+                            panic!("Wrong block");
+                        }
+                        prev_bd.tree.as_ref().unwrap().clone()
+                    }
+                }
+            };
+
+            (cb, tree)
         };
 
         // Go over all the outputs. Remember that all the numbers are inclusive, i.e., we have to scan upto and including
@@ -576,8 +598,14 @@ impl NodeAndWitnessData {
         witnesses: Vec<IncrementalWitness<Node>>,
     ) -> Vec<IncrementalWitness<Node>> {
         let height = (*height).into();
+
         while self.blocks.read().await.is_empty() {
             yield_now().await;
+        }
+
+        // Check if we've already synced all the requested blocks
+        if height > self.blocks.read().await.first().unwrap().height {
+            return witnesses;
         }
 
         while self.blocks.read().await.last().unwrap().height > height {
@@ -676,7 +704,9 @@ impl NodeAndWitnessData {
         // Replace the last witness in the vector with the newly computed one.
         witnesses.push(w);
 
+        // Also update the witnesses for the remaining blocks, till the latest block.
         let next_height = BlockHeight::from_u32((height + 1) as u32);
+
         return self.update_witness_after_block(&next_height, witnesses).await;
     }
 }

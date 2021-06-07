@@ -169,6 +169,7 @@ impl WalletTxns {
             .unwrap();
 
         note_data.spent = Some((spent_txid.clone(), spent_at_height.into()));
+        note_data.unconfirmed_spent = None;
         note_data.witnesses = vec![];
         note_data.note.value
     }
@@ -198,6 +199,9 @@ impl WalletTxns {
         // Record this Tx as having spent some funds
         {
             let wtx = self.current.get_mut(&txid).expect("Txid should be present");
+
+            // Mark the height correctly, in case this was previously a mempool or unconfirmed tx.
+            wtx.block = height;
 
             if wtx.spent_nullifiers.iter().find(|nf| **nf == nullifier).is_none() {
                 wtx.spent_nullifiers.push(nullifier);
@@ -324,13 +328,14 @@ impl WalletTxns {
                 .insert(txid, WalletTx::new(height.into(), timestamp, &txid, price));
         }
         let wtx = self.current.get_mut(&txid).expect("Txid should be present");
+        // Update the block height, in case this was a mempool or unconfirmed tx.
+        wtx.block = height;
 
         let nullifier = note.nf(&extfvk.fvk.vk, witness.position() as u64);
         let witnesses = if have_spending_key { vec![witness] } else { vec![] };
 
         if wtx.notes.iter().find(|n| n.nullifier == nullifier).is_none() {
             // Note: We first add the notes as "not change", but after we scan the full tx, we will update the "is_change", depending on if any funds were spent in this tx.
-
             let nd = SaplingNoteData {
                 extfvk: extfvk.clone(),
                 diversifier: *to.diversifier(),
