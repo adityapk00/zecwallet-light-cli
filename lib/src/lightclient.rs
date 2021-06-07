@@ -1011,6 +1011,10 @@ impl LightClient {
         // Then, do a sync, which will force a full rescan from the initial state
         let response = self.do_sync(true).await;
 
+        // At the end of a rescan, remove unused addresses.
+        self.wallet.remove_unused_taddrs().await;
+        self.wallet.remove_unused_zaddrs().await;
+
         self.do_save().await?;
         info!("Rescan finished");
 

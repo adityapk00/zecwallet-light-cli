@@ -37,14 +37,16 @@ impl FetchTaddrTxns {
             let (res_tx, mut res_rx) = unbounded_channel();
             taddr_fetcher.send((req, res_tx)).unwrap();
 
-            let mut prev_height = u64::MAX;
+            let mut prev_height = 0;
 
             while let Some(rtx_r) = res_rx.recv().await {
                 let rtx = rtx_r?;
-
                 // We should be reciving transactions strictly in height order, so make sure
-                if rtx.height > prev_height {
-                    panic!("Wrong height order while processing transparent transactions!");
+                if rtx.height < prev_height {
+                    panic!(
+                        "Wrong height order while processing transparent transactions!. Was {}, prev={}",
+                        rtx.height, prev_height
+                    );
                 }
                 prev_height = rtx.height;
 
