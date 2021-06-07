@@ -2,13 +2,20 @@ use byteorder::ReadBytesExt;
 use bytes::{Buf, Bytes, IntoBuf};
 use ff::Field;
 use group::GroupEncoding;
-use jubjub::Fr;
 use rand::{rngs::OsRng, CryptoRng, RngCore};
-use std::io::{self, ErrorKind, Read};
+use std::{
+    convert::TryInto,
+    io::{self, ErrorKind, Read},
+};
 use zcash_primitives::{
-    consensus::{BlockHeight, MAIN_NETWORK}, keys::OutgoingViewingKey, 
-    note_encryption::{ENC_CIPHERTEXT_SIZE, Memo, OUT_CIPHERTEXT_SIZE, OutgoingCipherKey, SaplingNoteEncryption, prf_ock, try_sapling_note_decryption}, 
-    primitives::{PaymentAddress, Rseed, ValueCommitment}
+    consensus::{BlockHeight, MAIN_NETWORK},
+    keys::OutgoingViewingKey,
+    memo::Memo,
+    note_encryption::{
+        prf_ock, try_sapling_note_decryption, OutgoingCipherKey, SaplingNoteEncryption, ENC_CIPHERTEXT_SIZE,
+        OUT_CIPHERTEXT_SIZE,
+    },
+    primitives::{PaymentAddress, Rseed, SaplingIvk, ValueCommitment},
 };
 
 pub struct Message {
@@ -66,8 +73,7 @@ impl Message {
         let cmu = note.cmu();
 
         // Create the note encrytion object
-        let mut ne =
-            SaplingNoteEncryption::new(ovk, note, self.to.clone(), self.memo.clone(), &mut rng);
+        let mut ne = SaplingNoteEncryption::new(ovk, note, self.to.clone(), self.memo.clone().into(), &mut rng);
 
         // EPK, which needs to be sent to the reciever.
         let epk = ne.epk().clone().into();
@@ -91,8 +97,7 @@ impl Message {
         let mut rng = OsRng;
 
         // Encrypt To address. We're using a 'NONE' OVK here, so the out_ciphertext is not recoverable.
-        let (_ock, _cv, cmu, epk, enc_ciphertext, _out_ciphertext) =
-            self.encrypt_message_to(None, &mut rng)?;
+        let (_ock, _cv, cmu, epk, enc_ciphertext, _out_ciphertext) = self.encrypt_message_to(None, &mut rng)?;
 
         // We'll encode the message on the wire as a series of bytes
         // u8 -> serialized version
@@ -109,7 +114,7 @@ impl Message {
         Ok(data)
     }
 
-    pub fn decrypt(data: &[u8], ivk: Fr) -> io::Result<Message> {
+    pub fn decrypt(data: &[u8], ivk: &SaplingIvk) -> io::Result<Message> {
         if data.len() != 1 + Message::magic_word().len() + 32 + 32 + ENC_CIPHERTEXT_SIZE {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -121,15 +126,15 @@ impl Message {
         let mut magic_word_bytes = vec![0u8; Message::magic_word().len()];
         reader.read_exact(&mut magic_word_bytes)?;
         let read_magic_word = String::from_utf8(magic_word_bytes)
-            .map_err(|e| 
-                return io::Error::new(
-                    ErrorKind::InvalidData,
-                format!("{}", e),
-        ))?;
+            .map_err(|e| return io::Error::new(ErrorKind::InvalidData, format!("{}", e)))?;
         if read_magic_word != Message::magic_word() {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
-                format!("Bad magic words. Wanted:{}, but found {}", Message::magic_word(), read_magic_word),
+                format!(
+                    "Bad magic words. Wanted:{}, but found {}",
+                    Message::magic_word(),
+                    read_magic_word
+                ),
             ));
         }
 
@@ -145,20 +150,14 @@ impl Message {
         reader.read_exact(&mut cmu_bytes)?;
         let cmu = bls12_381::Scalar::from_bytes(&cmu_bytes);
         if cmu.is_none().into() {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Can't read CMU bytes"),
-            ));
+            return Err(io::Error::new(ErrorKind::InvalidData, format!("Can't read CMU bytes")));
         }
 
         let mut epk_bytes = [0u8; 32];
         reader.read_exact(&mut epk_bytes)?;
         let epk = jubjub::ExtendedPoint::from_bytes(&epk_bytes);
         if epk.is_none().into() {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Can't read EPK bytes"),
-            ));
+            return Err(io::Error::new(ErrorKind::InvalidData, format!("Can't read EPK bytes")));
         }
 
         let mut enc_bytes = [0u8; ENC_CIPHERTEXT_SIZE];
@@ -175,11 +174,12 @@ impl Message {
             &cmu.unwrap(),
             &enc_bytes,
         ) {
-            Some((_note, address, memo)) => Ok(Self::new(address, memo)),
-            None => Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Failed to decrypt"),
+            Some((_note, address, memo)) => Ok(Self::new(
+                address,
+                memo.try_into()
+                    .map_err(|_e| io::Error::new(ErrorKind::InvalidData, format!("Failed to decrypt")))?,
             )),
+            None => Err(io::Error::new(ErrorKind::InvalidData, format!("Failed to decrypt"))),
         }
     }
 }
@@ -188,17 +188,16 @@ impl Message {
 pub mod tests {
     use ff::Field;
     use group::GroupEncoding;
-    use jubjub::Fr;
     use rand::{rngs::OsRng, Rng};
     use zcash_primitives::{
-        note_encryption::Memo,
-        primitives::{PaymentAddress, Rseed},
+        memo::Memo,
+        primitives::{PaymentAddress, Rseed, SaplingIvk},
         zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
     };
 
     use super::{Message, ENC_CIPHERTEXT_SIZE};
 
-    fn get_random_zaddr() -> (ExtendedSpendingKey, Fr, PaymentAddress) {
+    fn get_random_zaddr() -> (ExtendedSpendingKey, SaplingIvk, PaymentAddress) {
         let mut rng = OsRng;
         let mut seed = [0u8; 32];
         rng.fill(&mut seed);
@@ -217,20 +216,20 @@ pub mod tests {
         let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
 
         let enc = Message::new(to.clone(), msg.clone()).encrypt().unwrap();
-        let dec_msg = Message::decrypt(&enc.clone(), ivk).unwrap();
+        let dec_msg = Message::decrypt(&enc.clone(), &ivk).unwrap();
 
         assert_eq!(dec_msg.memo, msg);
         assert_eq!(dec_msg.to, to);
 
         // Also attempt decryption with all addresses
-        let dec_msg = Message::decrypt(&enc, ivk).unwrap();
+        let dec_msg = Message::decrypt(&enc, &ivk).unwrap();
         assert_eq!(dec_msg.memo, msg);
         assert_eq!(dec_msg.to, to);
 
         // Raw memo of 512 bytes
         let msg = Memo::from_bytes(&[255u8; 512]).unwrap();
         let enc = Message::new(to.clone(), msg.clone()).encrypt().unwrap();
-        let dec_msg = Message::decrypt(&enc.clone(), ivk).unwrap();
+        let dec_msg = Message::decrypt(&enc.clone(), &ivk).unwrap();
 
         assert_eq!(dec_msg.memo, msg);
         assert_eq!(dec_msg.to, to);
@@ -244,10 +243,10 @@ pub mod tests {
         let msg = Memo::from_bytes("Hello World with some value!".to_string().as_bytes()).unwrap();
 
         let enc = Message::new(to1.clone(), msg.clone()).encrypt().unwrap();
-        let dec_success = Message::decrypt(&enc.clone(), ivk2);
+        let dec_success = Message::decrypt(&enc.clone(), &ivk2);
         assert!(dec_success.is_err());
 
-        let dec_success = Message::decrypt(&enc.clone(), ivk1).unwrap();
+        let dec_success = Message::decrypt(&enc.clone(), &ivk1).unwrap();
 
         assert_eq!(dec_success.memo, msg);
         assert_eq!(dec_success.to, to1);
@@ -269,13 +268,13 @@ pub mod tests {
         // Mad magic word
         let mut bad_enc = enc.clone();
         bad_enc.splice(..magic_len, [1u8; 16].to_vec());
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Bad version
         let mut bad_enc = enc.clone();
-        bad_enc.splice(magic_len..magic_len+1, [Message::serialized_version() + 1].to_vec());
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        bad_enc.splice(magic_len..magic_len + 1, [Message::serialized_version() + 1].to_vec());
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Create a new, random EPK
@@ -286,52 +285,53 @@ pub mod tests {
         let epk_bad: jubjub::ExtendedPoint = (note.g_d * esk).into();
 
         let mut bad_enc = enc.clone();
-        bad_enc.splice(prefix_len..prefix_len+33, epk_bad.to_bytes().to_vec());
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        bad_enc.splice(prefix_len..prefix_len + 33, epk_bad.to_bytes().to_vec());
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Bad CMU should fail
         let mut bad_enc = enc.clone();
-        bad_enc.splice(prefix_len+33..prefix_len+65, [1u8; 32].to_vec());
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        bad_enc.splice(prefix_len + 33..prefix_len + 65, [1u8; 32].to_vec());
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Bad EPK and CMU should fail
         let mut bad_enc = enc.clone();
-        bad_enc.splice(prefix_len+1..prefix_len+33, [0u8; 32].to_vec());
-        bad_enc.splice(prefix_len+33..prefix_len+65, [1u8; 32].to_vec());
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        bad_enc.splice(prefix_len + 1..prefix_len + 33, [0u8; 32].to_vec());
+        bad_enc.splice(prefix_len + 33..prefix_len + 65, [1u8; 32].to_vec());
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Bad payload 1
         let mut bad_enc = enc.clone();
-        bad_enc.splice(prefix_len+65.., [0u8; ENC_CIPHERTEXT_SIZE].to_vec());
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        bad_enc.splice(prefix_len + 65.., [0u8; ENC_CIPHERTEXT_SIZE].to_vec());
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Bad payload 2
         let mut bad_enc = enc.clone();
         bad_enc.reverse();
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Bad payload 3
         let c = enc.clone();
         let (bad_enc, _) = c.split_at(bad_enc.len() - 1);
-        let dec_success = Message::decrypt(&bad_enc, ivk);
+        let dec_success = Message::decrypt(&bad_enc, &ivk);
         assert!(dec_success.is_err());
 
         // Bad payload 4
-        let dec_success = Message::decrypt(&[], ivk);
+        let dec_success = Message::decrypt(&[], &ivk);
         assert!(dec_success.is_err());
 
         // This should finally work.
-        let dec_success = Message::decrypt(&enc, ivk);
+        let dec_success = Message::decrypt(&enc, &ivk);
         assert!(dec_success.is_ok());
-        assert_eq!(
-            dec_success.unwrap().memo.to_utf8().unwrap().unwrap(),
-            msg_str
-        );
+        if let Memo::Text(memo) = dec_success.unwrap().memo {
+            assert_eq!(memo.to_string(), msg_str.to_string());
+        } else {
+            panic!("Wrong memo");
+        }
     }
 
     #[test]
@@ -346,13 +346,13 @@ pub mod tests {
         for i in 0..enc.len() {
             let byte = enc.get(i).unwrap();
             let mut bad_enc = enc.clone();
-            bad_enc.splice(i..i+1, [!byte].to_vec());
+            bad_enc.splice(i..i + 1, [!byte].to_vec());
 
-            let dec_success = Message::decrypt(&bad_enc, ivk);
+            let dec_success = Message::decrypt(&bad_enc, &ivk);
             assert!(dec_success.is_err());
         }
 
-        let dec_success = Message::decrypt(&enc.clone(), ivk).unwrap();
+        let dec_success = Message::decrypt(&enc.clone(), &ivk).unwrap();
 
         assert_eq!(dec_success.memo, msg);
         assert_eq!(dec_success.to, to);

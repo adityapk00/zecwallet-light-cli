@@ -1,7 +1,3 @@
-.DS_Store
-target/
-.vscode/
-history.txt
-/.idea/
-tarpaulin-report.html
-/log*
+/target
+/testdata
+/procgov

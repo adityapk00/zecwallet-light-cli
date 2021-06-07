@@ -1,0 +1,112 @@
+
+digraph D {
+    rankdir=LR;
+    newrank=true;
+
+    // make invisible ranks
+    rank1 [style=invis/* color="gray" */];
+    rank2 [style=invis/* color="gray" */];
+    rank3 [style=invis/* color="gray" */];
+    rank4 [style=invis/* color="gray" */];
+    rank5 [style=invis/* color="gray" */];
+    rank6 [style=invis/* color="gray" */];
+
+    rank1 -> rank2 [style=invis/* color="gray" */];
+    rank2 -> rank3 [style=invis/* color="gray" */]
+    rank3 -> rank4 [style=invis/* color="gray" */]
+    rank4 -> rank5 [style=invis/* color="gray" */]
+    rank5 -> rank6 [style=invis/* color="gray" */]
+
+    Start [shape=diamond]
+    Start -> FetchCompactBlocks 
+    Start -> TrialDecryption
+    Start -> FetchTransparentTxIDs
+    Start -> UpdateNotes
+    Start -> UpdateWitnesses
+    Start -> UpdateSpends
+
+    FetchCompactBlocks [shape=rect, color="orange"]
+    FetchTransparentTxIDs [shape=rect]
+
+    TrialDecryption [shape=rect]
+    
+    UpdateNotes [shape=rect]
+    FetchFullTxns [shape=rect, color="orange"]
+
+    UpdateWitnesses [shape=rect]
+    UpdateSpends [shape=rect]
+
+    FetchCompactBlocks -> NullifierData  [color="red"]
+    FetchCompactBlocks -> TrialDecryption [color="red"]
+    FetchCompactBlocks -> NodeAndWitnessData [color="red"]
+
+    NullifierData -> UpdateSpends [color="purple", dir=both]
+
+    NodeAndWitnessData -> UpdateWitnesses  [color="purple", dir=both]
+
+    UpdateNotes -> UpdateWitnesses [color="magenta"]
+    UpdateNotes -> UpdateSpends [color="magenta"]
+
+    TrialDecryption -> FetchFullTxns [color="magenta"]
+    TrialDecryption -> UpdateNotes [color="magenta"]
+    TrialDecryption -> WalletTxnsData [color="magenta"]
+
+    UpdateSpends -> FetchFullTxns [color="magenta"]
+    FetchTransparentTxIDs -> FetchFullTxns [color="magenta"]
+    
+    UpdateWitnesses -> WalletTxnsData [color="magenta"]
+    UpdateSpends -> WalletTxnsData [color="magenta"]
+    FetchFullTxns -> WalletTxnsData [color="magenta"]
+
+    FetchTransparentTxIDs -> End
+    FetchCompactBlocks -> End
+    FetchFullTxns -> End
+    UpdateNotes -> End
+    UpdateSpends -> End
+    UpdateWitnesses -> End
+    TrialDecryption -> End
+    
+    End [shape=diamond]
+
+    subgraph cluster_l1 {
+        label="Legend"
+
+        StartTask [shape=rect]
+        AwaitTask [shape=rect]
+        StartTask -> AwaitTask
+
+        c [style=invis]
+        d [style=invis]
+        c -> d [label="Send all data", color="red"]
+
+        e [style=invis]
+        f [style=invis]
+        e -> f [label="Send some data", color="magenta"]
+
+        g [style=invis]
+        h [style=invis]
+        g -> h [label="API", color="purple", dir="both"]
+
+        CallNetwork [shape=rect, color="orange"]
+        TokioTask [shape=rect]
+        ThreadSafeData [shape=oval]    
+    }
+    
+    WalletTxnsData [shape=oval; color=gray]
+
+    subgraph cluster_l2 {
+        label="SyncTmpData"
+        NodeAndWitnessData [shape=oval]
+        NullifierData [shape=oval]
+    }
+
+
+    {rank=same rank1 Start}
+    {rank=same rank2 FetchCompactBlocks FetchTransparentTxIDs}
+    {rank=same rank3 TrialDecryption WalletTxnsData StartTask c e g}
+    {rank=same rank4 UpdateNotes}
+    {rank=same rank5 UpdateWitnesses UpdateSpends CallNetwork TokioTask ThreadSafeData}
+    {rank=same rank6 End}
+
+}
+
