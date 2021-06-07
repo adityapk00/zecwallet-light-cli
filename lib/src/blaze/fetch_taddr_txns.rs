@@ -3,6 +3,7 @@ use crate::compact_formats::RawTransaction;
 use crate::lightwallet::keys::Keys;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot;
 use tokio::{
     sync::{mpsc::UnboundedSender, RwLock},
     task::JoinHandle,
@@ -24,7 +25,7 @@ impl FetchTaddrTxns {
         &self,
         start_height: u64,
         end_height: u64,
-        taddr_fetcher: UnboundedSender<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>,
+        taddr_fetcher: oneshot::Sender<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>,
         full_tx_scanner: UnboundedSender<(Transaction, BlockHeight)>,
     ) -> JoinHandle<Result<(), String>> {
         let keys = self.keys.clone();

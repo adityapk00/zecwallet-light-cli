@@ -59,15 +59,14 @@ impl GrpcConnector {
         &self,
     ) -> (
         JoinHandle<()>,
-        UnboundedSender<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>,
+        oneshot::Sender<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>,
     ) {
-        let (tx, mut rx) =
-            unbounded_channel::<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>();
+        let (tx, rx) = oneshot::channel::<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>();
         let uri = self.uri.clone();
 
         let h = tokio::spawn(async move {
             let uri = uri.clone();
-            while let Some(((taddrs, start_height, end_height), result_tx)) = rx.recv().await {
+            if let Ok(((taddrs, start_height, end_height), result_tx)) = rx.await {
                 let mut tx_rs = vec![];
                 let mut tx_rs_workers = vec![];
 
