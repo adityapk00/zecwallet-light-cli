@@ -713,10 +713,15 @@ impl NodeAndWitnessData {
 
 #[cfg(test)]
 mod test {
-    use zcash_primitives::block::BlockHash;
+    use tokio::sync::oneshot;
+    use tokio::{join, sync::mpsc::unbounded_channel, task::JoinHandle};
+    use zcash_primitives::{block::BlockHash, merkle_tree::CommitmentTree, sapling::Node};
 
+    use crate::blaze::test_utils::tree_to_string;
+    use crate::compact_formats::TreeState;
     use crate::{
         blaze::test_utils::{FakeCompactBlock, FakeCompactBlockList},
+        lightclient::lightclient_config::LightClientConfig,
         lightwallet::data::BlockData,
     };
 
@@ -750,5 +755,175 @@ mod test {
             assert_eq!(existing_blocks[i].hash, finished_blk.hash);
             assert_eq!(existing_blocks[i].height, finished_blk.height);
         }
+    }
+
+    #[tokio::test]
+    async fn from_sapling_genesis() {
+        let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
+        config.sapling_activation_height = 1;
+
+        let blocks = FakeCompactBlockList::new(200).into();
+
+        // Blocks are in reverse order
+        assert!(blocks.first().unwrap().height > blocks.last().unwrap().height);
+
+        // Calculate the Witnesses manually, but do it reversed, because they have to be calculated from lowest height to tallest height
+        let calc_witnesses: Vec<_> = blocks
+            .iter()
+            .rev()
+            .scan(CommitmentTree::empty(), |witness, b| {
+                for tx in &b.cb().vtx {
+                    for co in &tx.outputs {
+                        witness.append(Node::new(co.cmu().unwrap().into())).unwrap();
+                    }
+                }
+
+                Some((witness.clone(), b.height))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        let start_block = blocks.first().unwrap().height;
+        let end_block = blocks.last().unwrap().height;
+
+        let mut nw = NodeAndWitnessData::new();
+        nw.setup_sync(vec![]).await;
+
+        let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
+
+        let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            if let Some(_req) = uri_fetcher_rx.recv().await {
+                return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
+            }
+
+            Ok(())
+        });
+
+        let (h, cb_sender) = nw.start(&config, start_block, end_block, uri_fetcher).await;
+
+        let send_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            for block in blocks {
+                cb_sender
+                    .send(block.cb())
+                    .map_err(|e| format!("Couldn't send block: {}", e))?;
+            }
+
+            Ok(())
+        });
+
+        let (uri_r, nw_r, send_r) = join!(uri_h, h, send_h);
+        uri_r.unwrap().unwrap();
+        nw_r.unwrap();
+        send_r.unwrap().unwrap();
+
+        // Make sure the witnesses are correct
+        nw.blocks
+            .read()
+            .await
+            .iter()
+            .zip(calc_witnesses.into_iter())
+            .for_each(|(bd, (w, w_h))| {
+                assert_eq!(bd.height, w_h);
+                assert_eq!(tree_to_string(bd.tree.as_ref().unwrap()), tree_to_string(&w));
+            });
+    }
+
+    #[tokio::test]
+    async fn from_middle() {
+        let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
+        config.sapling_activation_height = 1;
+
+        let mut blocks = FakeCompactBlockList::new(200).into();
+
+        // Blocks are in reverse order
+        assert!(blocks.first().unwrap().height > blocks.last().unwrap().height);
+
+        // Calculate the Witnesses manually, but do it reversed, because they have to be calculated from lowest height to tallest height
+        let calc_witnesses: Vec<_> = blocks
+            .iter()
+            .rev()
+            .scan(CommitmentTree::empty(), |witness, b| {
+                for tx in &b.cb().vtx {
+                    for co in &tx.outputs {
+                        witness.append(Node::new(co.cmu().unwrap().into())).unwrap();
+                    }
+                }
+
+                Some((witness.clone(), b.height))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        // Use the first 50 blocks as "existing", and then sync the other 150 blocks.
+        let existing_blocks = blocks.split_off(150);
+
+        let start_block = blocks.first().unwrap().height;
+        let end_block = blocks.last().unwrap().height;
+
+        // We're expecting this block to be requested by the URI fetcher
+        let requested_block = existing_blocks.first().unwrap().clone();
+        let requested_block_tree = match calc_witnesses.iter().find(|(_, h)| *h == requested_block.height) {
+            Some((t, _h)) => tree_to_string(t),
+            None => panic!("Didn't find block #50"),
+        };
+
+        let mut nw = NodeAndWitnessData::new();
+        nw.setup_sync(existing_blocks).await;
+
+        let (uri_fetcher, mut uri_fetcher_rx) =
+            unbounded_channel::<(u64, oneshot::Sender<Result<TreeState, String>>)>();
+
+        let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            if let Some((req_h, req_tx)) = uri_fetcher_rx.recv().await {
+                println!("Requested tree for block {}, expecting {}", req_h, end_block - 1);
+                assert_eq!(req_h, end_block - 1);
+
+                let mut ts = TreeState::default();
+                ts.height = requested_block.height;
+                ts.hash = requested_block.hash;
+                ts.tree = requested_block_tree;
+
+                req_tx.send(Ok(ts)).unwrap();
+            }
+
+            Ok(())
+        });
+
+        let (h, cb_sender) = nw.start(&config, start_block, end_block, uri_fetcher).await;
+
+        let send_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            for block in blocks {
+                cb_sender
+                    .send(block.cb())
+                    .map_err(|e| format!("Couldn't send block: {}", e))?;
+            }
+
+            Ok(())
+        });
+
+        let (uri_r, nw_r, send_r) = join!(uri_h, h, send_h);
+        uri_r.unwrap().unwrap();
+        nw_r.unwrap();
+        send_r.unwrap().unwrap();
+
+        // Make sure the witnesses are correct
+        nw.blocks
+            .read()
+            .await
+            .iter()
+            .zip(calc_witnesses.into_iter().take(150)) // We're only expecting 150 blocks, since the first 50 are existing
+            .for_each(|(bd, (w, w_h))| {
+                assert_eq!(bd.height, w_h);
+                assert_eq!(tree_to_string(bd.tree.as_ref().unwrap()), tree_to_string(&w));
+            });
+
+        let finished_blks = nw.finish_get_blocks(100).await;
+        assert_eq!(finished_blks.len(), 100);
+        assert_eq!(finished_blks.first().unwrap().height, start_block);
+        assert_eq!(finished_blks.last().unwrap().height, start_block - 100 + 1);
     }
 }

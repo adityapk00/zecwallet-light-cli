@@ -11,8 +11,10 @@ use rand::{rngs::OsRng, RngCore};
 use zcash_primitives::{
     block::BlockHash,
     memo::Memo,
+    merkle_tree::CommitmentTree,
     note_encryption::SaplingNoteEncryption,
     primitives::{Note, Rseed},
+    sapling::Node,
     transaction::components::Amount,
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
 };
@@ -22,6 +24,12 @@ pub fn random_u8_32() -> [u8; 32] {
     OsRng.fill_bytes(&mut b);
 
     b
+}
+
+pub fn tree_to_string(tree: &CommitmentTree<Node>) -> String {
+    let mut b1 = vec![];
+    tree.write(&mut b1).unwrap();
+    hex::encode(b1)
 }
 
 pub struct FakeCompactBlock {
@@ -108,7 +116,7 @@ impl FakeCompactBlockList {
         let mut prev_hash = BlockHash([0u8; 32]);
 
         for i in 0..len {
-            let mut b = FakeCompactBlock::new(i, prev_hash);
+            let mut b = FakeCompactBlock::new(i + 1, prev_hash);
             prev_hash = b.block.hash();
 
             // Add 2 transactions, each with some random Compact Outputs to this block
