@@ -79,7 +79,7 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new())),
+                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
                 sync_lock: Mutex::new(()),
             };
 
@@ -215,7 +215,7 @@ impl LightClient {
                 sapling_output: vec![],
                 sapling_spend: vec![],
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new())),
+                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
             };
 
             l.set_wallet_initial_state(latest_block).await;
@@ -258,7 +258,7 @@ impl LightClient {
                 sapling_output: vec![],
                 sapling_spend: vec![],
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new())),
+                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
             };
 
             println!("Setting birthday to {}", birthday);
@@ -288,7 +288,7 @@ impl LightClient {
                 sapling_output: vec![],
                 sapling_spend: vec![],
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new())),
+                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
             };
 
             #[cfg(feature = "embed_params")]
@@ -322,7 +322,7 @@ impl LightClient {
                 sapling_output: vec![],
                 sapling_spend: vec![],
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new())),
+                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
             };
 
             #[cfg(feature = "embed_params")]
@@ -1284,7 +1284,7 @@ impl LightClient {
             .read()
             .await
             .node_data
-            .start(&self.config, start_block, end_block, saplingtree_fetcher_tx)
+            .start(start_block, end_block, saplingtree_fetcher_tx)
             .await;
 
         // Full Tx GRPC fetcher

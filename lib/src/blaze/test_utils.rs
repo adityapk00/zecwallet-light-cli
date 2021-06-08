@@ -11,7 +11,7 @@ use rand::{rngs::OsRng, RngCore};
 use zcash_primitives::{
     block::BlockHash,
     memo::Memo,
-    merkle_tree::CommitmentTree,
+    merkle_tree::{CommitmentTree, IncrementalWitness},
     note_encryption::SaplingNoteEncryption,
     primitives::{Note, Rseed},
     sapling::Node,
@@ -30,6 +30,23 @@ pub fn tree_to_string(tree: &CommitmentTree<Node>) -> String {
     let mut b1 = vec![];
     tree.write(&mut b1).unwrap();
     hex::encode(b1)
+}
+
+pub fn incw_to_string(inc_witness: &IncrementalWitness<Node>) -> String {
+    let mut b1 = vec![];
+    inc_witness.write(&mut b1).unwrap();
+    hex::encode(b1)
+}
+
+pub fn list_all_witness_nodes(cb: &CompactBlock) -> Vec<Node> {
+    let mut nodes = vec![];
+    for tx in &cb.vtx {
+        for co in &tx.outputs {
+            nodes.push(Node::new(co.cmu().unwrap().into()))
+        }
+    }
+
+    nodes
 }
 
 pub struct FakeCompactBlock {

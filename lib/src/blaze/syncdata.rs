@@ -1,4 +1,4 @@
-use crate::lightwallet::data::BlockData;
+use crate::{lightclient::lightclient_config::LightClientConfig, lightwallet::data::BlockData};
 
 use super::{node_and_witness_data::NodeAndWitnessData, nullifier_data::NullifierData};
 
@@ -14,7 +14,7 @@ pub struct BlazeSyncData {
 }
 
 impl BlazeSyncData {
-    pub fn new() -> Self {
+    pub fn new(config: &LightClientConfig) -> Self {
         Self {
             sync_id: 0,
             start_block: 0,
@@ -22,7 +22,7 @@ impl BlazeSyncData {
             in_progress: false,
 
             nullifier_data: NullifierData::new(),
-            node_data: NodeAndWitnessData::new(),
+            node_data: NodeAndWitnessData::new(config),
         }
     }
 
