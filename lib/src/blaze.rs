@@ -9,3 +9,6 @@ pub(super) mod update_notes;
 
 mod fixed_size_buffer;
 mod sparse_trie_map;
+
+#[cfg(test)]
+pub mod test_utils;

@@ -710,3 +710,45 @@ impl NodeAndWitnessData {
         return self.update_witness_after_block(&next_height, witnesses).await;
     }
 }
+
+#[cfg(test)]
+mod test {
+    use zcash_primitives::block::BlockHash;
+
+    use crate::{
+        blaze::test_utils::{FakeCompactBlock, FakeCompactBlockList},
+        lightwallet::data::BlockData,
+    };
+
+    use super::NodeAndWitnessData;
+
+    #[tokio::test]
+    async fn setup_finish_simple() {
+        let mut nw = NodeAndWitnessData::new();
+
+        let cb = FakeCompactBlock::new(1, BlockHash([0u8; 32])).into();
+        let blks = vec![BlockData::new(cb)];
+
+        nw.setup_sync(blks.clone()).await;
+        let finished_blks = nw.finish_get_blocks(1).await;
+
+        assert_eq!(blks[0].hash, finished_blks[0].hash);
+        assert_eq!(blks[0].height, finished_blks[0].height);
+    }
+
+    #[tokio::test]
+    async fn setup_finish_large() {
+        let mut nw = NodeAndWitnessData::new();
+
+        let existing_blocks = FakeCompactBlockList::new(200).into();
+        nw.setup_sync(existing_blocks.clone()).await;
+        let finished_blks = nw.finish_get_blocks(100).await;
+
+        assert_eq!(finished_blks.len(), 100);
+
+        for (i, finished_blk) in finished_blks.into_iter().enumerate() {
+            assert_eq!(existing_blocks[i].hash, finished_blk.hash);
+            assert_eq!(existing_blocks[i].height, finished_blk.height);
+        }
+    }
+}
