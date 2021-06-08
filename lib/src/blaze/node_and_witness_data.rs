@@ -301,6 +301,7 @@ impl NodeAndWitnessData {
         mut blk_rx: UnboundedReceiver<Vec<BlockData>>,
         verification_list: Arc<RwLock<Vec<TreeState>>>,
         processed_tx: UnboundedSender<Vec<BlockData>>,
+        existing_blocks: Arc<RwLock<Vec<BlockData>>>,
         workers: Arc<RwLock<FuturesUnordered<JoinHandle<Result<(), String>>>>>,
         total_workers_tx: Sender<usize>,
         sapling_activation_height: u64,
@@ -310,6 +311,7 @@ impl NodeAndWitnessData {
             let start = blks.first().unwrap().height;
             let end = blks.last().unwrap().height;
 
+            let existing_blocks = existing_blocks.clone();
             let verification_list = verification_list.clone();
             let processed_tx = processed_tx.clone();
             let uri_fetcher = uri_fetcher.clone();
@@ -329,18 +331,27 @@ impl NodeAndWitnessData {
                 let mut tree = if height_to_fetch < sapling_activation_height {
                     CommitmentTree::empty()
                 } else {
-                    let fetched_tree = {
-                        let (tx, rx) = oneshot::channel();
-                        uri_fetcher.send((height_to_fetch, tx)).unwrap();
-                        rx.await.unwrap()?
-                    };
+                    let existing_blocks = existing_blocks.read().await;
+                    if !existing_blocks.is_empty()
+                        && existing_blocks.first().unwrap().height == height_to_fetch
+                        && existing_blocks.first().unwrap().tree.is_some()
+                    {
+                        existing_blocks.first().unwrap().tree.as_ref().unwrap().clone()
+                    } else {
+                        let fetched_tree = {
+                            let (tx, rx) = oneshot::channel();
+                            uri_fetcher.send((height_to_fetch, tx)).unwrap();
+                            rx.await.unwrap()?
+                        };
 
-                    // Step 2: Save the tree into a list to verify later
-                    verification_list.write().await.push(fetched_tree.clone());
-                    let tree_bytes =
-                        hex::decode(fetched_tree.tree).map_err(|e| format!("Error decoding tree: {:?}", e))?;
+                        // Step 2: Save the tree into a list to verify later
+                        verification_list.write().await.push(fetched_tree.clone());
+                        let tree_bytes =
+                            hex::decode(fetched_tree.tree).map_err(|e| format!("Error decoding tree: {:?}", e))?;
 
-                    CommitmentTree::read(&tree_bytes[..]).map_err(|e| format!("Error building saplingtree: {:?}", e))?
+                        CommitmentTree::read(&tree_bytes[..])
+                            .map_err(|e| format!("Error building saplingtree: {:?}", e))?
+                    }
                 };
 
                 // Step 3: Start processing the witness for each block
@@ -427,6 +438,7 @@ impl NodeAndWitnessData {
             blk_rx,
             verification_list.clone(),
             processed_tx,
+            self.existing_blocks.clone(),
             workers.clone(),
             total_workers_tx,
             sapling_activation_height,
@@ -859,17 +871,22 @@ mod test {
             .collect();
 
         // Use the first 50 blocks as "existing", and then sync the other 150 blocks.
-        let existing_blocks = blocks.split_off(150);
+        let mut existing_blocks = blocks.split_off(150);
 
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
 
         // We're expecting this block to be requested by the URI fetcher
-        let requested_block = existing_blocks.first().unwrap().clone();
-        let requested_block_tree = match calc_witnesses.iter().find(|(_, h)| *h == requested_block.height) {
-            Some((t, _h)) => tree_to_string(t),
+        let requested_block_tree = match calc_witnesses
+            .iter()
+            .find(|(_, h)| *h == existing_blocks.first().unwrap().height)
+        {
+            Some((t, _h)) => t.clone(),
             None => panic!("Didn't find block #50"),
         };
+
+        // Put the tree that is going to be requested
+        existing_blocks.first_mut().unwrap().tree = Some(requested_block_tree);
 
         let mut nw = NodeAndWitnessData::new();
         nw.setup_sync(existing_blocks).await;
@@ -878,16 +895,8 @@ mod test {
             unbounded_channel::<(u64, oneshot::Sender<Result<TreeState, String>>)>();
 
         let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
-            if let Some((req_h, req_tx)) = uri_fetcher_rx.recv().await {
-                println!("Requested tree for block {}, expecting {}", req_h, end_block - 1);
-                assert_eq!(req_h, end_block - 1);
-
-                let mut ts = TreeState::default();
-                ts.height = requested_block.height;
-                ts.hash = requested_block.hash;
-                ts.tree = requested_block_tree;
-
-                req_tx.send(Ok(ts)).unwrap();
+            if let Some(_req) = uri_fetcher_rx.recv().await {
+                return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
             }
 
             Ok(())
