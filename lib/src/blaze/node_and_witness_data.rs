@@ -37,6 +37,9 @@ pub struct NodeAndWitnessData {
     // List of sapling tree states that were fetched from the server, which need to be verified before we return from the
     // function
     verification_list: Arc<RwLock<Vec<TreeState>>>,
+
+    // How many blocks to process at a time.
+    batch_size: u64,
 }
 
 impl NodeAndWitnessData {
@@ -45,7 +48,16 @@ impl NodeAndWitnessData {
             blocks: Arc::new(RwLock::new(vec![])),
             existing_blocks: Arc::new(RwLock::new(vec![])),
             verification_list: Arc::new(RwLock::new(vec![])),
+            batch_size: 25_000,
         }
+    }
+
+    #[cfg(test)]
+    pub fn new_with_batchsize(batch_size: u64) -> Self {
+        let mut s = Self::new();
+        s.batch_size = batch_size;
+
+        s
     }
 
     pub async fn setup_sync(&mut self, existing_blocks: Vec<BlockData>) {
@@ -112,9 +124,9 @@ impl NodeAndWitnessData {
         verification_list: Arc<RwLock<Vec<TreeState>>>,
         start_block: u64,
         end_block: u64,
-    ) {
+    ) -> Result<(), String> {
         if blocks.read().await.is_empty() {
-            return;
+            return Ok(());
         }
 
         // Verify everything in the verification_list
@@ -122,10 +134,10 @@ impl NodeAndWitnessData {
             let verification_list = verification_list.read().await;
             let blocks = blocks.read().await;
             if blocks.first().unwrap().height != start_block {
-                panic!("Wrong start block!");
+                return Err(format!("Wrong start block!"));
             }
             if blocks.last().unwrap().height != end_block {
-                panic!("Wrong end block!");
+                return Err(format!("Wrong end block!"));
             }
 
             for v in verification_list.iter() {
@@ -140,16 +152,16 @@ impl NodeAndWitnessData {
                 let b = blocks.get(pos as usize).unwrap();
 
                 if b.height != v.height {
-                    panic!("Verification failed: Wrong height!");
+                    return Err(format!("Verification failed: Wrong height!"));
                 }
                 if b.hash != v.hash {
-                    panic!("Verfification hash failed!");
+                    return Err(format!("Verfification hash failed!"));
                 }
 
                 let mut write_buf = vec![];
                 b.tree.as_ref().unwrap().write(&mut write_buf).unwrap();
                 if hex::encode(write_buf) != v.tree {
-                    panic!("Verification tree failed!");
+                    return Err(format!("Verification tree failed!"));
                 }
             }
 
@@ -160,15 +172,15 @@ impl NodeAndWitnessData {
         {
             let blocks = blocks.read().await;
             if blocks.len() as u64 != start_block - end_block + 1 {
-                panic!("Wrong number of blocks");
+                return Err(format!("Wrong number of blocks"));
             }
 
             for (i, b) in blocks.iter().enumerate() {
                 if b.height != start_block - i as u64 {
-                    panic!("Wrong block height found in final processed blocks");
+                    return Err(format!("Wrong block height found in final processed blocks"));
                 }
                 if b.tree.is_none() {
-                    panic!("Block {} didn't have a commitment tree", b.height);
+                    return Err(format!("Block {} didn't have a commitment tree", b.height));
                 }
             }
         }
@@ -224,9 +236,11 @@ impl NodeAndWitnessData {
                 })
                 .collect::<Result<(), String>>()
             {
-                panic!("Verification failed {}", e);
+                return Err(format!("Verification failed {}", e));
             }
         }
+
+        Ok(())
     }
 
     // Add the processed Blocks (i.e., Blocks that already have the CommitmentTree filled in) in batches.
@@ -240,7 +254,7 @@ impl NodeAndWitnessData {
         verification_list: Arc<RwLock<Vec<TreeState>>>,
         start_block: u64,
         end_block: u64,
-    ) {
+    ) -> Result<(), String> {
         let mut queue: Vec<Vec<BlockData>> = vec![];
 
         while let Some(mut blks) = processed_rx.recv().await {
@@ -261,7 +275,7 @@ impl NodeAndWitnessData {
                 if queue.len() >= 2 {
                     for i in 0..(queue.len() - 1) {
                         if queue[i].first().unwrap().height <= queue[i + 1].first().unwrap().height {
-                            panic!("Sorted queue is in the wrong order");
+                            return Err(format!("Sorted queue is in the wrong order"));
                         }
                     }
                 }
@@ -288,7 +302,7 @@ impl NodeAndWitnessData {
             panic!("Block Data queue at the end of processing was not empty!");
         }
 
-        Self::verify_sapling_tree(blocks, verification_list, start_block, end_block).await;
+        Self::verify_sapling_tree(blocks, verification_list, start_block, end_block).await
     }
 
     // Process block batches sent on `blk_rx`. These blocks don't have the block's `CommitmentTree` yet,
@@ -305,7 +319,7 @@ impl NodeAndWitnessData {
         workers: Arc<RwLock<FuturesUnordered<JoinHandle<Result<(), String>>>>>,
         total_workers_tx: Sender<usize>,
         sapling_activation_height: u64,
-    ) {
+    ) -> Result<(), String> {
         let mut total = 0;
         while let Some(mut blks) = blk_rx.recv().await {
             let start = blks.first().unwrap().height;
@@ -321,7 +335,7 @@ impl NodeAndWitnessData {
                 // Process the compact blocks.
                 // Step 0: Sanity check. We're expecting blocks in reverse order
                 if blks.last().unwrap().height > blks.first().unwrap().height {
-                    panic!("Expecting blocks in reverse order");
+                    return Err(format!("Expecting blocks in reverse order"));
                 }
 
                 // Step 1: Fetch the (earliest's block - 1)'s sapling root from the server
@@ -376,6 +390,8 @@ impl NodeAndWitnessData {
             }));
         }
         total_workers_tx.send(total).unwrap();
+
+        Ok(())
     }
 
     /// Start a new sync where we ingest all the blocks
@@ -385,10 +401,11 @@ impl NodeAndWitnessData {
         start_block: u64,
         end_block: u64,
         uri_fetcher: UnboundedSender<(u64, oneshot::Sender<Result<TreeState, String>>)>,
-    ) -> (JoinHandle<()>, UnboundedSender<CompactBlock>) {
+    ) -> (JoinHandle<Result<(), String>>, UnboundedSender<CompactBlock>) {
         println!("Starting node and witness sync");
 
         let sapling_activation_height = config.sapling_activation_height;
+        let batch_size = self.batch_size;
 
         // Create a new channel where we'll receive the blocks
         let (tx, mut rx) = mpsc::unbounded_channel::<CompactBlock>();
@@ -402,7 +419,7 @@ impl NodeAndWitnessData {
         // Handle 0:
         // Process the incoming compact blocks, collect them into `BlockData` and pass them on
         // for further processing.
-        // We also trigger the node commitment tree update every 25_000 blocks using the Sapling tree fetched
+        // We also trigger the node commitment tree update every `batch_size` blocks using the Sapling tree fetched
         // from the server temporarily, but we verify it before we return it
         let h0 = tokio::spawn(async move {
             // Temporary holding place for blocks while we process them.
@@ -410,10 +427,10 @@ impl NodeAndWitnessData {
 
             // We'll process 25_000 blocks at a time.
             while let Some(cb) = rx.recv().await {
-                if cb.height % 25_000 == 0 {
+                if cb.height % batch_size == 0 {
                     if !blks.is_empty() {
                         // We'll now dispatch these blocks for updating the witness
-                        blk_tx.send(blks).map_err(|_| format!("Error sending")).unwrap();
+                        blk_tx.send(blks).map_err(|_| format!("Error sending"))?;
                         blks = vec![];
                     }
                 }
@@ -423,8 +440,10 @@ impl NodeAndWitnessData {
 
             if !blks.is_empty() {
                 // We'll now dispatch these blocks for updating the witness
-                blk_tx.send(blks).map_err(|_| format!("Error sending")).unwrap();
+                blk_tx.send(blks).map_err(|_| format!("Error sending"))?;
             }
+
+            Ok(())
         });
 
         // Handle 1:
@@ -469,9 +488,16 @@ impl NodeAndWitnessData {
                         yield_now().await;
                     }
                 }
+
+                Ok(())
             });
 
-            join!(h0, h1, h2, h3);
+            let results = join_all(vec![h0, h1, h2, h3])
+                .await
+                .into_iter()
+                .collect::<Result<Result<(), String>, _>>();
+
+            results.map_err(|e| format!("Error joining all handles: {}", e))?
         });
 
         return (h, tx);
@@ -725,8 +751,11 @@ impl NodeAndWitnessData {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
+    use futures::future::join_all;
     use tokio::sync::oneshot;
-    use tokio::{join, sync::mpsc::unbounded_channel, task::JoinHandle};
+    use tokio::{sync::mpsc::unbounded_channel, task::JoinHandle};
     use zcash_primitives::{block::BlockHash, merkle_tree::CommitmentTree, sapling::Node};
 
     use crate::blaze::test_utils::tree_to_string;
@@ -825,10 +854,12 @@ mod test {
             Ok(())
         });
 
-        let (uri_r, nw_r, send_r) = join!(uri_h, h, send_h);
-        uri_r.unwrap().unwrap();
-        nw_r.unwrap();
-        send_r.unwrap().unwrap();
+        join_all(vec![uri_h, h, send_h])
+            .await
+            .into_iter()
+            .collect::<Result<Result<(), String>, _>>()
+            .unwrap()
+            .unwrap();
 
         // Make sure the witnesses are correct
         nw.blocks
@@ -843,7 +874,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn from_middle() {
+    async fn with_existing_batched() {
         let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
         config.sapling_activation_height = 1;
 
@@ -876,29 +907,45 @@ mod test {
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
 
-        // We're expecting this block to be requested by the URI fetcher
-        let requested_block_tree = match calc_witnesses
-            .iter()
-            .find(|(_, h)| *h == existing_blocks.first().unwrap().height)
-        {
-            Some((t, _h)) => t.clone(),
-            None => panic!("Didn't find block #50"),
-        };
+        // We're expecting these blocks to be requested by the URI fetcher, since we're going to set the batch size to 25.
+        let mut requested_block_trees: HashMap<_, _> = vec![50, 75, 100, 125, 150, 175]
+            .into_iter()
+            .map(|req_h| match calc_witnesses.iter().find(|(_, h)| *h == req_h as u64) {
+                Some((t, _h)) => (req_h, t.clone()),
+                None => panic!("Didn't find block {}", req_h),
+            })
+            .collect();
 
-        // Put the tree that is going to be requested
-        existing_blocks.first_mut().unwrap().tree = Some(requested_block_tree);
+        // Put the tree that is going to be requested from the existing blocks
+        let first_tree = requested_block_trees.remove(&50).unwrap();
+        existing_blocks.first_mut().unwrap().tree = Some(first_tree);
 
-        let mut nw = NodeAndWitnessData::new();
+        let mut nw = NodeAndWitnessData::new_with_batchsize(25);
         nw.setup_sync(existing_blocks).await;
 
         let (uri_fetcher, mut uri_fetcher_rx) =
             unbounded_channel::<(u64, oneshot::Sender<Result<TreeState, String>>)>();
 
+        // Collect the hashes for the blocks, so we can look them up when returning from the uri fetcher.
+        let mut hashes: HashMap<_, _> = requested_block_trees
+            .iter()
+            .map(|(h, _)| (*h, blocks.iter().find(|b| b.height == *h).unwrap().hash.clone()))
+            .collect();
+
         let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
-            if let Some(_req) = uri_fetcher_rx.recv().await {
-                return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
+            while let Some((req_h, res_tx)) = uri_fetcher_rx.recv().await {
+                assert!(requested_block_trees.contains_key(&req_h));
+
+                let mut ts = TreeState::default();
+                ts.height = req_h;
+                ts.hash = hashes.remove(&req_h).unwrap();
+                ts.tree = tree_to_string(&requested_block_trees.remove(&req_h).unwrap());
+
+                res_tx.send(Ok(ts)).unwrap();
             }
 
+            assert!(requested_block_trees.is_empty());
+            assert!(hashes.is_empty());
             Ok(())
         });
 
@@ -914,10 +961,12 @@ mod test {
             Ok(())
         });
 
-        let (uri_r, nw_r, send_r) = join!(uri_h, h, send_h);
-        uri_r.unwrap().unwrap();
-        nw_r.unwrap();
-        send_r.unwrap().unwrap();
+        join_all(vec![uri_h, h, send_h])
+            .await
+            .into_iter()
+            .collect::<Result<Result<(), String>, _>>()
+            .unwrap()
+            .unwrap();
 
         // Make sure the witnesses are correct
         nw.blocks

@@ -1332,15 +1332,15 @@ impl LightClient {
                 .await
         });
 
+        // TODO: Handle Errors
         let r0 = tokio::spawn(async move {
-            // TODO: Handle Errors
+            node_and_witness_handle.await.unwrap().unwrap();
             taddr_txns_handle.await.unwrap().unwrap();
         });
 
         // Await all the futures
         let r: Result<(), _> = join_all(vec![
             nullifier_handle,
-            node_and_witness_handle,
             fetch_compact_blocks_handle,
             trial_decryptions_handle,
             update_notes_handle,
