@@ -11,7 +11,7 @@ use rand::{rngs::OsRng, RngCore};
 use zcash_primitives::{
     block::BlockHash,
     memo::Memo,
-    merkle_tree::{CommitmentTree, IncrementalWitness},
+    merkle_tree::{CommitmentTree, Hashable, IncrementalWitness},
     note_encryption::SaplingNoteEncryption,
     primitives::{Note, Rseed},
     sapling::Node,
@@ -35,6 +35,12 @@ pub fn tree_to_string(tree: &CommitmentTree<Node>) -> String {
 pub fn incw_to_string(inc_witness: &IncrementalWitness<Node>) -> String {
     let mut b1 = vec![];
     inc_witness.write(&mut b1).unwrap();
+    hex::encode(b1)
+}
+
+pub fn node_to_string(n: &Node) -> String {
+    let mut b1 = vec![];
+    n.write(&mut b1).unwrap();
     hex::encode(b1)
 }
 

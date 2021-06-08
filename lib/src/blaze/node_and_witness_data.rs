@@ -9,7 +9,6 @@ use crate::{
 use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
 use tokio::{
-    join,
     sync::{
         mpsc::{self, unbounded_channel, UnboundedReceiver, UnboundedSender},
         oneshot::{self, Sender},
@@ -742,6 +741,10 @@ impl NodeAndWitnessData {
                     }
                 }
             }
+
+            if !txid_found || !output_found {
+                panic!("Txid or output not found");
+            }
         }
 
         // Replace the last witness in the vector with the newly computed one.
@@ -759,14 +762,17 @@ mod test {
     use std::collections::HashMap;
 
     use futures::future::join_all;
-    use tokio::sync::oneshot;
+    use tokio::join;
+    use tokio::sync::mpsc::UnboundedSender;
+    use tokio::sync::oneshot::{self, Sender};
     use tokio::{sync::mpsc::unbounded_channel, task::JoinHandle};
     use zcash_primitives::consensus::BlockHeight;
     use zcash_primitives::merkle_tree::IncrementalWitness;
-    use zcash_primitives::{block::BlockHash, merkle_tree::CommitmentTree, sapling::Node};
+    use zcash_primitives::{block::BlockHash, merkle_tree::CommitmentTree};
 
     use crate::blaze::test_utils::{incw_to_string, list_all_witness_nodes, tree_to_string};
     use crate::compact_formats::TreeState;
+    use crate::lightwallet::data::WalletTx;
     use crate::{
         blaze::test_utils::{FakeCompactBlock, FakeCompactBlockList},
         lightclient::lightclient_config::LightClientConfig,
@@ -988,12 +994,20 @@ mod test {
         assert_eq!(finished_blks.last().unwrap().height, start_block - 100 + 1);
     }
 
-    #[tokio::test]
-    async fn note_witness() {
+    async fn setup_for_witness_tests(
+        num_blocks: u64,
+        uri_fetcher: UnboundedSender<(u64, Sender<Result<TreeState, String>>)>,
+    ) -> (
+        JoinHandle<Result<(), String>>,
+        Vec<BlockData>,
+        u64,
+        u64,
+        NodeAndWitnessData,
+    ) {
         let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
         config.sapling_activation_height = 1;
 
-        let blocks = FakeCompactBlockList::new(10).into();
+        let blocks = FakeCompactBlockList::new(num_blocks).into();
 
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
@@ -1001,17 +1015,7 @@ mod test {
         let mut nw = NodeAndWitnessData::new(&config);
         nw.setup_sync(vec![]).await;
 
-        let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
-
-        let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
-            if let Some(_req) = uri_fetcher_rx.recv().await {
-                return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
-            }
-
-            Ok(())
-        });
-
-        let (h, cb_sender) = nw.start(start_block, end_block, uri_fetcher).await;
+        let (h0, cb_sender) = nw.start(start_block, end_block, uri_fetcher).await;
 
         let send_blocks = blocks.clone();
         let send_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
@@ -1023,6 +1027,29 @@ mod test {
 
             Ok(())
         });
+
+        let h = tokio::spawn(async move {
+            let (r1, r2) = join!(h0, send_h);
+            r1.map_err(|e| format!("{}", e))??;
+            r2.map_err(|e| format!("{}", e))??;
+            Ok(())
+        });
+
+        (h, blocks, start_block, end_block, nw)
+    }
+
+    #[tokio::test]
+    async fn note_witness() {
+        let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
+        let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            if let Some(_req) = uri_fetcher_rx.recv().await {
+                return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
+            }
+
+            Ok(())
+        });
+
+        let (send_h, blocks, _, _, nw) = setup_for_witness_tests(10, uri_fetcher).await;
 
         // Get note witness from the very first block
         let test_h = tokio::spawn(async move {
@@ -1044,9 +1071,7 @@ mod test {
 
             // Test data is a triple of (block_height, tx_num and output_num). Note that block_height is the actual height
             // of the block, not the index in the blocks vec. tx_num and output_num are 0-indexed
-            let test_data = vec![
-                /*(1, 1, 1), (1, 0, 0), */ (10, 1, 1), /*, (10, 0, 0), (5, 0, 1), (5, 1, 0)*/
-            ];
+            let test_data = vec![(1, 1, 1), (1, 0, 0), (10, 1, 1), (10, 0, 0), (5, 0, 1), (5, 1, 0)];
 
             for (block_height, tx_num, output_num) in test_data {
                 let cb = blocks.iter().find(|b| b.height == block_height).unwrap().cb();
@@ -1077,7 +1102,89 @@ mod test {
             Ok(())
         });
 
-        join_all(vec![uri_h, h, send_h, test_h])
+        join_all(vec![uri_h, send_h, test_h])
+            .await
+            .into_iter()
+            .collect::<Result<Result<(), String>, _>>()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn note_witness_updates() {
+        let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
+        let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            if let Some(_req) = uri_fetcher_rx.recv().await {
+                return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
+            }
+
+            Ok(())
+        });
+
+        let (send_h, blocks, _, _, nw) = setup_for_witness_tests(10, uri_fetcher).await;
+
+        let test_h = tokio::spawn(async move {
+            let test_data = vec![(1, 1, 1), (1, 0, 0), (10, 1, 1), (10, 0, 0), (3, 0, 1), (5, 1, 0)];
+
+            for (block_height, tx_num, output_num) in test_data {
+                let cb = blocks.iter().find(|b| b.height == block_height).unwrap().cb();
+
+                // Get the Incremental witness for the note
+                let witness = nw
+                    .get_note_witness(BlockHeight::from_u32(block_height as u32), tx_num, output_num)
+                    .await;
+
+                // Update till end of block
+                let final_witness_1 = list_all_witness_nodes(&cb)
+                    .into_iter()
+                    .skip((tx_num) * 2 + output_num + 1)
+                    .fold(witness.clone(), |mut w, n| {
+                        w.append(n).unwrap();
+                        w
+                    });
+
+                // Update all subsequent blocks
+                let final_witness = blocks
+                    .iter()
+                    .rev()
+                    .skip_while(|b| b.height <= block_height)
+                    .flat_map(|b| list_all_witness_nodes(&b.cb()))
+                    .fold(final_witness_1, |mut w, n| {
+                        w.append(n).unwrap();
+                        w
+                    });
+
+                let txid = cb
+                    .vtx
+                    .iter()
+                    .enumerate()
+                    .skip_while(|(i, _)| *i < tx_num)
+                    .take(1)
+                    .next()
+                    .unwrap()
+                    .1
+                    .hash
+                    .clone();
+
+                let actual_final_witness = nw
+                    .update_witness_after_pos(
+                        &BlockHeight::from_u32(block_height as u32),
+                        &WalletTx::new_txid(&txid),
+                        output_num as u32,
+                        vec![witness],
+                    )
+                    .await
+                    .last()
+                    .unwrap()
+                    .clone();
+
+                assert_eq!(incw_to_string(&actual_final_witness), incw_to_string(&final_witness));
+            }
+
+            Ok(())
+        });
+
+        join_all(vec![uri_h, send_h, test_h])
             .await
             .into_iter()
             .collect::<Result<Result<(), String>, _>>()
