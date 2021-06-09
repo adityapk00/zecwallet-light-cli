@@ -6,6 +6,7 @@ use crate::lightwallet::{data::WalletTx, wallet_txns::WalletTxns};
 use futures::future::join_all;
 use log::info;
 use tokio::join;
+use tokio::sync::oneshot;
 use tokio::sync::{mpsc::unbounded_channel, RwLock};
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
@@ -84,6 +85,7 @@ impl UpdateNotes {
         fetch_full_sender: UnboundedSender<(TxId, BlockHeight)>,
     ) -> (
         JoinHandle<()>,
+        oneshot::Sender<u64>,
         UnboundedSender<(TxId, Nullifier, BlockHeight, Option<u32>)>,
     ) {
         println!("Starting Note Update processing");
@@ -95,12 +97,24 @@ impl UpdateNotes {
         let wallet_txns = self.wallet_txns.clone();
         let tx_existing = tx.clone();
         let start_block = BlockHeight::from_u32(bsync_data.read().await.earliest_block() as u32);
-        let h0 = tokio::spawn(async move {
-            // TODO: Wait for all nullifiers to be loaded and the reorgs to be settled before updating the existing notes
-            let notes = wallet_txns.read().await.get_notes_for_updating();
+
+        let (blocks_done_tx, blocks_done_rx) = oneshot::channel::<u64>();
+
+        let h0: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            // First, wait for notification that the blocks are done loading, and get the earliest block from there.
+            let earliest_block = blocks_done_rx
+                .await
+                .map_err(|e| format!("Error getting notification that blocks are done. {}", e))?;
+
+            // Get all notes from the wallet that are already existing, i.e., the ones that are before the earliest block that the block loader loaded
+            let notes = wallet_txns.read().await.get_notes_for_updating(earliest_block - 1);
             for (txid, nf) in notes {
-                tx_existing.send((txid, nf, start_block.clone(), None)).unwrap();
+                tx_existing
+                    .send((txid, nf, start_block.clone(), None))
+                    .map_err(|e| format!("Error sending note for updating: {}", e))?;
             }
+
+            Ok(())
         });
 
         let wallet_txns = self.wallet_txns.clone();
@@ -173,6 +187,6 @@ impl UpdateNotes {
             join!(h0, h1);
         });
 
-        return (h, tx);
+        return (h, blocks_done_tx, tx);
     }
 }

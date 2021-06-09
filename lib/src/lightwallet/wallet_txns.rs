@@ -139,12 +139,15 @@ impl WalletTxns {
         });
     }
 
-    pub fn get_notes_for_updating(&self) -> Vec<(TxId, Nullifier)> {
+    pub fn get_notes_for_updating(&self, before_block: u64) -> Vec<(TxId, Nullifier)> {
+        let before_block = BlockHeight::from_u32(before_block as u32);
+
         self.current
             .iter()
             .flat_map(|(txid, wtx)| {
+                // Fetch notes that are before the before_block.
                 wtx.notes.iter().filter_map(move |snd| {
-                    if snd.have_spending_key && snd.witnesses.len() > 0 {
+                    if wtx.block <= before_block && snd.have_spending_key && snd.witnesses.len() > 0 {
                         Some((txid.clone(), snd.nullifier.clone()))
                     } else {
                         None

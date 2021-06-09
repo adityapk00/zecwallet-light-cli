@@ -402,7 +402,7 @@ impl NodeAndWitnessData {
         start_block: u64,
         end_block: u64,
         uri_fetcher: UnboundedSender<(u64, oneshot::Sender<Result<TreeState, String>>)>,
-    ) -> (JoinHandle<Result<(), String>>, UnboundedSender<CompactBlock>) {
+    ) -> (JoinHandle<Result<u64, String>>, UnboundedSender<CompactBlock>) {
         println!("Starting node and witness sync");
 
         let sapling_activation_height = self.sapling_activation_height;
@@ -422,9 +422,10 @@ impl NodeAndWitnessData {
         // for further processing.
         // We also trigger the node commitment tree update every `batch_size` blocks using the Sapling tree fetched
         // from the server temporarily, but we verify it before we return it
-        let h0 = tokio::spawn(async move {
+        let h0: JoinHandle<Result<u64, String>> = tokio::spawn(async move {
             // Temporary holding place for blocks while we process them.
             let mut blks = vec![];
+            let mut earliest_block_height = 0;
 
             // We'll process 25_000 blocks at a time.
             while let Some(cb) = rx.recv().await {
@@ -436,15 +437,18 @@ impl NodeAndWitnessData {
                     }
                 }
 
+                earliest_block_height = cb.height;
                 blks.push(BlockData::new(cb));
             }
+
+            // TODO: Handle reorgs
 
             if !blks.is_empty() {
                 // We'll now dispatch these blocks for updating the witness
                 blk_tx.send(blks).map_err(|_| format!("Error sending"))?;
             }
 
-            Ok(())
+            Ok(earliest_block_height)
         });
 
         // Handle 1:
@@ -493,12 +497,17 @@ impl NodeAndWitnessData {
                 Ok(())
             });
 
-            let results = join_all(vec![h0, h1, h2, h3])
+            let earliest_block = h0.await.map_err(|e| format!("Error processing blocks: {}", e))??;
+
+            let results = join_all(vec![h1, h2, h3])
                 .await
                 .into_iter()
                 .collect::<Result<Result<(), String>, _>>();
 
-            results.map_err(|e| format!("Error joining all handles: {}", e))?
+            results.map_err(|e| format!("Error joining all handles: {}", e))??;
+
+            // Return the earlist block that was synced, accounting for all reorgs
+            return Ok(earliest_block);
         });
 
         return (h, tx);
@@ -865,7 +874,9 @@ mod test {
             Ok(())
         });
 
-        join_all(vec![uri_h, h, send_h])
+        assert_eq!(h.await.unwrap().unwrap(), end_block);
+
+        join_all(vec![uri_h, send_h])
             .await
             .into_iter()
             .collect::<Result<Result<(), String>, _>>()
@@ -970,7 +981,9 @@ mod test {
             Ok(())
         });
 
-        join_all(vec![uri_h, h, send_h])
+        assert_eq!(h.await.unwrap().unwrap(), end_block);
+
+        join_all(vec![uri_h, send_h])
             .await
             .into_iter()
             .collect::<Result<Result<(), String>, _>>()

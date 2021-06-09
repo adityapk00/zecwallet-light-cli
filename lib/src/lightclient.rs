@@ -1299,14 +1299,9 @@ impl LightClient {
             .start(fulltx_fetcher_tx, bsync_data.clone())
             .await;
 
-        // Fetch Transparent transactions
-        let taddr_txns_handle = FetchTaddrTxns::new(self.wallet.keys())
-            .start(start_block, end_block, taddr_fetcher_tx, fetch_taddr_txns_sender)
-            .await;
-
         // The processor to process Transactions detected by the trial decryptions processor
         let update_notes_processor = UpdateNotes::new(self.wallet.txns());
-        let (update_notes_handle, detected_txns_sender) = update_notes_processor
+        let (update_notes_handle, blocks_done_tx, detected_txns_sender) = update_notes_processor
             .start(bsync_data.clone(), fetch_full_tx_sender)
             .await;
 
@@ -1332,9 +1327,22 @@ impl LightClient {
                 .await
         });
 
+        // We wait first for the node's to be updated. This is where reorgs will be handled, so all the steps done after this phase will
+        // assume that the reorgs are done.
+        // TODO: Handle errors
+        let earliest_block = node_and_witness_handle.await.unwrap().unwrap();
+
+        // 1. Fetch the transparent txns only after reorgs are done.
+        let taddr_txns_handle = FetchTaddrTxns::new(self.wallet.keys())
+            .start(start_block, earliest_block, taddr_fetcher_tx, fetch_taddr_txns_sender)
+            .await;
+
+        // 2. Notify the notes updater that the blocks are done updating
+        blocks_done_tx.send(earliest_block).unwrap();
+
+        // Wait for everything to finish
         // TODO: Handle Errors
         let r0 = tokio::spawn(async move {
-            node_and_witness_handle.await.unwrap().unwrap();
             taddr_txns_handle.await.unwrap().unwrap();
         });
 

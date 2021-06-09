@@ -1,18 +1,12 @@
-use core::num;
-
 use crate::{
     compact_formats::{CompactBlock, CompactOutput, CompactTx},
     lightwallet::data::BlockData,
 };
-use group::GroupEncoding;
-use jubjub::ExtendedPoint;
 use prost::Message;
 use rand::{rngs::OsRng, RngCore};
 use zcash_primitives::{
     block::BlockHash,
-    memo::Memo,
     merkle_tree::{CommitmentTree, Hashable, IncrementalWitness},
-    note_encryption::SaplingNoteEncryption,
     primitives::{Note, Rseed},
     sapling::Node,
     transaction::components::Amount,
@@ -89,27 +83,16 @@ impl FakeCompactBlock {
 
         for _ in 0..num_outputs {
             // Create a fake Note for the account
-            let mut rng = OsRng;
             let note = Note {
                 g_d: to.diversifier().g_d().unwrap(),
                 pk_d: to.pk_d().clone(),
                 value: value.into(),
                 rseed: Rseed::AfterZip212(random_u8_32()),
             };
-            let encryptor = SaplingNoteEncryption::new(
-                Some(extfvk.fvk.ovk),
-                note.clone(),
-                to.clone(),
-                Memo::default().into(),
-                &mut rng,
-            );
-            let enc_ciphertext = encryptor.encrypt_note_plaintext();
 
             // Create a fake CompactBlock containing the note
             let mut cout = CompactOutput::default();
             cout.cmu = note.cmu().to_bytes().to_vec();
-            cout.epk = ExtendedPoint::from(*encryptor.epk()).to_bytes().to_vec();
-            cout.ciphertext = enc_ciphertext[..52].to_vec();
 
             ctx.outputs.push(cout);
         }
