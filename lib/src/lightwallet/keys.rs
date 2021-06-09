@@ -96,6 +96,22 @@ impl Keys {
         return 20;
     }
 
+    #[cfg(test)]
+    pub fn new_empty() -> Self {
+        let config = LightClientConfig::create_unconnected("mainnet".to_string(), None);
+        Self {
+            config,
+            encrypted: false,
+            unlocked: true,
+            enc_seed: [0; 48],
+            nonce: vec![],
+            seed: [0u8; 32],
+            zkeys: vec![],
+            tkeys: vec![],
+            taddresses: vec![],
+        }
+    }
+
     pub fn new(config: &LightClientConfig, seed_phrase: Option<String>) -> Result<Self, String> {
         let mut seed_bytes = [0u8; 32];
 

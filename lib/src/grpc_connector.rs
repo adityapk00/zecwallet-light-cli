@@ -8,7 +8,8 @@ use crate::compact_formats::{
 };
 use futures::future::join_all;
 use log::warn;
-use tokio::join;
+
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -59,9 +60,15 @@ impl GrpcConnector {
         &self,
     ) -> (
         JoinHandle<()>,
-        oneshot::Sender<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>,
+        oneshot::Sender<(
+            (Vec<String>, u64, u64),
+            oneshot::Sender<Vec<UnboundedReceiver<Result<RawTransaction, String>>>>,
+        )>,
     ) {
-        let (tx, rx) = oneshot::channel::<((Vec<String>, u64, u64), UnboundedSender<Result<RawTransaction, String>>)>();
+        let (tx, rx) = oneshot::channel::<(
+            (Vec<String>, u64, u64),
+            oneshot::Sender<Vec<UnboundedReceiver<Result<RawTransaction, String>>>>,
+        )>();
         let uri = self.uri.clone();
 
         let h = tokio::spawn(async move {
@@ -83,59 +90,11 @@ impl GrpcConnector {
                     )));
                 }
 
-                // Wait for all the t-addr transactions to be fetched from LightwalletD and sent to the h1 handle.
-                let h0 = tokio::spawn(async move { join_all(tx_rs_workers).await });
+                // Dispatch a set of recievers
+                result_tx.send(tx_rs).unwrap();
 
-                // Process every transparent address transaction, in order of height
-                let h1 = tokio::spawn(async move {
-                    // Now, read the transactions one-at-a-time, and then dispatch them in height order
-                    let mut txns_top = vec![];
-
-                    // Fill the array with the first transaction for every taddress
-                    for tx_r in tx_rs.iter_mut() {
-                        if let Some(Ok(txn)) = tx_r.recv().await {
-                            txns_top.push(Some(txn));
-                        } else {
-                            txns_top.push(None);
-                        }
-                    }
-
-                    // While at least one of them is still returning transactions
-                    while txns_top.iter().any(|t| t.is_some()) {
-                        // Find the txn with the lowest height
-                        let (_height, idx) =
-                            txns_top
-                                .iter()
-                                .enumerate()
-                                .fold((u64::MAX, 0), |(prev_height, prev_idx), (idx, t)| {
-                                    if let Some(txn) = t {
-                                        if txn.height < prev_height {
-                                            (txn.height, idx)
-                                        } else {
-                                            (prev_height, prev_idx)
-                                        }
-                                    } else {
-                                        (prev_height, prev_idx)
-                                    }
-                                });
-
-                        // Grab the tx at the index
-                        let txn = txns_top[idx].as_ref().unwrap().clone();
-
-                        // Replace the tx at the index that was just grabbed
-                        if let Some(Ok(txn)) = tx_rs[idx].recv().await {
-                            txns_top[idx] = Some(txn);
-                        } else {
-                            txns_top[idx] = None;
-                        }
-
-                        // Dispatch the result
-                        result_tx.send(Ok(txn)).unwrap();
-                    }
-                });
-
-                // Wait for senders and recievers
-                join!(h0, h1);
+                // // Wait for all the t-addr transactions to be fetched from LightwalletD and sent to the h1 handle.
+                join_all(tx_rs_workers).await;
             }
         });
 
