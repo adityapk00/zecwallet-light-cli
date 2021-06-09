@@ -132,7 +132,9 @@ mod test {
     use futures::future::join_all;
     use rand::Rng;
     use std::sync::Arc;
+    use tokio::join;
     use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::task::JoinError;
 
     use tokio::sync::oneshot::{self};
     use tokio::sync::RwLock;
@@ -160,9 +162,9 @@ mod test {
             oneshot::Sender<Vec<UnboundedReceiver<Result<RawTransaction, String>>>>,
         )>();
 
-        let h1: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+        let h1: JoinHandle<Result<i32, String>> = tokio::spawn(async move {
             let mut tx_rs = vec![];
-            let mut tx_rs_workers = vec![];
+            let mut tx_rs_workers: Vec<JoinHandle<i32>> = vec![];
 
             let ((taddrs, _, _), result_tx) = taddr_fetcher_rx.await.unwrap();
             assert_eq!(taddrs, gened_taddrs);
@@ -175,7 +177,10 @@ mod test {
                     // Send 100 RawTxns at a random (but sorted) heights
                     let mut rng = rand::thread_rng();
 
-                    let mut rtxs = (0..100)
+                    // Generate between 50 and 200 txns per taddr
+                    let num_txns = rng.gen_range(50, 200);
+
+                    let mut rtxs = (0..num_txns)
                         .into_iter()
                         .map(|_| rng.gen_range(1, 100))
                         .map(|h| {
@@ -194,32 +199,44 @@ mod test {
                     for rtx in rtxs {
                         tx_s.send(Ok(rtx)).unwrap();
                     }
+
+                    num_txns
                 }));
             }
 
             // Dispatch a set of recievers
             result_tx.send(tx_rs).unwrap();
-            Ok(())
+
+            let total = join_all(tx_rs_workers)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<i32>, JoinError>>()
+                .map_err(|e| format!("{}", e))?
+                .iter()
+                .sum();
+
+            Ok(total)
         });
 
         let (full_tx_scanner_tx, mut full_tx_scanner_rx) = unbounded_channel::<(Transaction, BlockHeight)>();
-        let h2: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+        let h2: JoinHandle<Result<i32, String>> = tokio::spawn(async move {
             let mut prev_height = BlockHeight::from_u32(0);
+            let mut total = 0;
             while let Some((_tx, h)) = full_tx_scanner_rx.recv().await {
                 if h < prev_height {
                     return Err(format!("Wrong height. prev = {}, current = {}", prev_height, h));
                 }
                 prev_height = h;
+                total += 1;
             }
-            Ok(())
+            Ok(total)
         });
 
         let h3 = ftt.start(1, 100, taddr_fetcher_tx, full_tx_scanner_tx).await;
-        join_all(vec![h1, h2, h3])
-            .await
-            .into_iter()
-            .collect::<Result<Result<(), String>, _>>()
-            .unwrap()
-            .unwrap();
+
+        let (total_sent, total_recieved) = join!(h1, h2);
+        assert_eq!(total_sent.unwrap().unwrap(), total_recieved.unwrap().unwrap());
+
+        h3.await.unwrap().unwrap();
     }
 }
