@@ -13,6 +13,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_rustls::rustls::ClientConfig;
+use tonic::transport::ClientTlsConfig;
 use tonic::{
     transport::{Channel, Error},
     Request,
@@ -30,7 +32,24 @@ impl GrpcConnector {
     }
 
     async fn get_client(&self) -> Result<CompactTxStreamerClient<Channel>, Error> {
-        let channel = Channel::builder(self.uri.clone()).connect().await?;
+        let channel = if self.uri.scheme_str() == Some("http") {
+            //println!("http");
+            Channel::builder(self.uri.clone()).connect().await?
+        } else {
+            //println!("https");
+            let mut config = ClientConfig::new();
+
+            config.alpn_protocols.push(b"h2".to_vec());
+            config
+                .root_store
+                .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+
+            let tls = ClientTlsConfig::new()
+                .rustls_client_config(config)
+                .domain_name(self.uri.host().unwrap());
+
+            Channel::builder(self.uri.clone()).tls_config(tls)?.connect().await?
+        };
 
         Ok(CompactTxStreamerClient::new(channel))
     }
@@ -248,7 +267,7 @@ impl GrpcConnector {
         Ok(response.into_inner())
     }
 
-    async fn get_sapling_tree(uri: http::Uri, height: u64) -> Result<TreeState, String> {
+    pub async fn get_sapling_tree(uri: http::Uri, height: u64) -> Result<TreeState, String> {
         let client = Arc::new(GrpcConnector::new(uri));
         let mut client = client
             .get_client()
