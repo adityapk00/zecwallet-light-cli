@@ -139,7 +139,7 @@ impl LightWallet {
         })
     }
 
-    pub fn read<R: Read>(mut reader: R, config: &LightClientConfig) -> io::Result<Self> {
+    pub async fn read<R: Read>(mut reader: R, config: &LightClientConfig) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
         if version > Self::serialized_version() {
             let e = format!(
@@ -204,7 +204,7 @@ impl LightWallet {
             WalletZecPriceInfo::read(&mut reader)?
         };
 
-        Ok(Self {
+        let lw = Self {
             keys: Arc::new(RwLock::new(keys)),
             txns: Arc::new(RwLock::new(txns)),
             blocks: Arc::new(RwLock::new(blocks)),
@@ -213,7 +213,15 @@ impl LightWallet {
             sapling_tree_verified: AtomicBool::new(sapling_tree_verified),
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
             price_info: Arc::new(RwLock::new(price_info)),
-        })
+        };
+
+        // For old wallets, remove unused addresses
+        if version <= 14 {
+            lw.remove_unused_taddrs().await;
+            lw.remove_unused_zaddrs().await;
+        }
+
+        Ok(lw)
     }
 
     pub async fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {

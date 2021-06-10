@@ -278,7 +278,7 @@ impl LightClient {
 
     pub fn read_from_buffer<R: Read>(config: &LightClientConfig, mut reader: R) -> io::Result<Self> {
         let l = Runtime::new().unwrap().block_on(async move {
-            let wallet = LightWallet::read(&mut reader, config)?;
+            let wallet = LightWallet::read(&mut reader, config).await?;
 
             let mut lc = LightClient {
                 wallet: wallet,
@@ -312,7 +312,7 @@ impl LightClient {
         let l = Runtime::new().unwrap().block_on(async move {
             let mut file_buffer = BufReader::new(File::open(config.get_wallet_path())?);
 
-            let wallet = LightWallet::read(&mut file_buffer, config)?;
+            let wallet = LightWallet::read(&mut file_buffer, config).await?;
 
             let mut lc = LightClient {
                 wallet: wallet,
