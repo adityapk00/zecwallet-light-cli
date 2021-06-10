@@ -1,6 +1,7 @@
-use std::mem;
-
 use arr_macro::arr;
+
+#[cfg(test)]
+use std::mem;
 
 #[derive(PartialEq, PartialOrd)]
 enum Node<T: PartialEq + Clone> {
@@ -10,6 +11,7 @@ enum Node<T: PartialEq + Clone> {
     LeafNode(LeafNode<T>),
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub struct NodeCount {
     empty: u64,
@@ -18,6 +20,7 @@ pub struct NodeCount {
     leaf: u64,
 }
 
+#[cfg(test)]
 impl NodeCount {
     pub fn new() -> Self {
         Self {
@@ -29,6 +32,7 @@ impl NodeCount {
     }
 }
 
+#[cfg(test)]
 impl<T: PartialEq + Clone> Node<T> {
     fn depth(&self) -> u64 {
         match self {
@@ -80,7 +84,10 @@ impl<T: PartialEq + Clone> SparseNode<T> {
             None
         }
     }
+}
 
+#[cfg(test)]
+impl<T: PartialEq + Clone> SparseNode<T> {
     fn count(&self, nc: &mut NodeCount) {
         nc.sparse += mem::size_of_val(self) as u64;
         nc.sparse += mem::size_of_val(&self.path) as u64;
@@ -179,7 +186,10 @@ impl<T: PartialEq + Clone> BranchNode<T> {
             Node::BranchNode(bn) => return bn.lookup(path.to_vec()),
         }
     }
+}
 
+#[cfg(test)]
+impl<T: PartialEq + Clone> BranchNode<T> {
     fn depth(&self) -> u64 {
         1 + self.nodes.iter().map(|n| n.depth()).max().unwrap()
     }
@@ -235,16 +245,19 @@ impl<T: PartialEq + Clone> SparseNullifierTree<T> {
         self.root.lookup(SparseNullifierTree::<T>::nullifier_to_path(nullifier))
     }
 
+    pub fn clear(&mut self) {
+        self.root = BranchNode::new();
+    }
+}
+
+#[cfg(test)]
+impl<T: PartialEq + Clone> SparseNullifierTree<T> {
     pub fn depth(&self) -> u64 {
         self.root.depth() - 1 // Don't count the root node as 1 depth
     }
 
     pub fn is_empty(&self) -> bool {
         self.depth() == 0
-    }
-
-    pub fn clear(&mut self) {
-        self.root = BranchNode::new();
     }
 
     pub fn count(&self, nc: &mut NodeCount) {

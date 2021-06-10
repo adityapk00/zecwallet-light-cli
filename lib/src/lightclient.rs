@@ -1337,7 +1337,6 @@ impl LightClient {
 
         // We wait first for the node's to be updated. This is where reorgs will be handled, so all the steps done after this phase will
         // assume that the reorgs are done.
-        // TODO: Handle errors
         let earliest_block = node_and_witness_handle.await.unwrap().unwrap();
 
         // 1. Fetch the transparent txns only after reorgs are done.
@@ -1355,8 +1354,6 @@ impl LightClient {
             join_all(vec![
                 nullifier_handle,
                 trial_decryptions_handle,
-                update_notes_handle,
-                fetch_full_txns_handle,
                 saplingtree_fetcher_handle,
                 fulltx_fetcher_handle,
                 taddr_fetcher_handle,
@@ -1367,11 +1364,17 @@ impl LightClient {
             .collect::<Result<(), _>>()
         });
 
-        join_all(vec![taddr_txns_handle, fetch_compact_blocks_handle, r1])
-            .await
-            .into_iter()
-            .map(|r| r.map_err(|e| format!("{}", e))?)
-            .collect::<Result<(), String>>()?;
+        join_all(vec![
+            update_notes_handle,
+            taddr_txns_handle,
+            fetch_compact_blocks_handle,
+            fetch_full_txns_handle,
+            r1,
+        ])
+        .await
+        .into_iter()
+        .map(|r| r.map_err(|e| format!("{}", e))?)
+        .collect::<Result<(), String>>()?;
 
         // Post sync, we have to do a bunch of stuff
         // 1. Get the last 100 blocks and store it into the wallet, needed for future re-orgs
@@ -1384,7 +1387,6 @@ impl LightClient {
         // 3. If sync was successfull, also try to get historical prices
         self.update_historical_prices().await;
 
-        // Wait for all the fetches to finish.
         Ok(object! {
             "result" => "success",
             "latest_block" => latest_block,

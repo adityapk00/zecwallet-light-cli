@@ -84,7 +84,7 @@ impl UpdateNotes {
         bsync_data: Arc<RwLock<BlazeSyncData>>,
         fetch_full_sender: UnboundedSender<(TxId, BlockHeight)>,
     ) -> (
-        JoinHandle<()>,
+        JoinHandle<Result<(), String>>,
         oneshot::Sender<u64>,
         UnboundedSender<(TxId, Nullifier, BlockHeight, Option<u32>)>,
     ) {
@@ -184,7 +184,9 @@ impl UpdateNotes {
         });
 
         let h = tokio::spawn(async move {
-            join!(h0, h1);
+            let (r0, r1) = join!(h0, h1);
+            r0.map_err(|e| format!("{}", e))??;
+            r1.map_err(|e| format!("{}", e))
         });
 
         return (h, blocks_done_tx, tx);

@@ -7,6 +7,7 @@ use crate::{
     },
 };
 
+use futures::future::join_all;
 use log::info;
 use std::{
     collections::HashSet,
@@ -15,7 +16,6 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    join,
     sync::{
         mpsc::{unbounded_channel, UnboundedSender},
         oneshot, RwLock,
@@ -54,7 +54,7 @@ impl FetchFullTxns {
         fulltx_fetcher: UnboundedSender<(TxId, oneshot::Sender<Result<Transaction, String>>)>,
         bsync_data: Arc<RwLock<BlazeSyncData>>,
     ) -> (
-        JoinHandle<()>,
+        JoinHandle<Result<(), String>>,
         UnboundedSender<(TxId, BlockHeight)>,
         UnboundedSender<(Transaction, BlockHeight)>,
     ) {
@@ -121,7 +121,11 @@ impl FetchFullTxns {
         });
 
         let h = tokio::spawn(async move {
-            join!(h1, h2);
+            join_all(vec![h1, h2])
+                .await
+                .into_iter()
+                .map(|r| r.map_err(|e| format!("{}", e))?)
+                .collect::<Result<(), String>>()
         });
 
         return (h, txid_tx, tx_tx);
