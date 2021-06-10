@@ -102,10 +102,10 @@ impl FetchTaddrTxns {
                 while let Some(rtx) = ordered_rtx_rx.recv().await {
                     // We should be reciving transactions strictly in height order, so make sure
                     if rtx.height < prev_height {
-                        panic!(
+                        return Err(format!(
                             "Wrong height order while processing transparent transactions!. Was {}, prev={}",
                             rtx.height, prev_height
-                        );
+                        ));
                     }
                     prev_height = rtx.height;
 

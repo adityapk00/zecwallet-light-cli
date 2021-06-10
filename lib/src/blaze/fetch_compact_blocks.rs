@@ -22,7 +22,7 @@ impl FetchCompactBlocks {
         receivers: &Vec<UnboundedSender<CompactBlock>>,
         start_block: u64,
         end_block: u64,
-    ) {
+    ) -> Result<(), String> {
         let grpc_client = Arc::new(GrpcConnector::new(self.config.server.clone()));
         const STEP: u64 = 10_000;
 
@@ -52,7 +52,11 @@ impl FetchCompactBlocks {
             });
 
             let (r1, r2) = join!(h1, h2);
+            r1.map_err(|e| format!("{}", e))??;
+            r2.map_err(|e| format!("{}", e))?;
         }
+
+        Ok(())
     }
 
     // Load all the blocks from LightwalletD
@@ -62,20 +66,21 @@ impl FetchCompactBlocks {
         start_block: u64,
         end_block: u64,
         mut reorg_rx: UnboundedReceiver<Option<u64>>,
-    ) {
+    ) -> Result<(), String> {
         if start_block < end_block {
-            panic!("Expected blocks in reverse order");
+            return Err(format!("Expected blocks in reverse order"));
         }
 
         println!("Starting fetch compact blocks");
-        self.fetch_blocks_range(&receivers, start_block, end_block).await;
+        self.fetch_blocks_range(&receivers, start_block, end_block).await?;
 
         // After fetching all the normal blocks, we actually wait to see if any re-org'd blocks are recieved
         while let Some(Some(reorg_block)) = reorg_rx.recv().await {
             // Fetch the additional block.
-            self.fetch_blocks_range(&receivers, reorg_block, reorg_block).await;
+            self.fetch_blocks_range(&receivers, reorg_block, reorg_block).await?;
         }
 
         println!("Finished fetch compact blocks, closing channels");
+        Ok(())
     }
 }

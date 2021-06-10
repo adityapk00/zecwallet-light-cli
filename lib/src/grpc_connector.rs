@@ -130,7 +130,6 @@ impl GrpcConnector {
         let uri = self.uri.clone();
 
         let h = tokio::spawn(async move {
-            let uri = uri.clone();
             while let Some((txid, result_tx)) = rx.recv().await {
                 result_tx.send(Self::get_full_tx(uri.clone(), &txid).await).unwrap()
             }

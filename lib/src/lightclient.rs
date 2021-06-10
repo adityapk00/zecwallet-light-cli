@@ -1349,29 +1349,29 @@ impl LightClient {
         blocks_done_tx.send(earliest_block).unwrap();
 
         // Wait for everything to finish
-        // TODO: Handle Errors
-        let r0 = tokio::spawn(async move {
-            taddr_txns_handle.await.unwrap().unwrap();
-        });
 
         // Await all the futures
-        let r: Result<(), _> = join_all(vec![
-            nullifier_handle,
-            fetch_compact_blocks_handle,
-            trial_decryptions_handle,
-            update_notes_handle,
-            fetch_full_txns_handle,
-            saplingtree_fetcher_handle,
-            fulltx_fetcher_handle,
-            taddr_fetcher_handle,
-            r0,
-        ])
-        .await
-        .into_iter()
-        .collect();
+        let r1 = tokio::spawn(async move {
+            join_all(vec![
+                nullifier_handle,
+                trial_decryptions_handle,
+                update_notes_handle,
+                fetch_full_txns_handle,
+                saplingtree_fetcher_handle,
+                fulltx_fetcher_handle,
+                taddr_fetcher_handle,
+            ])
+            .await
+            .into_iter()
+            .map(|r| r.map_err(|e| format!("{}", e)))
+            .collect::<Result<(), _>>()
+        });
 
-        // TODO: Handle error
-        r.unwrap();
+        join_all(vec![taddr_txns_handle, fetch_compact_blocks_handle, r1])
+            .await
+            .into_iter()
+            .map(|r| r.map_err(|e| format!("{}", e))?)
+            .collect::<Result<(), String>>()?;
 
         // Post sync, we have to do a bunch of stuff
         // 1. Get the last 100 blocks and store it into the wallet, needed for future re-orgs
