@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use log::{info, LevelFilter};
+use log::{error, info, LevelFilter};
 use log4rs::{
     append::rolling_file::{
         policy::compound::{roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy},
@@ -214,10 +214,29 @@ impl LightClientConfig {
         log_path.into_boxed_path()
     }
 
-    pub fn get_initial_state(&self, height: u64) -> Option<(u64, String, String)> {
-        match checkpoints::get_closest_checkpoint(&self.chain_name, height) {
-            Some((height, hash, tree)) => Some((height, hash.to_string(), tree.to_string())),
-            None => None,
+    pub async fn get_initial_state(&self, height: u64) -> Option<(u64, String, String)> {
+        if height <= self.sapling_activation_height {
+            return checkpoints::get_closest_checkpoint(&self.chain_name, height)
+                .map(|(height, hash, tree)| (height, hash.to_string(), tree.to_string()));
+        }
+
+        // We'll get the initial state from the server. Get it at height - 100 blocks, so there is no risk
+        // of a reorg
+        let fetch_height = std::cmp::max(height - 100, self.sapling_activation_height);
+        info!("Getting sapling tree from LightwalletD at height {}", fetch_height);
+        match GrpcConnector::get_sapling_tree(self.server.clone(), fetch_height).await {
+            Ok(tree_state) => {
+                let hash = tree_state.hash.clone();
+                let tree = tree_state.tree.clone();
+                Some((tree_state.height, hash, tree))
+            }
+            Err(e) => {
+                error!("Error getting sapling tree:{}\nWill return checkpoint instead.", e);
+                match checkpoints::get_closest_checkpoint(&self.chain_name, height) {
+                    Some((height, hash, tree)) => Some((height, hash.to_string(), tree.to_string())),
+                    None => None,
+                }
+            }
         }
     }
 

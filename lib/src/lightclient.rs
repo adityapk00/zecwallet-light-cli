@@ -181,15 +181,13 @@ impl LightClient {
     }
 
     pub async fn set_wallet_initial_state(&self, height: u64) {
-        use std::convert::TryInto;
-
-        let state = self.config.get_initial_state(height);
+        let state = self.config.get_initial_state(height).await;
 
         match state {
             Some((height, hash, tree)) => {
                 info!("Setting initial state to height {}, tree {}", height, tree);
                 self.wallet
-                    .set_initial_block(height.try_into().unwrap(), &hash.as_str(), &tree.as_str())
+                    .set_initial_block(height, &hash.as_str(), &tree.as_str())
                     .await;
             }
             _ => {}
