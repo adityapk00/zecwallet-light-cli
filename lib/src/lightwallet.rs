@@ -872,10 +872,7 @@ impl LightWallet {
                 .iter_mut()
                 .filter(|utxo| utxo.spent.is_some() && utxo.spent_at_height.is_none())
                 .for_each(|utxo| {
-                    utxo.spent_at_height = spent_txid_map.get(&utxo.spent.unwrap()).map(|b| {
-                        let h: u32 = (*b).into();
-                        h as i32
-                    });
+                    utxo.spent_at_height = spent_txid_map.get(&utxo.spent.unwrap()).map(|b| u32::from(*b) as i32);
                 })
         });
     }
@@ -1068,8 +1065,8 @@ impl LightWallet {
 
         if selected_value < u64::from(target_value) {
             let e = format!(
-                "Insufficient verified funds (have {}, need {:?}). NOTE: funds need {} confirmations before they can be spent.",
-                selected_value, target_value, self.config.anchor_offset + 1
+                "Insufficient verified funds. Have {} zats, need {} zats. NOTE: funds need {} confirmations before they can be spent.",
+                selected_value, u64::from(target_value), self.config.anchor_offset + 1
             );
             error!("{}", e);
             return Err(e);

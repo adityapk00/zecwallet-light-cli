@@ -602,7 +602,7 @@ impl NodeAndWitnessData {
     }
 
     pub async fn get_block_timestamp(&self, height: &BlockHeight) -> u32 {
-        let height = (*height).into();
+        let height = u64::from(*height);
         self.wait_for_block(height).await;
 
         {
@@ -620,15 +620,12 @@ impl NodeAndWitnessData {
     ) -> IncrementalWitness<Node> {
         // Get the previous block's height, because that block's sapling tree is the tree state at the start
         // of the requested block.
-        let prev_height = {
-            let height: u64 = height.into();
-            height - 1
-        };
+        let prev_height = { u64::from(height) - 1 };
 
         let (cb, mut tree) = {
             // First, get the current compact block
             let cb = {
-                let height = height.into();
+                let height = u64::from(height);
                 self.wait_for_block(height).await;
 
                 {
@@ -691,7 +688,7 @@ impl NodeAndWitnessData {
         height: &BlockHeight,
         witnesses: Vec<IncrementalWitness<Node>>,
     ) -> Vec<IncrementalWitness<Node>> {
-        let height = (*height).into();
+        let height = u64::from(*height);
 
         // Check if we've already synced all the requested blocks
         if height > self.wait_for_first_block().await {
@@ -744,7 +741,7 @@ impl NodeAndWitnessData {
         output_num: u32,
         mut witnesses: Vec<IncrementalWitness<Node>>,
     ) -> Vec<IncrementalWitness<Node>> {
-        let height = (*height).into();
+        let height = u64::from(*height);
         self.wait_for_block(height).await;
 
         // We'll update the rest of the block's witnesses here. Notice we pop the last witness, and we'll
