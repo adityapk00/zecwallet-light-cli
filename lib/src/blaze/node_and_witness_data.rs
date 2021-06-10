@@ -4,7 +4,10 @@ use crate::{
         checkpoints,
         lightclient_config::{LightClientConfig, MAX_REORG},
     },
-    lightwallet::data::{BlockData, WalletTx},
+    lightwallet::{
+        data::{BlockData, WalletTx},
+        wallet_txns::WalletTxns,
+    },
 };
 use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
@@ -126,6 +129,7 @@ impl NodeAndWitnessData {
         verification_list: Arc<RwLock<Vec<TreeState>>>,
         start_block: u64,
         end_block: u64,
+        actual_end_block: u64,
     ) -> Result<(), String> {
         if blocks.read().await.is_empty() {
             return Ok(());
@@ -133,12 +137,15 @@ impl NodeAndWitnessData {
 
         // Verify everything in the verification_list
         {
+            assert!(actual_end_block <= end_block);
+
             let verification_list = verification_list.read().await;
             let blocks = blocks.read().await;
             if blocks.first().unwrap().height != start_block {
                 return Err(format!("Wrong start block!"));
             }
-            if blocks.last().unwrap().height != end_block {
+
+            if blocks.last().unwrap().height != actual_end_block {
                 return Err(format!("Wrong end block!"));
             }
 
@@ -173,7 +180,7 @@ impl NodeAndWitnessData {
         // Verify all the blocks are in order
         {
             let blocks = blocks.read().await;
-            if blocks.len() as u64 != start_block - end_block + 1 {
+            if blocks.len() as u64 != start_block - actual_end_block + 1 {
                 return Err(format!("Wrong number of blocks"));
             }
 
@@ -304,7 +311,8 @@ impl NodeAndWitnessData {
             panic!("Block Data queue at the end of processing was not empty!");
         }
 
-        Self::verify_sapling_tree(blocks, verification_list, start_block, end_block).await
+        let actual_end_block = blocks.read().await.last().unwrap().height;
+        Self::verify_sapling_tree(blocks, verification_list, start_block, end_block, actual_end_block).await
     }
 
     // Process block batches sent on `blk_rx`. These blocks don't have the block's `CommitmentTree` yet,
@@ -396,12 +404,30 @@ impl NodeAndWitnessData {
         Ok(())
     }
 
+    // Invalidate the block (and wallet txns associated with it) at the given block height
+    pub async fn invalidate_block(
+        reorg_height: u64,
+        existing_blocks: Arc<RwLock<Vec<BlockData>>>,
+        wallet_txns: Arc<RwLock<WalletTxns>>,
+    ) {
+        // First, pop the first block (which is the top block) in the existing_blocks.
+        let top_wallet_block = existing_blocks.write().await.drain(0..1).next().unwrap();
+        if top_wallet_block.height != reorg_height {
+            panic!("Wrong block reorg'd");
+        }
+
+        // Remove all wallet txns at the height
+        wallet_txns.write().await.remove_txns_at_height(reorg_height);
+    }
+
     /// Start a new sync where we ingest all the blocks
     pub async fn start(
         &self,
         start_block: u64,
         end_block: u64,
+        wallet_txns: Arc<RwLock<WalletTxns>>,
         uri_fetcher: UnboundedSender<(u64, oneshot::Sender<Result<TreeState, String>>)>,
+        reorg_tx: UnboundedSender<Option<u64>>,
     ) -> (JoinHandle<Result<u64, String>>, UnboundedSender<CompactBlock>) {
         println!("Starting node and witness sync");
 
@@ -422,10 +448,14 @@ impl NodeAndWitnessData {
         // for further processing.
         // We also trigger the node commitment tree update every `batch_size` blocks using the Sapling tree fetched
         // from the server temporarily, but we verify it before we return it
+        let existing_blocks = self.existing_blocks.clone();
         let h0: JoinHandle<Result<u64, String>> = tokio::spawn(async move {
             // Temporary holding place for blocks while we process them.
             let mut blks = vec![];
             let mut earliest_block_height = 0;
+
+            // Reorg stuff
+            let mut last_block_expecting = end_block;
 
             // We'll process 25_000 blocks at a time.
             while let Some(cb) = rx.recv().await {
@@ -437,11 +467,35 @@ impl NodeAndWitnessData {
                     }
                 }
 
+                // Check if this is the last block we are expecting
+                if cb.height == last_block_expecting {
+                    // Check to see if the prev block's hash matches, and if it does, finish the task
+                    let reorg_block = match existing_blocks.read().await.first() {
+                        Some(top_block) => {
+                            if top_block.hash == cb.prev_hash().to_string() {
+                                None
+                            } else {
+                                // send a reorg signal
+                                Some(top_block.height)
+                            }
+                        }
+                        None => {
+                            // There is no top wallet block, so we can't really check for reorgs.
+                            None
+                        }
+                    };
+
+                    // If there was a reorg, then we need to invalidate the block and its associated txns
+                    if let Some(reorg_height) = reorg_block {
+                        Self::invalidate_block(reorg_height, existing_blocks.clone(), wallet_txns.clone()).await;
+                        last_block_expecting = reorg_height;
+                    }
+                    reorg_tx.send(reorg_block).unwrap();
+                }
+
                 earliest_block_height = cb.height;
                 blks.push(BlockData::new(cb));
             }
-
-            // TODO: Handle reorgs
 
             if !blks.is_empty() {
                 // We'll now dispatch these blocks for updating the witness
@@ -769,11 +823,15 @@ impl NodeAndWitnessData {
 #[cfg(test)]
 mod test {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use futures::future::join_all;
+    use rand::rngs::OsRng;
+    use rand::RngCore;
     use tokio::join;
     use tokio::sync::mpsc::UnboundedSender;
     use tokio::sync::oneshot::{self, Sender};
+    use tokio::sync::RwLock;
     use tokio::{sync::mpsc::unbounded_channel, task::JoinHandle};
     use zcash_primitives::consensus::BlockHeight;
     use zcash_primitives::merkle_tree::IncrementalWitness;
@@ -782,6 +840,7 @@ mod test {
     use crate::blaze::test_utils::{incw_to_string, list_all_witness_nodes, tree_to_string};
     use crate::compact_formats::TreeState;
     use crate::lightwallet::data::WalletTx;
+    use crate::lightwallet::wallet_txns::WalletTxns;
     use crate::{
         blaze::test_utils::{FakeCompactBlock, FakeCompactBlockList},
         lightclient::lightclient_config::LightClientConfig,
@@ -853,7 +912,7 @@ mod test {
         nw.setup_sync(vec![]).await;
 
         let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
-
+        let (reorg_tx, mut reorg_rx) = unbounded_channel();
         let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
             if let Some(_req) = uri_fetcher_rx.recv().await {
                 return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
@@ -862,7 +921,15 @@ mod test {
             Ok(())
         });
 
-        let (h, cb_sender) = nw.start(start_block, end_block, uri_fetcher).await;
+        let (h, cb_sender) = nw
+            .start(
+                start_block,
+                end_block,
+                Arc::new(RwLock::new(WalletTxns::new())),
+                uri_fetcher,
+                reorg_tx,
+            )
+            .await;
 
         let send_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
             for block in blocks {
@@ -870,7 +937,9 @@ mod test {
                     .send(block.cb())
                     .map_err(|e| format!("Couldn't send block: {}", e))?;
             }
-
+            if let Some(Some(_h)) = reorg_rx.recv().await {
+                return Err(format!("Should not have requested a reorg!"));
+            }
             Ok(())
         });
 
@@ -969,7 +1038,17 @@ mod test {
             Ok(())
         });
 
-        let (h, cb_sender) = nw.start(start_block, end_block, uri_fetcher).await;
+        let (reorg_tx, mut reorg_rx) = unbounded_channel();
+
+        let (h, cb_sender) = nw
+            .start(
+                start_block,
+                end_block,
+                Arc::new(RwLock::new(WalletTxns::new())),
+                uri_fetcher,
+                reorg_tx,
+            )
+            .await;
 
         let send_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
             for block in blocks {
@@ -977,11 +1056,173 @@ mod test {
                     .send(block.cb())
                     .map_err(|e| format!("Couldn't send block: {}", e))?;
             }
-
+            if let Some(Some(_h)) = reorg_rx.recv().await {
+                return Err(format!("Should not have requested a reorg!"));
+            }
             Ok(())
         });
 
         assert_eq!(h.await.unwrap().unwrap(), end_block);
+
+        join_all(vec![uri_h, send_h])
+            .await
+            .into_iter()
+            .collect::<Result<Result<(), String>, _>>()
+            .unwrap()
+            .unwrap();
+
+        // Make sure the witnesses are correct
+        nw.blocks
+            .read()
+            .await
+            .iter()
+            .zip(calc_witnesses.into_iter().take(150)) // We're only expecting 150 blocks, since the first 50 are existing
+            .for_each(|(bd, (w, w_h))| {
+                assert_eq!(bd.height, w_h);
+                assert_eq!(tree_to_string(bd.tree.as_ref().unwrap()), tree_to_string(&w));
+            });
+
+        let finished_blks = nw.finish_get_blocks(100).await;
+        assert_eq!(finished_blks.len(), 100);
+        assert_eq!(finished_blks.first().unwrap().height, start_block);
+        assert_eq!(finished_blks.last().unwrap().height, start_block - 100 + 1);
+    }
+
+    #[tokio::test]
+    async fn with_reorg() {
+        let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
+        config.sapling_activation_height = 1;
+
+        let mut blocks = FakeCompactBlockList::new(100).into();
+
+        // Blocks are in reverse order
+        assert!(blocks.first().unwrap().height > blocks.last().unwrap().height);
+
+        // Calculate the Witnesses manually, but do it reversed, because they have to be calculated from lowest height to tallest height
+        let calc_witnesses: Vec<_> = blocks
+            .iter()
+            .rev()
+            .scan(CommitmentTree::empty(), |witness, b| {
+                for node in list_all_witness_nodes(&b.cb()) {
+                    witness.append(node).unwrap();
+                }
+
+                Some((witness.clone(), b.height))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        // Use the first 50 blocks as "existing", and then sync the other 50 blocks.
+        let mut existing_blocks = blocks.split_off(50);
+
+        // The first 5 blocks, blocks 46-50 will be reorg'd, so duplicate them
+        let num_reorged = 5;
+        let mut reorged_blocks = existing_blocks
+            .iter()
+            .take(num_reorged)
+            .map(|b| b.clone())
+            .collect::<Vec<_>>();
+
+        // Reset the hashes
+        for i in 0..num_reorged {
+            let mut hash = [0u8; 32];
+            OsRng.fill_bytes(&mut hash);
+
+            if i == 0 {
+                let mut cb = blocks.pop().unwrap().cb();
+                cb.prev_hash = hash.to_vec();
+                blocks.push(BlockData::new(cb));
+            } else {
+                let mut cb = reorged_blocks[i - 1].cb();
+                cb.prev_hash = hash.to_vec();
+                reorged_blocks[i - 1] = BlockData::new(cb);
+            }
+
+            let mut cb = reorged_blocks[i].cb();
+            cb.hash = hash.to_vec();
+            reorged_blocks[i] = BlockData::new(cb);
+        }
+        {
+            let mut cb = reorged_blocks[4].cb();
+            cb.prev_hash = existing_blocks
+                .iter()
+                .find(|b| b.height == 45)
+                .unwrap()
+                .cb()
+                .hash
+                .to_vec();
+            reorged_blocks[4] = BlockData::new(cb);
+        }
+
+        let start_block = blocks.first().unwrap().height;
+        let end_block = blocks.last().unwrap().height;
+
+        // The sapling tree for block 45, which will be used after all the reorgs are done.
+        let first_tree = calc_witnesses
+            .iter()
+            .find(|(_, h)| *h == 45)
+            .map(|(t, _h)| t.clone())
+            .unwrap();
+
+        // Put the tree that is going to be requested from the existing blocks
+        existing_blocks.iter_mut().find(|b| b.height == 45).unwrap().tree = Some(first_tree);
+
+        let mut nw = NodeAndWitnessData::new(&config);
+        nw.setup_sync(existing_blocks).await;
+
+        let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
+        let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            if let Some(_req) = uri_fetcher_rx.recv().await {
+                return Err(format!("Should not have requested a TreeState from the URI fetcher!"));
+            }
+
+            Ok(())
+        });
+
+        let (reorg_tx, mut reorg_rx) = unbounded_channel();
+
+        let (h, cb_sender) = nw
+            .start(
+                start_block,
+                end_block,
+                Arc::new(RwLock::new(WalletTxns::new())),
+                uri_fetcher,
+                reorg_tx,
+            )
+            .await;
+
+        let send_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            // Send the normal blocks
+            for block in blocks {
+                cb_sender
+                    .send(block.cb())
+                    .map_err(|e| format!("Couldn't send block: {}", e))?;
+            }
+
+            // Expect and send the reorg'd blocks
+            let mut expecting_height = 50;
+            let mut sent_ctr = 0;
+
+            while let Some(Some(h)) = reorg_rx.recv().await {
+                assert_eq!(h, expecting_height);
+
+                expecting_height -= 1;
+                sent_ctr += 1;
+
+                cb_sender
+                    .send(reorged_blocks.drain(0..1).next().unwrap().cb())
+                    .map_err(|e| format!("Couldn't send block: {}", e))?;
+            }
+
+            assert_eq!(sent_ctr, num_reorged);
+            assert!(reorged_blocks.is_empty());
+
+            Ok(())
+        });
+
+        assert_eq!(h.await.unwrap().unwrap(), end_block - num_reorged as u64);
 
         join_all(vec![uri_h, send_h])
             .await
@@ -1028,7 +1269,17 @@ mod test {
         let mut nw = NodeAndWitnessData::new(&config);
         nw.setup_sync(vec![]).await;
 
-        let (h0, cb_sender) = nw.start(start_block, end_block, uri_fetcher).await;
+        let (reorg_tx, mut reorg_rx) = unbounded_channel();
+
+        let (h0, cb_sender) = nw
+            .start(
+                start_block,
+                end_block,
+                Arc::new(RwLock::new(WalletTxns::new())),
+                uri_fetcher,
+                reorg_tx,
+            )
+            .await;
 
         let send_blocks = blocks.clone();
         let send_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
@@ -1037,7 +1288,9 @@ mod test {
                     .send(block.cb())
                     .map_err(|e| format!("Couldn't send block: {}", e))?;
             }
-
+            if let Some(Some(_h)) = reorg_rx.recv().await {
+                return Err(format!("Should not have requested a reorg!"));
+            }
             Ok(())
         });
 

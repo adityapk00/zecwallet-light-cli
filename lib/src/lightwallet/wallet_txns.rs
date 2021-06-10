@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{self, Read, Write},
 };
 
@@ -137,6 +137,70 @@ impl WalletTxns {
                 }
             })
         });
+    }
+
+    // During reorgs, we need to remove all txns at a given height, and all spends that refer to any removed txns.
+    pub fn remove_txns_at_height(&mut self, reorg_height: u64) {
+        let reorg_height = BlockHeight::from_u32(reorg_height as u32);
+
+        // First, emove entire transactions
+        let txids_to_remove = self
+            .current
+            .values()
+            .filter_map(|wtx| {
+                if wtx.block >= reorg_height {
+                    Some(wtx.txid.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<TxId>>();
+
+        for txid in &txids_to_remove {
+            self.current.remove(&txid);
+        }
+
+        // We also need to update any sapling note data and utxos in existing transactions that
+        // were spent in any of the txids that were removed
+        self.current.values_mut().for_each(|wtx| {
+            // Update notes to rollback any spent notes
+            wtx.notes.iter_mut().for_each(|nd| {
+                if nd.spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap().0) {
+                    nd.spent = None;
+                }
+
+                // This is not going to happen, but do it for completeness.
+                if nd.unconfirmed_spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap().0) {
+                    nd.unconfirmed_spent = None;
+                }
+            });
+
+            // Update UTXOs to rollback any spent utxos
+            wtx.utxos.iter_mut().for_each(|utxo| {
+                if utxo.spent.is_some() && txids_to_remove.contains(&utxo.spent.unwrap()) {
+                    utxo.spent = None;
+                    utxo.spent_at_height = None;
+                }
+
+                if utxo.unconfirmed_spent.is_some() && txids_to_remove.contains(&utxo.unconfirmed_spent.unwrap().0) {
+                    utxo.unconfirmed_spent = None;
+                }
+            })
+        });
+
+        // Of the notes that still remain, unroll the witness.
+        // Trim all witnesses for the invalidated blocks
+        for tx in self.current.values_mut() {
+            // We only want to trim the witness for "existing" notes, i.e., notes that were created before the block that is being removed
+            if tx.block < reorg_height {
+                for nd in tx.notes.iter_mut() {
+                    // The latest witness is at the last() position, so just pop() it.
+                    // We should be checking if there is a witness at all, but if there is none, it is an
+                    // empty vector, for which pop() is a no-op.
+                    let _discard = nd.witnesses.pop();
+                }
+            }
+        }
     }
 
     pub fn get_notes_for_updating(&self, before_block: u64) -> Vec<(TxId, Nullifier)> {

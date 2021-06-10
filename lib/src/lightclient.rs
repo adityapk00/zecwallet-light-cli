@@ -1279,12 +1279,21 @@ impl LightClient {
         let grpc_connector = GrpcConnector::new(uri);
         let (saplingtree_fetcher_handle, saplingtree_fetcher_tx) = grpc_connector.start_saplingtree_fetcher().await;
 
+        // A signal to detect reorgs, and if so, ask the block_fetcher to fetch new blocks.
+        let (reorg_tx, reorg_rx) = unbounded_channel();
+
         // Node and Witness Data Cache
         let (node_and_witness_handle, node_and_witness_data_sender) = bsync_data
             .read()
             .await
             .node_data
-            .start(start_block, end_block, saplingtree_fetcher_tx)
+            .start(
+                start_block,
+                end_block,
+                self.wallet.txns(),
+                saplingtree_fetcher_tx,
+                reorg_tx,
+            )
             .await;
 
         // Full Tx GRPC fetcher
@@ -1323,6 +1332,7 @@ impl LightClient {
                     ],
                     start_block,
                     end_block,
+                    reorg_rx,
                 )
                 .await
         });
