@@ -94,13 +94,7 @@ impl NodeAndWitnessData {
     }
 
     pub async fn get_ctx_for_nf_at_height(&self, nullifier: &Nullifier, height: u64) -> (CompactTx, u32) {
-        while self.blocks.read().await.is_empty() {
-            yield_now().await;
-        }
-
-        while self.blocks.read().await.last().unwrap().height > height {
-            yield_now().await;
-        }
+        self.wait_for_block(height).await;
 
         let cb = {
             let blocks = self.blocks.read().await;
@@ -567,14 +561,24 @@ impl NodeAndWitnessData {
         return (h, tx);
     }
 
-    pub(crate) async fn is_nf_spent(&self, nf: Nullifier, after_height: u64) -> Option<u64> {
+    async fn wait_for_first_block(&self) -> u64 {
         while self.blocks.read().await.is_empty() {
             yield_now().await;
         }
 
-        while self.blocks.read().await.last().unwrap().height > after_height {
+        self.blocks.read().await.first().unwrap().height
+    }
+
+    async fn wait_for_block(&self, height: u64) {
+        self.wait_for_first_block().await;
+
+        while self.blocks.read().await.last().unwrap().height > height {
             yield_now().await;
         }
+    }
+
+    pub(crate) async fn is_nf_spent(&self, nf: Nullifier, after_height: u64) -> Option<u64> {
+        self.wait_for_block(after_height).await;
 
         {
             // Read Lock
@@ -599,13 +603,7 @@ impl NodeAndWitnessData {
 
     pub async fn get_block_timestamp(&self, height: &BlockHeight) -> u32 {
         let height = (*height).into();
-        while self.blocks.read().await.is_empty() {
-            yield_now().await;
-        }
-
-        while self.blocks.read().await.last().unwrap().height > height {
-            yield_now().await;
-        }
+        self.wait_for_block(height).await;
 
         {
             let blocks = self.blocks.read().await;
@@ -631,13 +629,7 @@ impl NodeAndWitnessData {
             // First, get the current compact block
             let cb = {
                 let height = height.into();
-                while self.blocks.read().await.is_empty() {
-                    yield_now().await;
-                }
-
-                while self.blocks.read().await.last().unwrap().height > height {
-                    yield_now().await;
-                }
+                self.wait_for_block(height).await;
 
                 {
                     let blocks = self.blocks.read().await;
@@ -660,10 +652,7 @@ impl NodeAndWitnessData {
                 } else if !existing_blocks.is_empty() && existing_blocks.first().unwrap().height == prev_height {
                     existing_blocks.first().unwrap().tree.as_ref().unwrap().clone()
                 } else {
-                    while self.blocks.read().await.last().unwrap().height > prev_height {
-                        println!("Yield 3");
-                        yield_now().await;
-                    }
+                    self.wait_for_block(prev_height).await;
 
                     {
                         let blocks = self.blocks.read().await;
@@ -704,18 +693,12 @@ impl NodeAndWitnessData {
     ) -> Vec<IncrementalWitness<Node>> {
         let height = (*height).into();
 
-        while self.blocks.read().await.is_empty() {
-            yield_now().await;
-        }
-
         // Check if we've already synced all the requested blocks
-        if height > self.blocks.read().await.first().unwrap().height {
+        if height > self.wait_for_first_block().await {
             return witnesses;
         }
 
-        while self.blocks.read().await.last().unwrap().height > height {
-            yield_now().await;
-        }
+        self.wait_for_block(height).await;
 
         let mut fsb = FixedSizeBuffer::new(MAX_REORG);
 
@@ -762,13 +745,7 @@ impl NodeAndWitnessData {
         mut witnesses: Vec<IncrementalWitness<Node>>,
     ) -> Vec<IncrementalWitness<Node>> {
         let height = (*height).into();
-        while self.blocks.read().await.is_empty() {
-            yield_now().await;
-        }
-
-        while self.blocks.read().await.last().unwrap().height > height {
-            yield_now().await;
-        }
+        self.wait_for_block(height).await;
 
         // We'll update the rest of the block's witnesses here. Notice we pop the last witness, and we'll
         // add the updated one back into the array at the end of this function.
