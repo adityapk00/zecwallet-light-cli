@@ -1294,6 +1294,7 @@ impl LightClient {
             "Latest block is {}, wallet block is {}",
             latest_block, last_scanned_height
         );
+
         if last_scanned_height == latest_block {
             info!("Already at latest block, not syncing");
             return Ok(object! { "result" => "success" });
@@ -1311,8 +1312,10 @@ impl LightClient {
             .await
             .setup_for_sync(start_block, end_block, self.wallet.get_blocks().await)
             .await;
+
         // 2. Update the current price
         self.update_current_price().await;
+        let price = self.wallet.price_info.read().await.clone();
 
         // Create the Nullifier Cache
         let (nullifier_handle, nullifier_data_sender) = bsync_data.read().await.nullifier_data.start().await;
@@ -1345,19 +1348,20 @@ impl LightClient {
         let (taddr_fetcher_handle, taddr_fetcher_tx) = grpc_connector.start_taddr_txn_fetcher().await;
 
         // The processor to fetch the full transactions, and decode the memos and the outgoing metadata
-        let fetch_full_tx_processor = FetchFullTxns::new(&self.config, self.wallet.keys(), self.wallet.txns());
+        let fetch_full_tx_processor =
+            FetchFullTxns::new(&self.config, self.wallet.keys(), self.wallet.txns(), price.clone());
         let (fetch_full_txns_handle, fetch_full_tx_sender, fetch_taddr_txns_sender) = fetch_full_tx_processor
             .start(fulltx_fetcher_tx, bsync_data.clone())
             .await;
 
         // The processor to process Transactions detected by the trial decryptions processor
-        let update_notes_processor = UpdateNotes::new(self.wallet.txns());
+        let update_notes_processor = UpdateNotes::new(self.wallet.txns(), price.clone());
         let (update_notes_handle, blocks_done_tx, detected_txns_sender) = update_notes_processor
             .start(bsync_data.clone(), fetch_full_tx_sender)
             .await;
 
         // Do Trial decryptions of all the sapling outputs, and pass on the successful ones to the update_notes processor
-        let trial_decryptions_processor = TrialDecryptions::new(self.wallet.keys(), self.wallet.txns());
+        let trial_decryptions_processor = TrialDecryptions::new(self.wallet.keys(), self.wallet.txns(), price.clone());
         let (trial_decryptions_handle, trial_decryptions_sender) = trial_decryptions_processor
             .start(bsync_data.clone(), detected_txns_sender)
             .await;

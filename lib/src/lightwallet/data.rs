@@ -543,14 +543,14 @@ impl WalletTx {
         return 20;
     }
 
-    pub fn new(height: BlockHeight, datetime: u64, txid: &TxId, price: &Option<(u64, f64)>) -> Self {
-        let zec_price = match price {
+    pub fn new(height: BlockHeight, datetime: u64, txid: &TxId, price: &WalletZecPriceInfo) -> Self {
+        let zec_price = match price.zec_price {
             None => None,
             Some((t, p)) => {
                 // If the price was fetched within 24 hours of this Tx, we use the "current" price
                 // else, we mark it as None, for the historical price fetcher to get
-                if (*t as i64 - datetime as i64).abs() < 24 * 60 * 60 {
-                    Some(*p)
+                if (t as i64 - datetime as i64).abs() < 24 * 60 * 60 {
+                    Some(p)
                 } else {
                     None
                 }

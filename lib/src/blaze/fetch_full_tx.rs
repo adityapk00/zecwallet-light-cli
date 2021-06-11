@@ -1,7 +1,7 @@
 use crate::{
     lightclient::lightclient_config::LightClientConfig,
     lightwallet::{
-        data::OutgoingTxMetadata,
+        data::{OutgoingTxMetadata, WalletZecPriceInfo},
         keys::{Keys, ToBase58Check},
         wallet_txns::WalletTxns,
     },
@@ -38,14 +38,21 @@ pub struct FetchFullTxns {
     config: LightClientConfig,
     keys: Arc<RwLock<Keys>>,
     wallet_txns: Arc<RwLock<WalletTxns>>,
+    price: WalletZecPriceInfo,
 }
 
 impl FetchFullTxns {
-    pub fn new(config: &LightClientConfig, keys: Arc<RwLock<Keys>>, wallet_txns: Arc<RwLock<WalletTxns>>) -> Self {
+    pub fn new(
+        config: &LightClientConfig,
+        keys: Arc<RwLock<Keys>>,
+        wallet_txns: Arc<RwLock<WalletTxns>>,
+        price: WalletZecPriceInfo,
+    ) -> Self {
         Self {
             config: config.clone(),
             keys,
             wallet_txns,
+            price,
         }
     }
 
@@ -61,6 +68,7 @@ impl FetchFullTxns {
         let wallet_txns = self.wallet_txns.clone();
         let keys = self.keys.clone();
         let config = self.config.clone();
+        let price = self.price.clone();
 
         let start_height = bsync_data.read().await.sync_status.read().await.start_block;
         let end_height = bsync_data.read().await.sync_status.read().await.end_block;
@@ -104,7 +112,7 @@ impl FetchFullTxns {
                     last_progress = progress;
                 }
 
-                Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns).await?;
+                Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns, &price).await?;
             }
 
             info!("Finished fetching all full transactions");
@@ -116,6 +124,8 @@ impl FetchFullTxns {
         let wallet_txns = self.wallet_txns.clone();
         let keys = self.keys.clone();
         let config = self.config.clone();
+        let price = self.price.clone();
+
         let (tx_tx, mut tx_rx) = unbounded_channel::<(Transaction, BlockHeight)>();
 
         let h2: JoinHandle<Result<(), String>> = tokio::spawn(async move {
@@ -128,7 +138,7 @@ impl FetchFullTxns {
 
                 let block_time = bsync_data.read().await.node_data.get_block_timestamp(&height).await;
 
-                Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns).await?;
+                Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns, &price).await?;
             }
 
             Ok(())
@@ -152,6 +162,7 @@ impl FetchFullTxns {
         block_time: u32,
         keys: Arc<RwLock<Keys>>,
         wallet_txns: Arc<RwLock<WalletTxns>>,
+        price: &WalletZecPriceInfo,
     ) -> Result<(), String> {
         // Collect our t-addresses for easy checking
         let taddrs = keys.read().await.get_all_taddrs();
@@ -170,7 +181,7 @@ impl FetchFullTxns {
                             output_taddr.clone(),
                             height.into(),
                             block_time as u64,
-                            &None,
+                            price,
                             &vout,
                             n as u32,
                         );
@@ -231,7 +242,7 @@ impl FetchFullTxns {
                 tx.txid(),
                 height,
                 block_time as u64,
-                &None,
+                price,
                 total_transparent_value_spent,
             );
         }

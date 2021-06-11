@@ -16,7 +16,7 @@ use zcash_primitives::{
     zip32::ExtendedFullViewingKey,
 };
 
-use super::data::{OutgoingTxMetadata, SaplingNoteData, Utxo, WalletTx};
+use super::data::{OutgoingTxMetadata, SaplingNoteData, Utxo, WalletTx, WalletZecPriceInfo};
 
 /// List of all transactions in a wallet.
 /// Note that the parent is expected to hold a RwLock, so we will assume that all accesses to
@@ -293,7 +293,7 @@ impl WalletTxns {
         nullifier: Nullifier,
         value: u64,
         source_txid: TxId,
-        price: &Option<(u64, f64)>,
+        price: &WalletZecPriceInfo,
     ) {
         if !self.current.contains_key(&txid) {
             self.current
@@ -335,7 +335,7 @@ impl WalletTxns {
         txid: TxId,
         height: BlockHeight,
         timestamp: u64,
-        price: &Option<(u64, f64)>,
+        price: &WalletZecPriceInfo,
         total_transparent_value_spent: u64,
     ) {
         if !self.current.contains_key(&txid) {
@@ -383,7 +383,7 @@ impl WalletTxns {
         taddr: String,
         height: u32,
         timestamp: u64,
-        price: &Option<(u64, f64)>,
+        price: &WalletZecPriceInfo,
         vout: &TxOut,
         output_num: u32,
     ) {
@@ -425,7 +425,7 @@ impl WalletTxns {
         extfvk: &ExtendedFullViewingKey,
         have_spending_key: bool,
         witness: IncrementalWitness<Node>,
-        price: &Option<(u64, f64)>,
+        price: &WalletZecPriceInfo,
     ) {
         if !self.current.contains_key(&txid) {
             self.current

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::lightclient::lightclient_config::MAX_REORG;
+use crate::lightwallet::data::WalletZecPriceInfo;
 use crate::lightwallet::{data::WalletTx, wallet_txns::WalletTxns};
 
 use futures::future::join_all;
@@ -27,11 +28,15 @@ use super::syncdata::BlazeSyncData;
 ///    - Update the witness for this note
 pub struct UpdateNotes {
     wallet_txns: Arc<RwLock<WalletTxns>>,
+    price_info: WalletZecPriceInfo,
 }
 
 impl UpdateNotes {
-    pub fn new(wallet_txns: Arc<RwLock<WalletTxns>>) -> Self {
-        Self { wallet_txns }
+    pub fn new(wallet_txns: Arc<RwLock<WalletTxns>>, price_info: WalletZecPriceInfo) -> Self {
+        Self {
+            wallet_txns,
+            price_info,
+        }
     }
 
     async fn update_witnesses(
@@ -90,6 +95,7 @@ impl UpdateNotes {
     ) {
         info!("Starting Note Update processing");
 
+        let zec_price = self.price_info.clone();
         // Create a new channel where we'll be notified of TxIds that are to be processed
         let (tx, mut rx) = unbounded_channel::<(TxId, Nullifier, BlockHeight, Option<u32>)>();
 
@@ -148,10 +154,15 @@ impl UpdateNotes {
                         .mark_txid_nf_spent(txid, &nf, &spent_txid, spent_at_height);
 
                     // Record the future tx, the one that has spent the nullifiers recieved in this Tx in the wallet
-                    wallet_txns
-                        .write()
-                        .await
-                        .add_new_spent(spent_txid, spent_at_height, ts, nf, value, txid, &None);
+                    wallet_txns.write().await.add_new_spent(
+                        spent_txid,
+                        spent_at_height,
+                        ts,
+                        nf,
+                        value,
+                        txid,
+                        &zec_price,
+                    );
 
                     // Send the future Tx to be fetched too, in case it has only spent nullifiers and not recieved any change
                     fetch_full_sender.send((spent_txid, spent_at_height)).unwrap();

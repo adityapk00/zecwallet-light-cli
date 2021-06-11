@@ -1,6 +1,10 @@
 use crate::{
     compact_formats::CompactBlock,
-    lightwallet::{data::WalletTx, keys::Keys, wallet_txns::WalletTxns},
+    lightwallet::{
+        data::{WalletTx, WalletZecPriceInfo},
+        keys::Keys,
+        wallet_txns::WalletTxns,
+    },
 };
 use futures::future;
 use log::info;
@@ -25,11 +29,16 @@ use super::syncdata::BlazeSyncData;
 pub struct TrialDecryptions {
     keys: Arc<RwLock<Keys>>,
     wallet_txns: Arc<RwLock<WalletTxns>>,
+    price: WalletZecPriceInfo,
 }
 
 impl TrialDecryptions {
-    pub fn new(keys: Arc<RwLock<Keys>>, wallet_txns: Arc<RwLock<WalletTxns>>) -> Self {
-        Self { keys, wallet_txns }
+    pub fn new(keys: Arc<RwLock<Keys>>, wallet_txns: Arc<RwLock<WalletTxns>>, price: WalletZecPriceInfo) -> Self {
+        Self {
+            keys,
+            wallet_txns,
+            price,
+        }
     }
 
     pub async fn start(
@@ -44,6 +53,7 @@ impl TrialDecryptions {
 
         let keys = self.keys.clone();
         let wallet_txns = self.wallet_txns.clone();
+        let price = self.price.clone();
 
         // Get all the FVKs (used when we actually detect an incoming payment) and ivks (to do the detection iteself)
         let extfvks = Arc::new(keys.read().await.get_all_extfvks());
@@ -65,6 +75,7 @@ impl TrialDecryptions {
                 let keys = keys.clone();
                 let wallet_txns = wallet_txns.clone();
                 let bsync_data = bsync_data.clone();
+                let price = price.clone();
 
                 let detected_txid_sender = detected_txid_sender.clone();
 
@@ -108,7 +119,7 @@ impl TrialDecryptions {
                                         &extfvks.get(i).unwrap(),
                                         have_spending_key,
                                         witness,
-                                        &None,
+                                        &price,
                                     );
 
                                     info!("Trial decrypt Detected txid {}", &txid);

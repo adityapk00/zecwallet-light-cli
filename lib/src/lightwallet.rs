@@ -1268,7 +1268,7 @@ impl LightWallet {
                 height.into(),
                 now() as u64,
                 &tx.txid(),
-                &self.price_info.read().await.zec_price,
+                &self.price_info.read().await.clone(),
             );
             wtx.outgoing_metadata = outgoing_metadata;
 
