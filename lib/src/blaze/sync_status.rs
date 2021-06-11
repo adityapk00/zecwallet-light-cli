@@ -3,7 +3,7 @@ use std::cmp;
 
 #[derive(Clone, Debug, Default)]
 pub struct SyncStatus {
-    in_progress: bool,
+    pub in_progress: bool,
 
     pub sync_id: u64,
     pub start_block: u64,
