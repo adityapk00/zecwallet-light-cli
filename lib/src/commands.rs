@@ -89,7 +89,7 @@ impl Command for SyncStatusCommand {
             let status = lightclient.do_sync_status().await;
 
             let o = object! {
-                "syncing" => "true",
+                "sync_id" => status.sync_id,
                 "witness_block" => status.blocks_tree_done,
                 "synced_blocks" => status.blocks_done,
                 "trial_decryptions_blocks" => status.trial_dec_done,
