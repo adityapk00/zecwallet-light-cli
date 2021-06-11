@@ -1,7 +1,8 @@
 use crate::{
     blaze::{
         fetch_compact_blocks::FetchCompactBlocks, fetch_full_tx::FetchFullTxns, fetch_taddr_txns::FetchTaddrTxns,
-        syncdata::BlazeSyncData, trial_decryptions::TrialDecryptions, update_notes::UpdateNotes,
+        sync_status::SyncStatus, syncdata::BlazeSyncData, trial_decryptions::TrialDecryptions,
+        update_notes::UpdateNotes,
     },
     grpc_connector::GrpcConnector,
     lightclient::lightclient_config::MAX_REORG,
@@ -16,11 +17,13 @@ use std::{
     io::{self, BufReader, Error, ErrorKind, Read, Write},
     path::Path,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 use tokio::{
     join,
     runtime::Runtime,
-    sync::{mpsc::unbounded_channel, Mutex},
+    sync::{mpsc::unbounded_channel, oneshot, Mutex},
+    time::sleep,
 };
 use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
 use zcash_primitives::{
@@ -1200,8 +1203,36 @@ impl LightClient {
         }
     }
 
-    pub async fn do_sync(&self, _print_updates: bool) -> Result<JsonValue, String> {
-        self.start_sync().await
+    pub async fn do_sync_status(&self) -> SyncStatus {
+        self.bsync_data.read().await.sync_status.read().await.clone()
+    }
+
+    pub async fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
+        // Start the sync
+        let r_fut = self.start_sync();
+
+        // If printing updates, start a new task to print updates every 2 seconds.
+        if print_updates {
+            let bsync_data = self.bsync_data.clone();
+            let (tx, mut rx) = oneshot::channel();
+
+            tokio::spawn(async move {
+                loop {
+                    println!("{:?}", bsync_data.read().await.sync_status.read().await);
+                    sleep(Duration::from_secs(2)).await;
+                    if let Ok(_t) = rx.try_recv() {
+                        break;
+                    }
+                }
+                println!("Sync finished, exiting");
+            });
+
+            let r = r_fut.await;
+            tx.send(1).unwrap();
+            r
+        } else {
+            r_fut.await
+        }
     }
 
     /// start_sync will start synchronizing the blockchain from the wallet's last height. This function will return immediately after starting the sync

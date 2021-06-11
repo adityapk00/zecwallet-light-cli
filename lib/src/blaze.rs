@@ -3,6 +3,7 @@ pub(super) mod fetch_full_tx;
 pub(super) mod fetch_taddr_txns;
 pub(super) mod node_and_witness_data;
 pub(super) mod nullifier_data;
+pub(super) mod sync_status;
 pub(super) mod syncdata;
 pub(super) mod trial_decryptions;
 pub(super) mod update_notes;

@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
+use log::info;
 use std::sync::Arc;
 use tokio::{
     sync::{
@@ -27,7 +28,7 @@ use zcash_primitives::{
     transaction::TxId,
 };
 
-use super::fixed_size_buffer::FixedSizeBuffer;
+use super::{fixed_size_buffer::FixedSizeBuffer, sync_status::SyncStatus};
 
 pub struct NodeAndWitnessData {
     // List of all blocks and their hashes/commitment trees. Stored from smallest block height to tallest block height
@@ -43,23 +44,27 @@ pub struct NodeAndWitnessData {
     // How many blocks to process at a time.
     batch_size: u64,
 
+    // Link to the syncstatus where we can update progress
+    sync_status: Arc<RwLock<SyncStatus>>,
+
     sapling_activation_height: u64,
 }
 
 impl NodeAndWitnessData {
-    pub fn new(config: &LightClientConfig) -> Self {
+    pub fn new(config: &LightClientConfig, sync_status: Arc<RwLock<SyncStatus>>) -> Self {
         Self {
             blocks: Arc::new(RwLock::new(vec![])),
             existing_blocks: Arc::new(RwLock::new(vec![])),
             verification_list: Arc::new(RwLock::new(vec![])),
             batch_size: 25_000,
+            sync_status,
             sapling_activation_height: config.sapling_activation_height,
         }
     }
 
     #[cfg(test)]
     pub fn new_with_batchsize(config: &LightClientConfig, batch_size: u64) -> Self {
-        let mut s = Self::new(config);
+        let mut s = Self::new(config, Arc::new(RwLock::new(SyncStatus::new())));
         s.batch_size = batch_size;
 
         s
@@ -168,7 +173,7 @@ impl NodeAndWitnessData {
                 }
             }
 
-            println!("Sapling Tree verification succeeded!");
+            info!("Sapling Tree verification succeeded!");
         }
 
         // Verify all the blocks are in order
@@ -322,6 +327,7 @@ impl NodeAndWitnessData {
         existing_blocks: Arc<RwLock<Vec<BlockData>>>,
         workers: Arc<RwLock<FuturesUnordered<JoinHandle<Result<(), String>>>>>,
         total_workers_tx: Sender<usize>,
+        sync_status: Arc<RwLock<SyncStatus>>,
         sapling_activation_height: u64,
     ) -> Result<(), String> {
         let mut total = 0;
@@ -333,6 +339,7 @@ impl NodeAndWitnessData {
             let verification_list = verification_list.clone();
             let processed_tx = processed_tx.clone();
             let uri_fetcher = uri_fetcher.clone();
+            let sync_status = sync_status.clone();
 
             total += 1;
             workers.read().await.push(tokio::spawn(async move {
@@ -385,11 +392,14 @@ impl NodeAndWitnessData {
                     b.tree = Some(tree.clone());
                 }
 
-                // Step 4: We'd normally just add the processed blocks to the vec, but the batch processing might
+                // Step 4: Update progress
+                sync_status.write().await.blocks_tree_done += blks.len() as u64;
+
+                // Step 5: We'd normally just add the processed blocks to the vec, but the batch processing might
                 // happen out-of-order, so we dispatch it to another thread to be added to the blocks properly.
                 processed_tx.send(blks).map_err(|_| format!("Error sending")).unwrap();
 
-                println!("Processed witness for blocks {}-{}", start, end);
+                info!("Processed block witness for blocks {}-{}", start, end);
                 Ok::<(), String>(())
             }));
         }
@@ -423,7 +433,7 @@ impl NodeAndWitnessData {
         uri_fetcher: UnboundedSender<(u64, oneshot::Sender<Result<TreeState, String>>)>,
         reorg_tx: UnboundedSender<Option<u64>>,
     ) -> (JoinHandle<Result<u64, String>>, UnboundedSender<CompactBlock>) {
-        println!("Starting node and witness sync");
+        info!("Starting node and witness sync");
 
         let sapling_activation_height = self.sapling_activation_height;
         let batch_size = self.batch_size;
@@ -436,6 +446,9 @@ impl NodeAndWitnessData {
 
         let (processed_tx, processed_rx) = unbounded_channel::<Vec<BlockData>>();
         let (blk_tx, blk_rx) = unbounded_channel::<Vec<BlockData>>();
+
+        let sync_status = self.sync_status.clone();
+        sync_status.write().await.blocks_total = start_block - end_block + 1;
 
         // Handle 0:
         // Process the incoming compact blocks, collect them into `BlockData` and pass them on
@@ -456,7 +469,9 @@ impl NodeAndWitnessData {
                 if cb.height % batch_size == 0 {
                     if !blks.is_empty() {
                         // We'll now dispatch these blocks for updating the witness
+                        sync_status.write().await.blocks_done += blks.len() as u64;
                         blk_tx.send(blks).map_err(|_| format!("Error sending"))?;
+
                         blks = vec![];
                     }
                 }
@@ -493,6 +508,7 @@ impl NodeAndWitnessData {
 
             if !blks.is_empty() {
                 // We'll now dispatch these blocks for updating the witness
+                sync_status.write().await.blocks_done += blks.len() as u64;
                 blk_tx.send(blks).map_err(|_| format!("Error sending"))?;
             }
 
@@ -505,6 +521,7 @@ impl NodeAndWitnessData {
         // of the block.
         let workers = Arc::new(RwLock::new(FuturesUnordered::new()));
         let (total_workers_tx, total_workers_rx) = oneshot::channel();
+        let sync_status = self.sync_status.clone();
         let h1 = tokio::spawn(Self::process_blocks_with_commitment_tree(
             uri_fetcher,
             blk_rx,
@@ -513,6 +530,7 @@ impl NodeAndWitnessData {
             self.existing_blocks.clone(),
             workers.clone(),
             total_workers_tx,
+            sync_status,
             sapling_activation_height,
         ));
 
@@ -811,6 +829,7 @@ mod test {
     use zcash_primitives::merkle_tree::IncrementalWitness;
     use zcash_primitives::{block::BlockHash, merkle_tree::CommitmentTree};
 
+    use crate::blaze::sync_status::SyncStatus;
     use crate::blaze::test_utils::{incw_to_string, list_all_witness_nodes, tree_to_string};
     use crate::compact_formats::TreeState;
     use crate::lightwallet::data::WalletTx;
@@ -825,7 +844,10 @@ mod test {
 
     #[tokio::test]
     async fn setup_finish_simple() {
-        let mut nw = NodeAndWitnessData::new(&LightClientConfig::create_unconnected("main".to_string(), None));
+        let mut nw = NodeAndWitnessData::new_with_batchsize(
+            &LightClientConfig::create_unconnected("main".to_string(), None),
+            25_000,
+        );
 
         let cb = FakeCompactBlock::new(1, BlockHash([0u8; 32])).into();
         let blks = vec![BlockData::new(cb)];
@@ -839,7 +861,10 @@ mod test {
 
     #[tokio::test]
     async fn setup_finish_large() {
-        let mut nw = NodeAndWitnessData::new(&LightClientConfig::create_unconnected("main".to_string(), None));
+        let mut nw = NodeAndWitnessData::new_with_batchsize(
+            &LightClientConfig::create_unconnected("main".to_string(), None),
+            25_000,
+        );
 
         let existing_blocks = FakeCompactBlockList::new(200).into();
         nw.setup_sync(existing_blocks.clone()).await;
@@ -882,7 +907,8 @@ mod test {
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
 
-        let mut nw = NodeAndWitnessData::new(&config);
+        let sync_status = Arc::new(RwLock::new(SyncStatus::new()));
+        let mut nw = NodeAndWitnessData::new(&config, sync_status);
         nw.setup_sync(vec![]).await;
 
         let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
@@ -1143,7 +1169,8 @@ mod test {
         // Put the tree that is going to be requested from the existing blocks
         existing_blocks.iter_mut().find(|b| b.height == 45).unwrap().tree = Some(first_tree);
 
-        let mut nw = NodeAndWitnessData::new(&config);
+        let sync_status = Arc::new(RwLock::new(SyncStatus::new()));
+        let mut nw = NodeAndWitnessData::new(&config, sync_status);
         nw.setup_sync(existing_blocks).await;
 
         let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
@@ -1240,7 +1267,8 @@ mod test {
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
 
-        let mut nw = NodeAndWitnessData::new(&config);
+        let sync_status = Arc::new(RwLock::new(SyncStatus::new()));
+        let mut nw = NodeAndWitnessData::new(&config, sync_status);
         nw.setup_sync(vec![]).await;
 
         let (reorg_tx, mut reorg_rx) = unbounded_channel();

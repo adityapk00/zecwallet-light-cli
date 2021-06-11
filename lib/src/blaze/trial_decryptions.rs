@@ -37,7 +37,7 @@ impl TrialDecryptions {
         bsync_data: Arc<RwLock<BlazeSyncData>>,
         detected_txid_sender: UnboundedSender<(TxId, Nullifier, BlockHeight, Option<u32>)>,
     ) -> (JoinHandle<()>, UnboundedSender<CompactBlock>) {
-        println!("Starting trial decrptions processor");
+        info!("Starting trial decrptions processor");
 
         // Create a new channel where we'll receive the blocks
         let (tx, mut rx) = unbounded_channel::<CompactBlock>();
@@ -53,6 +53,8 @@ impl TrialDecryptions {
             let mut workers = vec![];
             let mut tasks = vec![];
 
+            let sync_status = bsync_data.read().await.sync_status.clone();
+
             while let Some(cb) = rx.recv().await {
                 let height = BlockHeight::from_u32(cb.height as u32);
 
@@ -63,6 +65,7 @@ impl TrialDecryptions {
                 let keys = keys.clone();
                 let wallet_txns = wallet_txns.clone();
                 let bsync_data = bsync_data.clone();
+
                 let detected_txid_sender = detected_txid_sender.clone();
 
                 tasks.push(tokio::spawn(async move {
@@ -125,21 +128,24 @@ impl TrialDecryptions {
                     Some(())
                 }));
 
-                // Every 10_000 transactions, wait for them to execute
+                // Every 10_000 blocks, send them off to execute
                 if tasks.len() > 10_000 {
                     let exec_tasks = tasks.split_off(0);
+
+                    sync_status.write().await.trial_dec_done += exec_tasks.len() as u64;
                     workers.push(tokio::spawn(async move { future::join_all(exec_tasks).await }));
 
-                    println!("Finished 10_000 trial decryptions, at block {}", height);
+                    info!("Finished 10_000 trial decryptions, at block {}", height);
                 }
             }
 
             drop(detected_txid_sender);
 
+            sync_status.write().await.trial_dec_done += tasks.len() as u64;
             workers.push(tokio::spawn(async move { future::join_all(tasks.into_iter()).await }));
             future::join_all(workers).await;
 
-            println!("Finished final trial decryptions");
+            info!("Finished final trial decryptions");
         });
 
         return (h, tx);

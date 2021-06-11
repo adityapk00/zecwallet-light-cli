@@ -1,4 +1,5 @@
 use crate::compact_formats::CompactBlock;
+use log::info;
 use std::sync::{atomic::AtomicU64, Arc};
 use tokio::{
     sync::{
@@ -30,7 +31,7 @@ impl NullifierData {
     }
 
     pub async fn start(&self) -> (JoinHandle<()>, UnboundedSender<CompactBlock>) {
-        println!("Starting nullifier_data");
+        info!("Starting nullifier_data");
 
         // Create a new channel where we'll receive the blocks
         let (tx, mut rx) = mpsc::unbounded_channel::<CompactBlock>();
@@ -58,7 +59,7 @@ impl NullifierData {
                     yield_now().await;
                     nf_tree = nullifier_tree.write().await;
 
-                    println!("Nullifiers finished adding upto block {}", last_height);
+                    info!("Nullifiers finished adding upto block {}", last_height);
                 }
             }
 

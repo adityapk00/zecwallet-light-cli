@@ -3,6 +3,7 @@ use std::{cmp::max, sync::Arc};
 use crate::{
     compact_formats::CompactBlock, grpc_connector::GrpcConnector, lightclient::lightclient_config::LightClientConfig,
 };
+use log::info;
 use tokio::{
     join,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -34,7 +35,7 @@ impl FetchCompactBlocks {
                 panic!("Wrong block order");
             }
 
-            println!("Fetching blocks {}-{}", start, end);
+            info!("Fetching blocks {}-{}", start, end);
 
             let grpc_client = grpc_client.clone();
             let receivers = receivers.clone();
@@ -71,7 +72,7 @@ impl FetchCompactBlocks {
             return Err(format!("Expected blocks in reverse order"));
         }
 
-        println!("Starting fetch compact blocks");
+        info!("Starting fetch compact blocks");
         self.fetch_blocks_range(&receivers, start_block, end_block).await?;
 
         // After fetching all the normal blocks, we actually wait to see if any re-org'd blocks are recieved
@@ -80,7 +81,7 @@ impl FetchCompactBlocks {
             self.fetch_blocks_range(&receivers, reorg_block, reorg_block).await?;
         }
 
-        println!("Finished fetch compact blocks, closing channels");
+        info!("Finished fetch compact blocks, closing channels");
         Ok(())
     }
 }

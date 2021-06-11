@@ -95,7 +95,7 @@ impl FetchFullTxns {
                 Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns).await?;
             }
 
-            println!("Finished fetching all full transactions");
+            info!("Finished fetching all full transactions");
             Ok(())
         });
 

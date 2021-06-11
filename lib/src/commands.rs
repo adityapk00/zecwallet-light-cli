@@ -85,16 +85,18 @@ impl Command for SyncStatusCommand {
     }
 
     fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
-        // let status = lightclient.do_scan_status();
-        // match status.is_syncing {
-        //     false => object! { "syncing" => "false" },
-        //     true => object! { "syncing" => "true",
-        //     "synced_blocks" => status.synced_blocks,
-        //     "total_blocks" => status.total_blocks },
-        // }
-        // .pretty(2)
-        // TODO
-        "".to_string()
+        RT.block_on(async move {
+            let status = lightclient.do_sync_status().await;
+
+            let o = object! {
+                "syncing" => "true",
+                "witness_block" => status.blocks_tree_done,
+                "synced_blocks" => status.blocks_done,
+                "trial_decryptions_blocks" => status.trial_dec_done,
+                "total_blocks" => status.blocks_total,
+            };
+            o.pretty(2)
+        })
     }
 }
 

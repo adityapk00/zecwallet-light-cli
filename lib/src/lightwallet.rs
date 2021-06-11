@@ -1156,7 +1156,6 @@ impl LightWallet {
                 progress.write().await.progress = r;
             }
 
-            println!("Progress finished");
             progress.write().await.is_send_in_progress = false;
         });
 
