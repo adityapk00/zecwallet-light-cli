@@ -23,6 +23,7 @@ use tokio::{
     join,
     runtime::Runtime,
     sync::{mpsc::unbounded_channel, oneshot, Mutex},
+    task::yield_now,
     time::sleep,
 };
 use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
@@ -1208,23 +1209,32 @@ impl LightClient {
     }
 
     pub async fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
+        // Remember the previous sync id first
+        let prev_sync_id = self.bsync_data.read().await.sync_status.read().await.sync_id;
+
         // Start the sync
         let r_fut = self.start_sync();
 
         // If printing updates, start a new task to print updates every 2 seconds.
-        if print_updates {
-            let bsync_data = self.bsync_data.clone();
+        let sync_result = if print_updates {
+            let sync_status = self.bsync_data.read().await.sync_status.clone();
             let (tx, mut rx) = oneshot::channel();
 
             tokio::spawn(async move {
+                while sync_status.read().await.sync_id == prev_sync_id {
+                    yield_now().await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+
                 loop {
-                    println!("{:?}", bsync_data.read().await.sync_status.read().await);
-                    sleep(Duration::from_secs(2)).await;
                     if let Ok(_t) = rx.try_recv() {
                         break;
                     }
+                    println!("{}", sync_status.read().await);
+
+                    yield_now().await;
+                    sleep(Duration::from_secs(2)).await;
                 }
-                println!("Sync finished, exiting");
             });
 
             let r = r_fut.await;
@@ -1232,7 +1242,12 @@ impl LightClient {
             r
         } else {
             r_fut.await
-        }
+        };
+
+        // Mark the sync data as finished, which should clear everything
+        self.bsync_data.read().await.finish().await;
+
+        sync_result
     }
 
     /// start_sync will start synchronizing the blockchain from the wallet's last height. This function will return immediately after starting the sync
@@ -1288,8 +1303,6 @@ impl LightClient {
 
         let start_block = latest_block;
         let end_block = last_scanned_height + 1;
-
-        println!("Starting main sync");
 
         // Before we start, we need to do a few things
         // 1. Pre-populate the last 100 blocks, in case of reorgs
@@ -1412,11 +1425,11 @@ impl LightClient {
         let blocks = bsync_data.read().await.node_data.finish_get_blocks(MAX_REORG).await;
         self.wallet.set_blocks(blocks).await;
 
-        // 2. Clear the nullifier cache
-        bsync_data.read().await.nullifier_data.finish().await;
-
-        // 3. If sync was successfull, also try to get historical prices
+        // 2. If sync was successfull, also try to get historical prices
         self.update_historical_prices().await;
+
+        // 3. Mark the sync finished, which will clear the nullifier cache etc...
+        bsync_data.read().await.finish().await;
 
         Ok(object! {
             "result" => "success",
