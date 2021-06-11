@@ -2,3 +2,4 @@
 /testdata
 /procgov
 .DS_Store
+*.json.txt

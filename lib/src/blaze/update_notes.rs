@@ -28,15 +28,12 @@ use super::syncdata::BlazeSyncData;
 ///    - Update the witness for this note
 pub struct UpdateNotes {
     wallet_txns: Arc<RwLock<WalletTxns>>,
-    price_info: WalletZecPriceInfo,
+    price: WalletZecPriceInfo,
 }
 
 impl UpdateNotes {
-    pub fn new(wallet_txns: Arc<RwLock<WalletTxns>>, price_info: WalletZecPriceInfo) -> Self {
-        Self {
-            wallet_txns,
-            price_info,
-        }
+    pub fn new(wallet_txns: Arc<RwLock<WalletTxns>>, price: WalletZecPriceInfo) -> Self {
+        Self { wallet_txns, price }
     }
 
     async fn update_witnesses(
@@ -95,7 +92,7 @@ impl UpdateNotes {
     ) {
         info!("Starting Note Update processing");
 
-        let zec_price = self.price_info.clone();
+        let zec_price = self.price.clone();
         // Create a new channel where we'll be notified of TxIds that are to be processed
         let (tx, mut rx) = unbounded_channel::<(TxId, Nullifier, BlockHeight, Option<u32>)>();
 

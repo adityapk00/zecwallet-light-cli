@@ -116,7 +116,7 @@ pub struct LightWallet {
     send_progress: Arc<RwLock<SendProgress>>,
 
     // The current price of ZEC. (time_fetched, price in USD)
-    pub price_info: Arc<RwLock<WalletZecPriceInfo>>,
+    pub price: Arc<RwLock<WalletZecPriceInfo>>,
 }
 
 impl LightWallet {
@@ -135,7 +135,7 @@ impl LightWallet {
             birthday: AtomicU64::new(height),
             sapling_tree_verified: AtomicBool::new(false),
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
-            price_info: Arc::new(RwLock::new(WalletZecPriceInfo::new())),
+            price: Arc::new(RwLock::new(WalletZecPriceInfo::new())),
         })
     }
 
@@ -198,7 +198,7 @@ impl LightWallet {
             txns.adjust_spendable_status(spendable_keys);
         }
 
-        let price_info = if version <= 13 {
+        let price = if version <= 13 {
             WalletZecPriceInfo::new()
         } else {
             WalletZecPriceInfo::read(&mut reader)?
@@ -212,7 +212,7 @@ impl LightWallet {
             birthday: AtomicU64::new(birthday),
             sapling_tree_verified: AtomicBool::new(sapling_tree_verified),
             send_progress: Arc::new(RwLock::new(SendProgress::new(0))),
-            price_info: Arc::new(RwLock::new(price_info)),
+            price: Arc::new(RwLock::new(price)),
         };
 
         // For old wallets, remove unused addresses
@@ -252,7 +252,7 @@ impl LightWallet {
         writer.write_u8(if self.is_sapling_tree_verified() { 1 } else { 0 })?;
 
         // Price info
-        self.price_info.read().await.write(&mut writer)?;
+        self.price.read().await.write(&mut writer)?;
 
         Ok(())
     }
@@ -332,7 +332,7 @@ impl LightWallet {
             return;
         }
 
-        self.price_info.write().await.zec_price = Some((now(), price));
+        self.price.write().await.zec_price = Some((now(), price));
         info!("Set current ZEC Price to USD {}", price);
     }
 
@@ -1268,7 +1268,7 @@ impl LightWallet {
                 height.into(),
                 now() as u64,
                 &tx.txid(),
-                &self.price_info.read().await.clone(),
+                &self.price.read().await.clone(),
             );
             wtx.outgoing_metadata = outgoing_metadata;
 

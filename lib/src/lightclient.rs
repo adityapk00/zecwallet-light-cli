@@ -522,21 +522,21 @@ impl LightClient {
     }
 
     pub async fn do_zec_price(&self) -> String {
-        let mut price_info = self.wallet.price_info.read().await.clone();
+        let mut price = self.wallet.price.read().await.clone();
 
         // If there is no price, try to fetch it first.
-        if price_info.zec_price.is_none() {
+        if price.zec_price.is_none() {
             self.update_current_price().await;
-            price_info = self.wallet.price_info.read().await.clone();
+            price = self.wallet.price.read().await.clone();
         }
 
-        match price_info.zec_price {
+        match price.zec_price {
             None => return "Error: No price".to_string(),
             Some((ts, p)) => {
                 let o = object! {
                     "zec_price" => p,
                     "fetched_at" =>  ts,
-                    "currency" => price_info.currency
+                    "currency" => price.currency
                 };
 
                 o.pretty(2)
@@ -1147,7 +1147,7 @@ impl LightClient {
 
     // Update the historical prices in the wallet, if any are present.
     async fn update_historical_prices(&self) {
-        let price_info = self.wallet.price_info.read().await.clone();
+        let price = self.wallet.price.read().await.clone();
 
         // Gather all transactions that need historical prices
         let txids_to_fetch = self
@@ -1170,8 +1170,7 @@ impl LightClient {
         info!("Fetching historical prices for {} txids", txids_to_fetch.len());
 
         let retry_count_increase =
-            match GrpcConnector::get_historical_zec_prices(self.get_server_uri(), txids_to_fetch, price_info.currency)
-                .await
+            match GrpcConnector::get_historical_zec_prices(self.get_server_uri(), txids_to_fetch, price.currency).await
             {
                 Ok(prices) => {
                     let mut any_failed = false;
@@ -1198,7 +1197,7 @@ impl LightClient {
             };
 
         {
-            let mut p = self.wallet.price_info.write().await;
+            let mut p = self.wallet.price.write().await;
             p.last_historical_prices_fetched_at = Some(lightwallet::now());
             p.historical_prices_retry_count += retry_count_increase;
         }
@@ -1315,7 +1314,7 @@ impl LightClient {
 
         // 2. Update the current price
         self.update_current_price().await;
-        let price = self.wallet.price_info.read().await.clone();
+        let price = self.wallet.price.read().await.clone();
 
         // Create the Nullifier Cache
         let (nullifier_handle, nullifier_data_sender) = bsync_data.read().await.nullifier_data.start().await;
