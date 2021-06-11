@@ -64,7 +64,7 @@ impl NodeAndWitnessData {
 
     #[cfg(test)]
     pub fn new_with_batchsize(config: &LightClientConfig, batch_size: u64) -> Self {
-        let mut s = Self::new(config, Arc::new(RwLock::new(SyncStatus::new())));
+        let mut s = Self::new(config, Arc::new(RwLock::new(SyncStatus::default())));
         s.batch_size = batch_size;
 
         s
@@ -907,7 +907,7 @@ mod test {
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
 
-        let sync_status = Arc::new(RwLock::new(SyncStatus::new()));
+        let sync_status = Arc::new(RwLock::new(SyncStatus::default()));
         let mut nw = NodeAndWitnessData::new(&config, sync_status);
         nw.setup_sync(vec![]).await;
 
@@ -1169,7 +1169,7 @@ mod test {
         // Put the tree that is going to be requested from the existing blocks
         existing_blocks.iter_mut().find(|b| b.height == 45).unwrap().tree = Some(first_tree);
 
-        let sync_status = Arc::new(RwLock::new(SyncStatus::new()));
+        let sync_status = Arc::new(RwLock::new(SyncStatus::default()));
         let mut nw = NodeAndWitnessData::new(&config, sync_status);
         nw.setup_sync(existing_blocks).await;
 
@@ -1247,6 +1247,12 @@ mod test {
         assert_eq!(finished_blks.len(), 100);
         assert_eq!(finished_blks.first().unwrap().height, start_block);
         assert_eq!(finished_blks.last().unwrap().height, start_block - 100 + 1);
+
+        // Verify the hashes
+        for i in 0..(finished_blks.len() - 1) {
+            assert_eq!(finished_blks[i].cb().prev_hash, finished_blks[i + 1].cb().hash);
+            assert_eq!(finished_blks[i].hash, finished_blks[i].cb().hash().to_string());
+        }
     }
 
     async fn setup_for_witness_tests(
@@ -1267,7 +1273,7 @@ mod test {
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
 
-        let sync_status = Arc::new(RwLock::new(SyncStatus::new()));
+        let sync_status = Arc::new(RwLock::new(SyncStatus::default()));
         let mut nw = NodeAndWitnessData::new(&config, sync_status);
         nw.setup_sync(vec![]).await;
 

@@ -129,7 +129,7 @@ impl TrialDecryptions {
                 }));
 
                 // Every 10_000 blocks, send them off to execute
-                if tasks.len() > 10_000 {
+                if tasks.len() >= 10_000 {
                     let exec_tasks = tasks.split_off(0);
 
                     sync_status.write().await.trial_dec_done += exec_tasks.len() as u64;

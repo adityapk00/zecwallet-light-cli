@@ -96,7 +96,6 @@ impl UpdateNotes {
         // Aside from the incoming Txns, we also need to update the notes that are currently in the wallet
         let wallet_txns = self.wallet_txns.clone();
         let tx_existing = tx.clone();
-        let start_block = BlockHeight::from_u32(bsync_data.read().await.earliest_block() as u32);
 
         let (blocks_done_tx, blocks_done_rx) = oneshot::channel::<u64>();
 
@@ -110,7 +109,7 @@ impl UpdateNotes {
             let notes = wallet_txns.read().await.get_notes_for_updating(earliest_block - 1);
             for (txid, nf) in notes {
                 tx_existing
-                    .send((txid, nf, start_block.clone(), None))
+                    .send((txid, nf, BlockHeight::from(earliest_block as u32), None))
                     .map_err(|e| format!("Error sending note for updating: {}", e))?;
             }
 

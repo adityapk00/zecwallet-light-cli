@@ -61,12 +61,18 @@ impl FetchFullTxns {
         let wallet_txns = self.wallet_txns.clone();
         let keys = self.keys.clone();
         let config = self.config.clone();
+
+        let start_height = bsync_data.read().await.sync_status.read().await.start_block;
+        let end_height = bsync_data.read().await.sync_status.read().await.end_block;
+
         let bsync_data_i = bsync_data.clone();
 
         let fetched_txids = Arc::new(RwLock::new(HashSet::new()));
 
         let (txid_tx, mut txid_rx) = unbounded_channel::<(TxId, BlockHeight)>();
         let h1: JoinHandle<Result<(), String>> = tokio::spawn(async move {
+            let mut last_progress = 0;
+
             while let Some((txid, height)) = txid_rx.recv().await {
                 // It is possible that we recieve the same txid multiple times, so we keep track of all the txids that were fetched
                 if fetched_txids.read().await.contains(&txid) {
@@ -92,10 +98,18 @@ impl FetchFullTxns {
                     rx.await.unwrap()?
                 };
 
+                let progress = start_height - u64::from(height);
+                if progress > last_progress {
+                    bsync_data_i.read().await.sync_status.write().await.txn_scan_done = progress;
+                    last_progress = progress;
+                }
+
                 Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns).await?;
             }
 
             info!("Finished fetching all full transactions");
+            bsync_data_i.read().await.sync_status.write().await.txn_scan_done = start_height - end_height + 1;
+
             Ok(())
         });
 
