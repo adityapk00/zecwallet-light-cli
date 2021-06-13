@@ -1316,9 +1316,6 @@ impl LightClient {
         self.update_current_price().await;
         let price = self.wallet.price.read().await.clone();
 
-        // Create the Nullifier Cache
-        let (nullifier_handle, nullifier_data_sender) = bsync_data.read().await.nullifier_data.start().await;
-
         // Sapling Tree GRPC Fetcher
         let grpc_connector = GrpcConnector::new(uri);
         let (saplingtree_fetcher_handle, saplingtree_fetcher_tx) = grpc_connector.start_saplingtree_fetcher().await;
@@ -1370,11 +1367,7 @@ impl LightClient {
         let fetch_compact_blocks_handle = tokio::spawn(async move {
             fetch_compact_blocks
                 .start(
-                    vec![
-                        nullifier_data_sender,
-                        node_and_witness_data_sender,
-                        trial_decryptions_sender,
-                    ],
+                    vec![node_and_witness_data_sender, trial_decryptions_sender],
                     start_block,
                     end_block,
                     reorg_rx,
@@ -1399,7 +1392,6 @@ impl LightClient {
         // Await all the futures
         let r1 = tokio::spawn(async move {
             join_all(vec![
-                nullifier_handle,
                 trial_decryptions_handle,
                 saplingtree_fetcher_handle,
                 fulltx_fetcher_handle,

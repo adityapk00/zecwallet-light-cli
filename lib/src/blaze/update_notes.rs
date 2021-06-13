@@ -129,7 +129,7 @@ impl UpdateNotes {
                 if let Some(spent_height) = bsync_data
                     .read()
                     .await
-                    .nullifier_data
+                    .block_data
                     .is_nf_spent(nf, at_height.into())
                     .await
                 {
