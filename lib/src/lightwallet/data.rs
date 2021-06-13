@@ -18,13 +18,22 @@ use zcash_primitives::{
 pub struct BlockData {
     pub(crate) ecb: Vec<u8>,
     pub height: u64,
-    pub hash: String,
     pub tree: Option<CommitmentTree<Node>>,
 }
 
 impl BlockData {
     pub fn serialized_version() -> u64 {
         return 20;
+    }
+
+    pub(crate) fn new_with(height: u64, hash: &str, tree: Option<CommitmentTree<Node>>) -> Self {
+        let mut cb = CompactBlock::default();
+        cb.hash = hex::decode(hash).unwrap().into_iter().rev().collect::<Vec<_>>();
+
+        let mut ecb = vec![];
+        cb.encode(&mut ecb).unwrap();
+
+        Self { ecb, height, tree }
     }
 
     pub(crate) fn new(mut cb: CompactBlock) -> Self {
@@ -35,15 +44,15 @@ impl BlockData {
             }
         }
 
+        cb.header.clear();
+        let height = cb.height;
+
         let mut ecb = vec![];
         cb.encode(&mut ecb).unwrap();
-        let height = cb.height;
-        let hash = cb.hash().to_string();
 
         Self {
             ecb,
             height,
-            hash,
             tree: None,
         }
     }
@@ -51,6 +60,10 @@ impl BlockData {
     pub(crate) fn cb(&self) -> CompactBlock {
         let b = self.ecb.clone();
         CompactBlock::decode(&b[..]).unwrap()
+    }
+
+    pub(crate) fn hash(&self) -> String {
+        self.cb().hash().to_string()
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -72,18 +85,17 @@ impl BlockData {
             Vector::read(&mut reader, |r| r.read_u8())?
         };
 
-        Ok(BlockData {
-            ecb,
-            height,
-            hash,
-            tree,
-        })
+        if ecb.is_empty() {
+            Ok(BlockData::new_with(height, hash.as_str(), tree))
+        } else {
+            Ok(BlockData { ecb, height, tree })
+        }
     }
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         writer.write_i32::<LittleEndian>(self.height as i32)?;
 
-        let hash_bytes: Vec<_> = hex::decode(self.hash.clone()).unwrap().into_iter().rev().collect();
+        let hash_bytes: Vec<_> = hex::decode(self.hash()).unwrap().into_iter().rev().collect();
         writer.write_all(&hash_bytes[..])?;
 
         if self.tree.is_some() {

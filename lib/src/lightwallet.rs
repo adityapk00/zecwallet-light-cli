@@ -296,7 +296,7 @@ impl LightWallet {
             .ok_or(format!("No Commitment tree"))?
             .map_err(|e| format!("Error writing commitment tree {}", e))?;
 
-        Ok((block.height, block.hash.clone(), hex::encode(write_buf)))
+        Ok((block.height, block.hash().clone(), hex::encode(write_buf)))
     }
 
     pub async fn set_blocks(&self, new_blocks: Vec<BlockData>) {
@@ -519,12 +519,7 @@ impl LightWallet {
             .store(false, std::sync::atomic::Ordering::SeqCst);
 
         if let Ok(tree) = CommitmentTree::read(&sapling_tree[..]) {
-            blocks.push(BlockData {
-                ecb: vec![],
-                height,
-                hash: hash.to_string(),
-                tree: Some(tree),
-            });
+            blocks.push(BlockData::new_with(height, hash, Some(tree)));
             true
         } else {
             false

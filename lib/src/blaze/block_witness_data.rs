@@ -162,7 +162,7 @@ impl BlockAndWitnessData {
                 if b.height != v.height {
                     return Err(format!("Verification failed: Wrong height!"));
                 }
-                if b.hash != v.hash {
+                if b.hash() != v.hash {
                     return Err(format!("Verfification hash failed!"));
                 }
 
@@ -216,7 +216,7 @@ impl BlockAndWitnessData {
                                 return Err(format!("Checkpoint Wrong block at {}", height));
                             }
 
-                            if b.hash != hash {
+                            if b.hash() != hash {
                                 return Err(format!("Checkpoint Block hash verification failed at {}", height));
                             }
 
@@ -481,7 +481,7 @@ impl BlockAndWitnessData {
                     // Check to see if the prev block's hash matches, and if it does, finish the task
                     let reorg_block = match existing_blocks.read().await.first() {
                         Some(top_block) => {
-                            if top_block.hash == cb.prev_hash().to_string() {
+                            if top_block.hash() == cb.prev_hash().to_string() {
                                 None
                             } else {
                                 // send a reorg signal
@@ -855,7 +855,7 @@ mod test {
         nw.setup_sync(blks.clone()).await;
         let finished_blks = nw.finish_get_blocks(1).await;
 
-        assert_eq!(blks[0].hash, finished_blks[0].hash);
+        assert_eq!(blks[0].hash(), finished_blks[0].hash());
         assert_eq!(blks[0].height, finished_blks[0].height);
     }
 
@@ -873,7 +873,7 @@ mod test {
         assert_eq!(finished_blks.len(), 100);
 
         for (i, finished_blk) in finished_blks.into_iter().enumerate() {
-            assert_eq!(existing_blocks[i].hash, finished_blk.hash);
+            assert_eq!(existing_blocks[i].hash(), finished_blk.hash());
             assert_eq!(existing_blocks[i].height, finished_blk.height);
         }
     }
@@ -1018,7 +1018,7 @@ mod test {
         // Collect the hashes for the blocks, so we can look them up when returning from the uri fetcher.
         let mut hashes: HashMap<_, _> = requested_block_trees
             .iter()
-            .map(|(h, _)| (*h, blocks.iter().find(|b| b.height == *h).unwrap().hash.clone()))
+            .map(|(h, _)| (*h, blocks.iter().find(|b| b.height == *h).unwrap().hash().clone()))
             .collect();
 
         let uri_h: JoinHandle<Result<(), String>> = tokio::spawn(async move {
@@ -1251,7 +1251,7 @@ mod test {
         // Verify the hashes
         for i in 0..(finished_blks.len() - 1) {
             assert_eq!(finished_blks[i].cb().prev_hash, finished_blks[i + 1].cb().hash);
-            assert_eq!(finished_blks[i].hash, finished_blks[i].cb().hash().to_string());
+            assert_eq!(finished_blks[i].hash(), finished_blks[i].cb().hash().to_string());
         }
     }
 
