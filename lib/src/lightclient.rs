@@ -1324,7 +1324,7 @@ impl LightClient {
         let (reorg_tx, reorg_rx) = unbounded_channel();
 
         // Node and Witness Data Cache
-        let (node_and_witness_handle, node_and_witness_data_sender) = bsync_data
+        let (block_and_witness_handle, block_and_witness_data_tx) = bsync_data
             .read()
             .await
             .block_data
@@ -1346,20 +1346,20 @@ impl LightClient {
         // The processor to fetch the full transactions, and decode the memos and the outgoing metadata
         let fetch_full_tx_processor =
             FetchFullTxns::new(&self.config, self.wallet.keys(), self.wallet.txns(), price.clone());
-        let (fetch_full_txns_handle, fetch_full_tx_sender, fetch_taddr_txns_sender) = fetch_full_tx_processor
+        let (fetch_full_txns_handle, fetch_full_txn_tx, fetch_taddr_txns_tx) = fetch_full_tx_processor
             .start(fulltx_fetcher_tx, bsync_data.clone())
             .await;
 
         // The processor to process Transactions detected by the trial decryptions processor
         let update_notes_processor = UpdateNotes::new(self.wallet.txns(), price.clone());
-        let (update_notes_handle, blocks_done_tx, detected_txns_sender) = update_notes_processor
-            .start(bsync_data.clone(), fetch_full_tx_sender)
+        let (update_notes_handle, blocks_done_tx, detected_txns_tx) = update_notes_processor
+            .start(bsync_data.clone(), fetch_full_txn_tx)
             .await;
 
         // Do Trial decryptions of all the sapling outputs, and pass on the successful ones to the update_notes processor
         let trial_decryptions_processor = TrialDecryptions::new(self.wallet.keys(), self.wallet.txns(), price.clone());
-        let (trial_decryptions_handle, trial_decryptions_sender) = trial_decryptions_processor
-            .start(bsync_data.clone(), detected_txns_sender)
+        let (trial_decrypts_handle, trial_decrypts_tx) = trial_decryptions_processor
+            .start(bsync_data.clone(), detected_txns_tx)
             .await;
 
         // Fetch Compact blocks and send them to nullifier cache, node-and-witness cache and the trial-decryption processor
@@ -1367,7 +1367,7 @@ impl LightClient {
         let fetch_compact_blocks_handle = tokio::spawn(async move {
             fetch_compact_blocks
                 .start(
-                    vec![node_and_witness_data_sender, trial_decryptions_sender],
+                    vec![block_and_witness_data_tx, trial_decrypts_tx],
                     start_block,
                     end_block,
                     reorg_rx,
@@ -1377,11 +1377,11 @@ impl LightClient {
 
         // We wait first for the node's to be updated. This is where reorgs will be handled, so all the steps done after this phase will
         // assume that the reorgs are done.
-        let earliest_block = node_and_witness_handle.await.unwrap().unwrap();
+        let earliest_block = block_and_witness_handle.await.unwrap().unwrap();
 
         // 1. Fetch the transparent txns only after reorgs are done.
         let taddr_txns_handle = FetchTaddrTxns::new(self.wallet.keys())
-            .start(start_block, earliest_block, taddr_fetcher_tx, fetch_taddr_txns_sender)
+            .start(start_block, earliest_block, taddr_fetcher_tx, fetch_taddr_txns_tx)
             .await;
 
         // 2. Notify the notes updater that the blocks are done updating
@@ -1392,7 +1392,7 @@ impl LightClient {
         // Await all the futures
         let r1 = tokio::spawn(async move {
             join_all(vec![
-                trial_decryptions_handle,
+                trial_decrypts_handle,
                 saplingtree_fetcher_handle,
                 fulltx_fetcher_handle,
                 taddr_fetcher_handle,
