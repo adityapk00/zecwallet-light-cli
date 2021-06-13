@@ -1330,7 +1330,7 @@ impl LightClient {
         let (node_and_witness_handle, node_and_witness_data_sender) = bsync_data
             .read()
             .await
-            .node_data
+            .block_data
             .start(
                 start_block,
                 end_block,
@@ -1425,7 +1425,7 @@ impl LightClient {
 
         // Post sync, we have to do a bunch of stuff
         // 1. Get the last 100 blocks and store it into the wallet, needed for future re-orgs
-        let blocks = bsync_data.read().await.node_data.finish_get_blocks(MAX_REORG).await;
+        let blocks = bsync_data.read().await.block_data.finish_get_blocks(MAX_REORG).await;
         self.wallet.set_blocks(blocks).await;
 
         // 2. If sync was successfull, also try to get historical prices

@@ -9,7 +9,7 @@ use super::{block_witness_data::BlockAndWitnessData, nullifier_data::NullifierDa
 pub struct BlazeSyncData {
     pub(crate) sync_status: Arc<RwLock<SyncStatus>>,
     pub(crate) nullifier_data: NullifierData,
-    pub(crate) node_data: BlockAndWitnessData,
+    pub(crate) block_data: BlockAndWitnessData,
 }
 
 impl BlazeSyncData {
@@ -19,7 +19,7 @@ impl BlazeSyncData {
         Self {
             sync_status: sync_status.clone(),
             nullifier_data: NullifierData::new(),
-            node_data: BlockAndWitnessData::new(config, sync_status),
+            block_data: BlockAndWitnessData::new(config, sync_status),
         }
     }
 
@@ -36,7 +36,7 @@ impl BlazeSyncData {
         }
 
         self.nullifier_data.setup_sync().await;
-        self.node_data.setup_sync(existing_blocks).await;
+        self.block_data.setup_sync(existing_blocks).await;
     }
 
     // Finish up the sync

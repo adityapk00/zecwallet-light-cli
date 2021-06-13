@@ -53,7 +53,7 @@ impl UpdateNotes {
                 bsync_data
                     .read()
                     .await
-                    .node_data
+                    .block_data
                     .update_witness_after_pos(&created_height, &txid, output_num, witnesses)
                     .await
             } else {
@@ -62,7 +62,7 @@ impl UpdateNotes {
                 bsync_data
                     .read()
                     .await
-                    .node_data
+                    .block_data
                     .update_witness_after_block(&note_height, witnesses)
                     .await
             };
@@ -137,7 +137,7 @@ impl UpdateNotes {
                     let (ctx, ts) = bsync_data
                         .read()
                         .await
-                        .node_data
+                        .block_data
                         .get_ctx_for_nf_at_height(&nf, spent_height)
                         .await;
 

@@ -97,7 +97,7 @@ impl FetchFullTxns {
 
                 let fulltx_fetcher = fulltx_fetcher.clone();
 
-                let block_time = bsync_data_i.read().await.node_data.get_block_timestamp(&height).await;
+                let block_time = bsync_data_i.read().await.block_data.get_block_timestamp(&height).await;
 
                 // Fetch the TxId from LightwalletD and process all the parts of it.
                 let tx = {
@@ -136,7 +136,7 @@ impl FetchFullTxns {
                 let keys = keys.clone();
                 let wallet_txns = wallet_txns.clone();
 
-                let block_time = bsync_data.read().await.node_data.get_block_timestamp(&height).await;
+                let block_time = bsync_data.read().await.block_data.get_block_timestamp(&height).await;
 
                 Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns, &price).await?;
             }

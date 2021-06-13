@@ -103,7 +103,7 @@ impl TrialDecryptions {
                                     let witness = bsync_data
                                         .read()
                                         .await
-                                        .node_data
+                                        .block_data
                                         .get_note_witness(height, tx_num, output_num)
                                         .await;
 
