@@ -30,7 +30,7 @@ use zcash_primitives::{
 
 use super::{fixed_size_buffer::FixedSizeBuffer, sync_status::SyncStatus};
 
-pub struct NodeAndWitnessData {
+pub struct BlockAndWitnessData {
     // List of all blocks and their hashes/commitment trees. Stored from smallest block height to tallest block height
     blocks: Arc<RwLock<Vec<BlockData>>>,
 
@@ -50,7 +50,7 @@ pub struct NodeAndWitnessData {
     sapling_activation_height: u64,
 }
 
-impl NodeAndWitnessData {
+impl BlockAndWitnessData {
     pub fn new(config: &LightClientConfig, sync_status: Arc<RwLock<SyncStatus>>) -> Self {
         Self {
             blocks: Arc::new(RwLock::new(vec![])),
@@ -840,11 +840,11 @@ mod test {
         lightwallet::data::BlockData,
     };
 
-    use super::NodeAndWitnessData;
+    use super::BlockAndWitnessData;
 
     #[tokio::test]
     async fn setup_finish_simple() {
-        let mut nw = NodeAndWitnessData::new_with_batchsize(
+        let mut nw = BlockAndWitnessData::new_with_batchsize(
             &LightClientConfig::create_unconnected("main".to_string(), None),
             25_000,
         );
@@ -861,7 +861,7 @@ mod test {
 
     #[tokio::test]
     async fn setup_finish_large() {
-        let mut nw = NodeAndWitnessData::new_with_batchsize(
+        let mut nw = BlockAndWitnessData::new_with_batchsize(
             &LightClientConfig::create_unconnected("main".to_string(), None),
             25_000,
         );
@@ -908,7 +908,7 @@ mod test {
         let end_block = blocks.last().unwrap().height;
 
         let sync_status = Arc::new(RwLock::new(SyncStatus::default()));
-        let mut nw = NodeAndWitnessData::new(&config, sync_status);
+        let mut nw = BlockAndWitnessData::new(&config, sync_status);
         nw.setup_sync(vec![]).await;
 
         let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
@@ -1009,7 +1009,7 @@ mod test {
         let first_tree = requested_block_trees.remove(&50).unwrap();
         existing_blocks.first_mut().unwrap().tree = Some(first_tree);
 
-        let mut nw = NodeAndWitnessData::new_with_batchsize(&config, 25);
+        let mut nw = BlockAndWitnessData::new_with_batchsize(&config, 25);
         nw.setup_sync(existing_blocks).await;
 
         let (uri_fetcher, mut uri_fetcher_rx) =
@@ -1170,7 +1170,7 @@ mod test {
         existing_blocks.iter_mut().find(|b| b.height == 45).unwrap().tree = Some(first_tree);
 
         let sync_status = Arc::new(RwLock::new(SyncStatus::default()));
-        let mut nw = NodeAndWitnessData::new(&config, sync_status);
+        let mut nw = BlockAndWitnessData::new(&config, sync_status);
         nw.setup_sync(existing_blocks).await;
 
         let (uri_fetcher, mut uri_fetcher_rx) = unbounded_channel();
@@ -1263,7 +1263,7 @@ mod test {
         Vec<BlockData>,
         u64,
         u64,
-        NodeAndWitnessData,
+        BlockAndWitnessData,
     ) {
         let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
         config.sapling_activation_height = 1;
@@ -1274,7 +1274,7 @@ mod test {
         let end_block = blocks.last().unwrap().height;
 
         let sync_status = Arc::new(RwLock::new(SyncStatus::default()));
-        let mut nw = NodeAndWitnessData::new(&config, sync_status);
+        let mut nw = BlockAndWitnessData::new(&config, sync_status);
         nw.setup_sync(vec![]).await;
 
         let (reorg_tx, mut reorg_rx) = unbounded_channel();
