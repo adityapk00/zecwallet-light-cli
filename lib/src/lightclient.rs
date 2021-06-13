@@ -306,15 +306,19 @@ impl LightClient {
     }
 
     pub fn read_from_disk(config: &LightClientConfig) -> io::Result<Self> {
-        if !config.wallet_exists() {
+        let wallet_path = if config.wallet_exists() {
+            config.get_wallet_path()
+        } else if config.v14_wallet_exists() {
+            config.get_v14_wallet_path()
+        } else {
             return Err(Error::new(
                 ErrorKind::AlreadyExists,
                 format!("Cannot read wallet. No file at {}", config.get_wallet_path().display()),
             ));
-        }
+        };
 
         let l = Runtime::new().unwrap().block_on(async move {
-            let mut file_buffer = BufReader::new(File::open(config.get_wallet_path())?);
+            let mut file_buffer = BufReader::new(File::open(wallet_path)?);
 
             let wallet = LightWallet::read(&mut file_buffer, config).await?;
 
