@@ -379,20 +379,18 @@ impl LightWallet {
     // If no birthday was recorded, return the sapling activation height
     pub async fn get_first_tx_block(&self) -> u64 {
         // Find the first transaction
-        let mut blocks = self
+        let earliest_block = self
             .txns
             .read()
             .await
             .current
             .values()
-            .map(|wtx| wtx.block.into())
-            .collect::<Vec<u64>>();
-        blocks.sort();
+            .map(|wtx| u64::from(wtx.block))
+            .min();
 
         let birthday = self.birthday.load(std::sync::atomic::Ordering::SeqCst);
-        *blocks
-            .last() // Returns optional, so if there's no txns, it'll get the activation height
-            .unwrap_or(&cmp::max(birthday, self.config.sapling_activation_height))
+        earliest_block // Returns optional, so if there's no txns, it'll get the activation height
+            .unwrap_or(cmp::max(birthday, self.config.sapling_activation_height))
     }
 
     fn adjust_wallet_birthday(&self, new_birthday: u64) {
