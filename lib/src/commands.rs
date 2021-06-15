@@ -1246,15 +1246,22 @@ pub fn do_user_command(cmd: &str, args: &Vec<&str>, lightclient: &LightClient) -
 #[cfg(test)]
 pub mod tests {
     use super::do_user_command;
-    use crate::lightclient::LightClient;
+    use crate::lightclient::{lightclient_config::LightClientConfig, LightClient};
     use lazy_static::lazy_static;
+    use tokio::runtime::Runtime;
 
     lazy_static! {
         static ref TEST_SEED: String = "youth strong sweet gorilla hammer unhappy congress stamp left stereo riot salute road tag clean toilet artefact fork certain leopard entire civil degree wonder".to_string();
     }
 
     pub fn test_command_caseinsensitive() {
-        let lc = LightClient::unconnected(TEST_SEED.to_string(), None).unwrap();
+        let lc = Runtime::new()
+            .unwrap()
+            .block_on(LightClient::test_new(
+                &LightClientConfig::create_unconnected("main".to_string(), None),
+                Some(TEST_SEED.to_string()),
+            ))
+            .unwrap();
 
         assert_eq!(
             do_user_command("addresses", &vec![], &lc),

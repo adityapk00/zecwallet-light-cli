@@ -30,7 +30,7 @@ impl FetchCompactBlocks {
         // We need the `rev()` here because ranges can only go up
         for b in (end_block..(start_block + 1)).rev().step_by(STEP as usize) {
             let start = b;
-            let end = max(b - STEP + 1, end_block);
+            let end = max((b as i64) - (STEP as i64) + 1, end_block as i64) as u64;
             if start < end {
                 panic!("Wrong block order");
             }

@@ -1,3 +1,4 @@
+use crate::blaze::test_utils::FakeCompactBlockList;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamer;
 use crate::compact_formats::{
     Address, AddressList, Balance, BlockId, BlockRange, ChainSpec, CompactBlock, CompactTx, Duration, Empty, Exclude,
@@ -5,7 +6,9 @@ use crate::compact_formats::{
     PriceResponse, RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
 };
 use crate::lightwallet::data::WalletTx;
+use crate::lightwallet::now;
 use futures::Stream;
+use std::cmp;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -22,16 +25,24 @@ pub struct TestServerData {
     txns: HashMap<TxId, (Vec<String>, RawTransaction)>,
     sent_txns: Vec<RawTransaction>,
     config: LightClientConfig,
+    zec_price: f64,
 }
 
 impl TestServerData {
     pub fn new(config: LightClientConfig) -> Self {
-        Self {
+        let data = Self {
             blocks: vec![],
             txns: HashMap::new(),
             sent_txns: vec![],
             config,
-        }
+            zec_price: 140.5,
+        };
+
+        data
+    }
+
+    pub fn add_blocks(&mut self, cbs: Vec<CompactBlock>) {
+        self.blocks.extend(cbs);
     }
 }
 
@@ -99,12 +110,17 @@ impl CompactTxStreamer for TestGRPCService {
         Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
-    async fn get_zec_price(&self, request: Request<PriceRequest>) -> Result<Response<PriceResponse>, Status> {
+    async fn get_zec_price(&self, _request: Request<PriceRequest>) -> Result<Response<PriceResponse>, Status> {
         todo!()
     }
 
-    async fn get_current_zec_price(&self, request: Request<Empty>) -> Result<Response<PriceResponse>, Status> {
-        todo!()
+    async fn get_current_zec_price(&self, _request: Request<Empty>) -> Result<Response<PriceResponse>, Status> {
+        let mut res = PriceResponse::default();
+        res.currency = "USD".to_string();
+        res.timestamp = now() as i64;
+        res.price = self.data.read().await.zec_price;
+
+        Ok(Response::new(res))
     }
 
     async fn get_transaction(&self, request: Request<TxFilter>) -> Result<Response<RawTransaction>, Status> {
@@ -132,7 +148,9 @@ impl CompactTxStreamer for TestGRPCService {
         &self,
         request: Request<TransparentAddressBlockFilter>,
     ) -> Result<Response<Self::GetTaddressTxidsStream>, Status> {
-        let (tx, rx) = mpsc::channel(self.data.read().await.txns.len());
+        let buf_size = cmp::max(self.data.read().await.txns.len(), 1);
+        let (tx, rx) = mpsc::channel(buf_size);
+
         let taddr = request.into_inner().address;
 
         let txns = self.data.read().await.txns.clone();
@@ -156,30 +174,30 @@ impl CompactTxStreamer for TestGRPCService {
         self.get_taddress_txids(request).await
     }
 
-    async fn get_taddress_balance(&self, request: Request<AddressList>) -> Result<Response<Balance>, Status> {
+    async fn get_taddress_balance(&self, _request: Request<AddressList>) -> Result<Response<Balance>, Status> {
         todo!()
     }
 
     async fn get_taddress_balance_stream(
         &self,
-        request: Request<tonic::Streaming<Address>>,
+        _request: Request<tonic::Streaming<Address>>,
     ) -> Result<Response<Balance>, Status> {
         todo!()
     }
 
     type GetMempoolTxStream = Pin<Box<dyn Stream<Item = Result<CompactTx, Status>> + Send + Sync>>;
 
-    async fn get_mempool_tx(&self, request: Request<Exclude>) -> Result<Response<Self::GetMempoolTxStream>, Status> {
+    async fn get_mempool_tx(&self, _request: Request<Exclude>) -> Result<Response<Self::GetMempoolTxStream>, Status> {
         todo!()
     }
 
-    async fn get_tree_state(&self, request: Request<BlockId>) -> Result<Response<TreeState>, Status> {
+    async fn get_tree_state(&self, _request: Request<BlockId>) -> Result<Response<TreeState>, Status> {
         todo!()
     }
 
     async fn get_address_utxos(
         &self,
-        request: Request<GetAddressUtxosArg>,
+        _request: Request<GetAddressUtxosArg>,
     ) -> Result<Response<GetAddressUtxosReplyList>, Status> {
         todo!()
     }
@@ -188,12 +206,12 @@ impl CompactTxStreamer for TestGRPCService {
 
     async fn get_address_utxos_stream(
         &self,
-        request: Request<GetAddressUtxosArg>,
+        _request: Request<GetAddressUtxosArg>,
     ) -> Result<Response<Self::GetAddressUtxosStreamStream>, Status> {
         todo!()
     }
 
-    async fn get_lightd_info(&self, request: Request<Empty>) -> Result<Response<LightdInfo>, Status> {
+    async fn get_lightd_info(&self, _request: Request<Empty>) -> Result<Response<LightdInfo>, Status> {
         let mut ld = LightdInfo::default();
         ld.version = format!("Test GRPC Server");
         ld.block_height = self
@@ -212,7 +230,7 @@ impl CompactTxStreamer for TestGRPCService {
         Ok(Response::new(ld))
     }
 
-    async fn ping(&self, request: Request<Duration>) -> Result<Response<PingResponse>, Status> {
+    async fn ping(&self, _request: Request<Duration>) -> Result<Response<PingResponse>, Status> {
         todo!()
     }
 }

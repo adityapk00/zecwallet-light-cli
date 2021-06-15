@@ -74,30 +74,31 @@ pub struct LightClient {
 impl LightClient {
     /// Method to create a test-only version of the LightClient
     #[allow(dead_code)]
-    pub fn unconnected(seed_phrase: String, dir: Option<String>) -> io::Result<Self> {
-        let config = LightClientConfig::create_unconnected("test".to_string(), dir);
+    pub async fn test_new(config: &LightClientConfig, seed_phrase: Option<String>) -> io::Result<Self> {
+        if seed_phrase.is_some() && config.wallet_exists() {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                "Cannot create a new wallet from seed, because a wallet already exists",
+            ));
+        }
 
-        let l = Runtime::new().unwrap().block_on(async move {
-            let mut l = LightClient {
-                wallet: LightWallet::new(config.clone(), Some(seed_phrase), 0)?,
-                config: config.clone(),
-                sapling_output: vec![],
-                sapling_spend: vec![],
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
-                sync_lock: Mutex::new(()),
-            };
+        let mut l = LightClient {
+            wallet: LightWallet::new(config.clone(), seed_phrase, 0)?,
+            config: config.clone(),
+            sapling_output: vec![],
+            sapling_spend: vec![],
+            bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
+            sync_lock: Mutex::new(()),
+        };
 
-            l.set_wallet_initial_state(0).await;
+        l.set_wallet_initial_state(0).await;
 
-            #[cfg(feature = "embed_params")]
-            l.read_sapling_params();
+        #[cfg(feature = "embed_params")]
+        l.read_sapling_params();
 
-            info!("Created new wallet!");
-            info!("Created LightClient to {}", &config.server);
-            Ok(l)
-        });
-
-        l
+        info!("Created new wallet!");
+        info!("Created LightClient to {}", &config.server);
+        Ok(l)
     }
 
     fn write_file_if_not_exists(dir: &Box<Path>, name: &str, bytes: &[u8]) -> io::Result<()> {

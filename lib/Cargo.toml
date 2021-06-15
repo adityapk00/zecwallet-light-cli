@@ -54,6 +54,7 @@ zcash_proofs = { git = "https://github.com/adityapk00/librustzcash", rev = "adeb
 
 [dev-dependencies]
 portpicker = "0.1.0"
+tempdir = "0.3.7"
 
 [build-dependencies]
 tonic-build = "0.4.2"
