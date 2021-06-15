@@ -1501,3 +1501,9 @@ impl LightClient {
         result.map(|(txid, _)| txid)
     }
 }
+
+#[cfg(test)]
+pub mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_server;
