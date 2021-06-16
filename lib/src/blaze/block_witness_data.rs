@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
-use log::info;
+use log::{info, warn};
 use std::sync::Arc;
 use tokio::{
     sync::{
@@ -310,8 +310,13 @@ impl BlockAndWitnessData {
             panic!("Block Data queue at the end of processing was not empty!");
         }
 
-        let actual_end_block = blocks.read().await.last().unwrap().height;
-        Self::verify_sapling_tree(blocks, verification_list, start_block, end_block, actual_end_block).await
+        if blocks.read().await.last().is_none() {
+            warn!("No blocks were read!");
+            Ok(())
+        } else {
+            let actual_end_block = blocks.read().await.last().unwrap().height;
+            Self::verify_sapling_tree(blocks, verification_list, start_block, end_block, actual_end_block).await
+        }
     }
 
     // Process block batches sent on `blk_rx`. These blocks don't have the block's `CommitmentTree` yet,
@@ -346,7 +351,9 @@ impl BlockAndWitnessData {
                 // Process the compact blocks.
                 // Step 0: Sanity check. We're expecting blocks in reverse order
                 if blks.last().unwrap().height > blks.first().unwrap().height {
-                    return Err(format!("Expecting blocks in reverse order"));
+                    return Err(format!(
+                        "Expecting blocks in reverse order, but they were in forward order."
+                    ));
                 }
 
                 // Step 1: Fetch the (earliest's block - 1)'s sapling root from the server
@@ -552,15 +559,22 @@ impl BlockAndWitnessData {
             let h3 = tokio::spawn(async move {
                 let total = total_workers_rx.await.unwrap();
                 let mut i = 0;
+                let mut results = vec![];
+
                 while i < total {
-                    if let Some(_) = workers.write().await.next().await {
+                    if let Some(r) = workers.write().await.next().await {
+                        results.push(match r.map_err(|e| format!("{}", e)) {
+                            Ok(r) => r,
+                            Err(e) => Err(e),
+                        });
                         i += 1;
                     } else {
                         yield_now().await;
                     }
                 }
 
-                Ok(())
+                // Conver vec<> to result<>
+                results.into_iter().collect()
             });
 
             let earliest_block = h0.await.map_err(|e| format!("Error processing blocks: {}", e))??;
@@ -866,7 +880,7 @@ mod test {
             25_000,
         );
 
-        let existing_blocks = FakeCompactBlockList::new(200).into();
+        let existing_blocks = FakeCompactBlockList::new(200).into_blockdatas();
         nw.setup_sync(existing_blocks.clone()).await;
         let finished_blks = nw.finish_get_blocks(100).await;
 
@@ -883,7 +897,7 @@ mod test {
         let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
         config.sapling_activation_height = 1;
 
-        let blocks = FakeCompactBlockList::new(200).into();
+        let blocks = FakeCompactBlockList::new(200).into_blockdatas();
 
         // Blocks are in reverse order
         assert!(blocks.first().unwrap().height > blocks.last().unwrap().height);
@@ -969,7 +983,7 @@ mod test {
         let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
         config.sapling_activation_height = 1;
 
-        let mut blocks = FakeCompactBlockList::new(200).into();
+        let mut blocks = FakeCompactBlockList::new(200).into_blockdatas();
 
         // Blocks are in reverse order
         assert!(blocks.first().unwrap().height > blocks.last().unwrap().height);
@@ -1093,7 +1107,7 @@ mod test {
         let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
         config.sapling_activation_height = 1;
 
-        let mut blocks = FakeCompactBlockList::new(100).into();
+        let mut blocks = FakeCompactBlockList::new(100).into_blockdatas();
 
         // Blocks are in reverse order
         assert!(blocks.first().unwrap().height > blocks.last().unwrap().height);
@@ -1268,7 +1282,7 @@ mod test {
         let mut config = LightClientConfig::create_unconnected("main".to_string(), None);
         config.sapling_activation_height = 1;
 
-        let blocks = FakeCompactBlockList::new(num_blocks).into();
+        let blocks = FakeCompactBlockList::new(num_blocks).into_blockdatas();
 
         let start_block = blocks.first().unwrap().height;
         let end_block = blocks.last().unwrap().height;
