@@ -87,8 +87,8 @@ impl FakeCompactBlock {
         Self { block: cb, height }
     }
 
-    pub fn add_tx(&mut self, ctx: CompactTx) {
-        self.block.vtx.push(ctx);
+    pub fn add_txs(&mut self, ctxs: Vec<CompactTx>) {
+        self.block.vtx.extend(ctxs);
     }
 
     // Add a new tx into the block, paying the given address the amount.
@@ -183,7 +183,7 @@ impl FakeCompactBlockList {
             data.write().await.add_txns(vec![(tx.clone(), new_block.height)]);
 
             ctx.hash = tx.txid().0.to_vec();
-            new_block.add_tx(ctx);
+            new_block.add_txs(vec![ctx]);
         }
     }
 
@@ -191,14 +191,13 @@ impl FakeCompactBlockList {
     // Returns the nullifier of the new note.
     pub fn add_tx_paying(&mut self, extfvk: &ExtendedFullViewingKey, value: u64) -> (Nullifier, Transaction, u64) {
         let to = extfvk.default_address().unwrap().1;
-        let value = Amount::from_u64(value).unwrap();
 
         // Create a fake Note for the account
         let mut rng = OsRng;
         let note = Note {
             g_d: to.diversifier().g_d().unwrap(),
             pk_d: to.pk_d().clone(),
-            value: value.into(),
+            value,
             rseed: Rseed::BeforeZip212(jubjub::Fr::random(rng)),
         };
         let nf = note.nf(&extfvk.fvk.vk, 0);
@@ -209,7 +208,7 @@ impl FakeCompactBlockList {
         let mut rng = OsRng;
         let rcv = jubjub::Fr::random(&mut rng);
         let cv = ValueCommitment {
-            value: value.into(),
+            value,
             randomness: rcv.clone(),
         };
 
@@ -246,7 +245,7 @@ impl FakeCompactBlockList {
         ctx.hash = tx.txid().clone().0.to_vec();
         ctx.outputs.push(cout);
 
-        self.add_empty_block().add_tx(ctx);
+        self.add_empty_block().add_txs(vec![ctx]);
 
         (nf, tx, height)
     }

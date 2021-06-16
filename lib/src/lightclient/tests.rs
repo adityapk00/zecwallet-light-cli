@@ -1,18 +1,29 @@
 use std::sync::Arc;
 
+use ff::{Field, PrimeField};
 use futures::FutureExt;
+use group::GroupEncoding;
 use json::JsonValue;
+use jubjub::ExtendedPoint;
 use portpicker;
+use rand::rngs::OsRng;
 use tempdir::TempDir;
 use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
 use tonic::transport::{Channel, Server};
 use tonic::Request;
 
+use zcash_primitives::memo::Memo;
+use zcash_primitives::note_encryption::SaplingNoteEncryption;
+use zcash_primitives::primitives::{Note, Rseed, ValueCommitment};
+use zcash_primitives::redjubjub::Signature;
+use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_SIZE};
+use zcash_primitives::transaction::TransactionData;
+
 use crate::blaze::test_utils::FakeCompactBlockList;
 use crate::compact_formats::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamerServer;
-use crate::compact_formats::Empty;
+use crate::compact_formats::{CompactOutput, CompactTx, Empty};
 use crate::lightclient::lightclient_config::LightClientConfig;
 use crate::lightclient::test_server::TestGRPCService;
 use crate::lightclient::LightClient;
@@ -242,6 +253,121 @@ async fn z_incoming_z_outgoing() {
     assert_eq!(notes["spent_notes"][0]["spendable"].as_bool().unwrap(), false); // Already spent
     assert_eq!(notes["spent_notes"][0]["spent"], sent_txid);
     assert_eq!(notes["spent_notes"][0]["spent_at_height"].as_u64().unwrap(), 107);
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn multiple_incoming_same_tx() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 100_000;
+
+    // 1. Mine 100 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+
+    // 2. Construct the Fake tx.
+    let to = extfvk1.default_address().unwrap().1;
+
+    // Create fake note for the account
+    let mut ctx = CompactTx::default();
+    let mut td = TransactionData::new();
+
+    // Add 4 outputs
+    for i in 0..4 {
+        let mut rng = OsRng;
+        let value = value + i;
+        let note = Note {
+            g_d: to.diversifier().g_d().unwrap(),
+            pk_d: to.pk_d().clone(),
+            value,
+            rseed: Rseed::BeforeZip212(jubjub::Fr::random(rng)),
+        };
+
+        let mut encryptor =
+            SaplingNoteEncryption::new(None, note.clone(), to.clone(), Memo::default().into(), &mut rng);
+
+        let mut rng = OsRng;
+        let rcv = jubjub::Fr::random(&mut rng);
+        let cv = ValueCommitment {
+            value,
+            randomness: rcv.clone(),
+        };
+
+        let cmu = note.cmu();
+        let od = OutputDescription {
+            cv: cv.commitment().into(),
+            cmu: note.cmu(),
+            ephemeral_key: ExtendedPoint::from(*encryptor.epk()),
+            enc_ciphertext: encryptor.encrypt_note_plaintext(),
+            out_ciphertext: encryptor.encrypt_outgoing_plaintext(&cv.commitment().into(), &cmu),
+            zkproof: [0; GROTH_PROOF_SIZE],
+        };
+
+        let mut cmu = vec![];
+        cmu.extend_from_slice(&note.cmu().to_repr());
+        let mut epk = vec![];
+        epk.extend_from_slice(&encryptor.epk().to_bytes());
+        let enc_ciphertext = encryptor.encrypt_note_plaintext();
+
+        // Create a fake CompactBlock containing the note
+        let mut cout = CompactOutput::default();
+        cout.cmu = cmu;
+        cout.epk = epk;
+        cout.ciphertext = enc_ciphertext[..52].to_vec();
+        ctx.outputs.push(cout);
+
+        td.shielded_outputs.push(od);
+        td.binding_sig = Signature::read(&vec![0u8; 64][..]).ok();
+    }
+
+    let tx = td.freeze().unwrap();
+    ctx.hash = tx.txid().clone().0.to_vec();
+
+    // Add and mine the block
+    fcbl.txns.push((tx.clone(), fcbl.next_height));
+    fcbl.add_empty_block().add_txs(vec![ctx]);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 101);
+
+    // 2. Check the notes - that we recieved 4 notes
+    let notes = lc.do_list_notes(true).await;
+    for i in 0..4 {
+        assert_eq!(notes["unspent_notes"][i]["created_in_block"].as_u64().unwrap(), 101);
+        assert_eq!(notes["unspent_notes"][i]["value"].as_u64().unwrap(), value + i as u64);
+        assert_eq!(notes["unspent_notes"][i]["is_change"].as_bool().unwrap(), false);
+        assert_eq!(
+            notes["unspent_notes"][i]["address"],
+            lc.wallet.keys().read().await.get_all_zaddresses()[0]
+        );
+    }
+
+    // 3. Send a big tx, so all the value is spent
+    let sent_value = value * 3 + 1000;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await; // make the funds spentable
+    let sent_txid = lc.test_do_send(vec![(EXT_ZADDR, sent_value, None)]).await.unwrap();
+
+    // 4. Mine the sent transaction
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    println!("{}", lc.do_list_notes(true).await.pretty(2));
+
+    // 5. Check the notes - that we recieved 4 notes
+    let notes = lc.do_list_notes(true).await;
+    for i in 0..4 {
+        assert_eq!(notes["spent_notes"][i]["spent"], sent_txid);
+        assert_eq!(notes["spent_notes"][i]["spent_at_height"].as_u64().unwrap(), 107);
+    }
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();
