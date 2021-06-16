@@ -636,7 +636,7 @@ impl LightClient {
                                 "address"            => address,
                                 "spendable"          => spendable,
                                 "spent"              => nd.spent.map(|(spent_txid, _)| format!("{}", spent_txid)),
-                                "spent_at_height"    => nd.spent.map(|(_, h)| format!("{}", h)),
+                                "spent_at_height"    => nd.spent.map(|(_, h)| h),
                                 "unconfirmed_spent"  => nd.unconfirmed_spent.map(|(spent_txid, _)| format!("{}", spent_txid)),
                             })
                         }
@@ -1491,6 +1491,26 @@ impl LightClient {
         let result = {
             let _lock = self.sync_lock.lock().await;
             let prover = LocalTxProver::from_bytes(&self.sapling_spend, &self.sapling_output);
+
+            self.wallet
+                .send_to_address(branch_id, prover, false, addrs, |txbytes| {
+                    GrpcConnector::send_transaction(self.get_server_uri(), txbytes)
+                })
+                .await
+        };
+
+        result.map(|(txid, _)| txid)
+    }
+
+    #[cfg(test)]
+    pub async fn test_do_send(&self, addrs: Vec<(&str, u64, Option<String>)>) -> Result<String, String> {
+        // First, get the concensus branch ID
+        let branch_id = self.consensus_branch_id().await;
+        info!("Creating transaction");
+
+        let result = {
+            let _lock = self.sync_lock.lock().await;
+            let prover = crate::blaze::test_utils::FakeTxProver {};
 
             self.wallet
                 .send_to_address(branch_id, prover, false, addrs, |txbytes| {
