@@ -1,4 +1,3 @@
-use crate::blaze::test_utils::FakeCompactBlockList;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamer;
 use crate::compact_formats::{
     Address, AddressList, Balance, BlockId, BlockRange, ChainSpec, CompactBlock, CompactTx, Duration, Empty, Exclude,
@@ -41,8 +40,45 @@ impl TestServerData {
         data
     }
 
+    pub fn add_txns(&mut self, txns: Vec<(Transaction, u64)>) {
+        for (tx, height) in txns {
+            let mut rtx = RawTransaction::default();
+            let mut data = vec![];
+            tx.write(&mut data).unwrap();
+            rtx.data = data;
+            rtx.height = height;
+            self.txns.insert(tx.txid(), (vec![], rtx));
+        }
+    }
+
     pub fn add_blocks(&mut self, cbs: Vec<CompactBlock>) {
-        self.blocks.extend(cbs);
+        if cbs.is_empty() {
+            panic!("No blocks");
+        }
+
+        if cbs.len() > 1 {
+            if cbs.first().unwrap().height < cbs.last().unwrap().height {
+                panic!(
+                    "Blocks are in the wrong order. First={} Last={}",
+                    cbs.first().unwrap().height,
+                    cbs.last().unwrap().height
+                );
+            }
+        }
+
+        if !self.blocks.is_empty() {
+            if self.blocks.first().unwrap().height + 1 != cbs.last().unwrap().height {
+                panic!(
+                    "New blocks are in wrong order. expecting={}, got={}",
+                    self.blocks.first().unwrap().height + 1,
+                    cbs.last().unwrap().height
+                );
+            }
+        }
+
+        for blk in cbs.into_iter().rev() {
+            self.blocks.insert(0, blk);
+        }
     }
 }
 
@@ -96,6 +132,12 @@ impl CompactTxStreamer for TestGRPCService {
             )));
         }
 
+        if self.data.read().await.blocks.len() > 1 {
+            if self.data.read().await.blocks.first().unwrap().height
+                < self.data.read().await.blocks.last().unwrap().height
+            {}
+        }
+
         let (tx, rx) = mpsc::channel(self.data.read().await.blocks.len());
 
         let blocks = self.data.read().await.blocks.clone();
@@ -111,7 +153,7 @@ impl CompactTxStreamer for TestGRPCService {
     }
 
     async fn get_zec_price(&self, _request: Request<PriceRequest>) -> Result<Response<PriceResponse>, Status> {
-        todo!()
+        self.get_current_zec_price(Request::new(Empty {})).await
     }
 
     async fn get_current_zec_price(&self, _request: Request<Empty>) -> Result<Response<PriceResponse>, Status> {
@@ -127,7 +169,7 @@ impl CompactTxStreamer for TestGRPCService {
         let txid = WalletTx::new_txid(&request.into_inner().hash);
         match self.data.read().await.txns.get(&txid) {
             Some((_taddrs, tx)) => Ok(Response::new(tx.clone())),
-            None => Err(Status::unimplemented(format!("Can't find txid {}", txid))),
+            None => Err(Status::invalid_argument(format!("Can't find txid {}", txid))),
         }
     }
 

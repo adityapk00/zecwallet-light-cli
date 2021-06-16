@@ -11,10 +11,7 @@ use tonic::Request;
 use crate::blaze::test_utils::FakeCompactBlockList;
 use crate::compact_formats::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamerServer;
-use crate::compact_formats::{
-    BlockId, BlockRange, ChainSpec, CompactBlock, Empty, LightdInfo, PriceRequest, PriceResponse, RawTransaction,
-    TransparentAddressBlockFilter, TreeState, TxFilter,
-};
+use crate::compact_formats::Empty;
 use crate::lightclient::lightclient_config::LightClientConfig;
 use crate::lightclient::test_server::TestGRPCService;
 use crate::lightclient::LightClient;
@@ -49,18 +46,9 @@ async fn create_test_server() -> (
         // We create the temp dir here, so that we can clean it up after the test runs
         let temp_dir = TempDir::new(&format!("test{}", port).as_str()).unwrap();
 
-        // Send the path name
+        // Send the path name. Do into_path() to preserve the temp directory
         data_dir_tx
-            .send(
-                temp_dir
-                    .path()
-                    .to_path_buf()
-                    .canonicalize()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_string(),
-            )
+            .send(temp_dir.path().canonicalize().unwrap().to_str().unwrap().to_string())
             .unwrap();
 
         ready_tx.send(true).unwrap();
@@ -80,8 +68,29 @@ async fn create_test_server() -> (
     (data, config, ready_rx, stop_tx, h1)
 }
 
+async fn mine_random_blocks(
+    fcbl: &mut FakeCompactBlockList,
+    data: &Arc<RwLock<TestServerData>>,
+    lc: &LightClient,
+    num: u64,
+) {
+    let cbs = fcbl.add_blocks(num).into_compact_blocks();
+
+    data.write().await.add_blocks(cbs.clone());
+    lc.do_sync(true).await.unwrap();
+}
+
+async fn mine_pending_blocks(fcbl: &mut FakeCompactBlockList, data: &Arc<RwLock<TestServerData>>, lc: &LightClient) {
+    let cbs = fcbl.into_compact_blocks();
+
+    data.write().await.add_blocks(cbs.clone());
+    data.write().await.add_txns(fcbl.into_txns());
+
+    lc.do_sync(true).await.unwrap();
+}
+
 #[tokio::test]
-async fn test_basic() {
+async fn basic_no_wallet_txns() {
     let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
 
     ready_rx.await.unwrap();
@@ -96,18 +105,50 @@ async fn test_basic() {
         .into_inner();
     println!("{:?}", r);
 
-    let cbs = FakeCompactBlockList::new(100)
-        .into()
-        .iter()
-        .map(|bd| bd.cb())
-        .collect::<Vec<_>>();
-    data.write().await.add_blocks(cbs.clone());
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn z_incoming_z_outgoing() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
 
     let lc = LightClient::test_new(&config, None).await.unwrap();
-    lc.do_sync(true).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
 
-    assert_eq!(lc.wallet.last_scanned_height().await, cbs.len() as u64);
+    // Mine 100 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 100);
 
+    // Send an incoming tx
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 10_000;
+    let (_nf, _tx, _height) = fcbl.add_tx_paying(&extfvk1, value);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    assert_eq!(lc.wallet.last_scanned_height().await, 101);
+
+    let b = lc.do_balance().await;
+    assert_eq!(b["zbalance"].as_u64().unwrap(), value);
+    assert_eq!(b["unverified_zbalance"].as_u64().unwrap(), value);
+    assert_eq!(b["spendable_zbalance"].as_u64().unwrap(), 0);
+
+    // Then add another 5 blocks, so the funds will become confirmed
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+    let b = lc.do_balance().await;
+    assert_eq!(b["zbalance"].as_u64().unwrap(), value);
+    assert_eq!(b["unverified_zbalance"].as_u64().unwrap(), 0);
+    assert_eq!(b["spendable_zbalance"].as_u64().unwrap(), value);
+
+    // Shutdown everything cleanly
     stop_tx.send(true).unwrap();
     h1.await.unwrap();
 }
