@@ -20,11 +20,11 @@ use super::lightclient_config::LightClientConfig;
 
 #[derive(Debug)]
 pub struct TestServerData {
-    blocks: Vec<CompactBlock>,
-    txns: HashMap<TxId, (Vec<String>, RawTransaction)>,
-    sent_txns: Vec<RawTransaction>,
-    config: LightClientConfig,
-    zec_price: f64,
+    pub blocks: Vec<CompactBlock>,
+    pub txns: HashMap<TxId, (Vec<String>, RawTransaction)>,
+    pub sent_txns: Vec<RawTransaction>,
+    pub config: LightClientConfig,
+    pub zec_price: f64,
 }
 
 impl TestServerData {
