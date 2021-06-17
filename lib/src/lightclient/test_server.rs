@@ -14,6 +14,9 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use zcash_primitives::block::BlockHash;
+use zcash_primitives::merkle_tree::CommitmentTree;
+use zcash_primitives::sapling::Node;
 use zcash_primitives::transaction::{Transaction, TxId};
 
 use super::lightclient_config::LightClientConfig;
@@ -233,8 +236,45 @@ impl CompactTxStreamer for TestGRPCService {
         todo!()
     }
 
-    async fn get_tree_state(&self, _request: Request<BlockId>) -> Result<Response<TreeState>, Status> {
-        todo!()
+    async fn get_tree_state(&self, request: Request<BlockId>) -> Result<Response<TreeState>, Status> {
+        let block = request.into_inner();
+
+        let tree = self
+            .data
+            .read()
+            .await
+            .blocks
+            .iter()
+            .fold(CommitmentTree::<Node>::empty(), |mut tree, cb| {
+                for tx in &cb.vtx {
+                    for co in &tx.outputs {
+                        tree.append(Node::new(co.cmu().unwrap().into())).unwrap();
+                    }
+                }
+
+                tree
+            });
+
+        let mut ts = TreeState::default();
+        ts.hash = BlockHash::from_slice(
+            &self
+                .data
+                .read()
+                .await
+                .blocks
+                .iter()
+                .find(|cb| cb.height == block.height)
+                .unwrap()
+                .hash[..],
+        )
+        .to_string();
+        ts.height = block.height;
+
+        let mut tree_bytes = vec![];
+        tree.write(&mut tree_bytes).unwrap();
+        ts.tree = hex::encode(tree_bytes);
+
+        Ok(Response::new(ts))
     }
 
     async fn get_address_utxos(

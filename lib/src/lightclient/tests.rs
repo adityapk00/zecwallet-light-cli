@@ -14,6 +14,7 @@ use tonic::transport::{Channel, Server};
 use tonic::Request;
 
 use zcash_client_backend::address::RecipientAddress;
+use zcash_client_backend::encoding::{encode_extended_full_viewing_key, encode_payment_address};
 use zcash_primitives::consensus::MAIN_NETWORK;
 use zcash_primitives::memo::Memo;
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
@@ -23,6 +24,7 @@ use zcash_primitives::redjubjub::Signature;
 use zcash_primitives::sapling::Node;
 use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_SIZE};
 use zcash_primitives::transaction::TransactionData;
+use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
 
 use crate::blaze::test_utils::FakeCompactBlockList;
 use crate::compact_formats::compact_tx_streamer_client::CompactTxStreamerClient;
@@ -502,6 +504,62 @@ async fn z_to_z_scan_together() {
     assert_eq!(list[1]["amount"].as_i64().unwrap(), -(value as i64));
     assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), 100);
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn z_incoming_viewkey() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 100 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+    assert_eq!(lc.do_balance().await["zbalance"].as_u64().unwrap(), 0);
+
+    // 2. Create a new Viewkey and import it
+    let iextfvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+    let iaddr = encode_payment_address(config.hrp_sapling_address(), &iextfvk.default_address().unwrap().1);
+    let addrs = lc
+        .do_import_vk(
+            encode_extended_full_viewing_key(config.hrp_sapling_viewing_key(), &iextfvk),
+            1,
+        )
+        .await
+        .unwrap();
+    // Make sure address is correct
+    assert_eq!(addrs[0], iaddr);
+
+    let value = 100_000;
+    let (tx, _height, _) = fcbl.add_tx_paying(&iextfvk, value);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. Test that we have the txn
+    let list = lc.do_list_transactions(false).await;
+    assert_eq!(lc.do_balance().await["zbalance"].as_u64().unwrap(), value);
+    assert_eq!(lc.do_balance().await["spendable_zbalance"].as_u64().unwrap(), 0);
+    assert_eq!(list[0]["txid"], tx.txid().to_string());
+    assert_eq!(list[0]["amount"].as_u64().unwrap(), value);
+    assert_eq!(list[0]["address"], iaddr);
+
+    // 4. Also do a rescan, just for fun
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    lc.do_rescan().await.unwrap();
+    // Test all the same values
+    let list = lc.do_list_transactions(false).await;
+    assert_eq!(lc.do_balance().await["zbalance"].as_u64().unwrap(), value);
+    assert_eq!(lc.do_balance().await["spendable_zbalance"].as_u64().unwrap(), 0);
+    assert_eq!(list[0]["txid"], tx.txid().to_string());
+    assert_eq!(list[0]["amount"].as_u64().unwrap(), value);
+    assert_eq!(list[0]["address"], iaddr);
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();
