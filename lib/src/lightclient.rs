@@ -1434,6 +1434,7 @@ impl LightClient {
         Ok(object! {
             "result" => "success",
             "latest_block" => latest_block,
+            "total_blocks_synced" => start_block - end_block + 1,
         })
     }
 

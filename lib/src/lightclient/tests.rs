@@ -465,7 +465,7 @@ async fn z_to_z_scan_together() {
     let value = 100_000;
     let (tx, _height, note) = fcbl.add_tx_paying(&extfvk1, value);
 
-    // Calculate witness so we can get the nullifier without it getting mined
+    // 3. Calculate witness so we can get the nullifier without it getting mined
     let tree = fcbl
         .blocks
         .iter()
@@ -488,9 +488,10 @@ async fn z_to_z_scan_together() {
     };
     let spent_tx = fcbl.add_tx_spending(&nf, 100, &extfvk1.fvk.ovk, &pa);
 
-    // Mine the blocks and sync the lightwallet
+    // 4. Mine the blocks and sync the lightwallet
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
+    // 5. Check the tx list to make sure we got all txns
     let list = lc.do_list_transactions(false).await;
 
     assert_eq!(list[0]["block_height"].as_u64().unwrap(), 101);

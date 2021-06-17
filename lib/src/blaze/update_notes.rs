@@ -48,6 +48,11 @@ impl UpdateNotes {
         let wtn = wallet_txns.read().await.get_note_witness(&txid, &nullifier);
 
         if let Some((witnesses, created_height)) = wtn {
+            if witnesses.is_empty() {
+                // No witnesses, likely a Viewkey or we don't have spending key, so don't bother
+                return;
+            }
+
             // If we were sent an output number, then we need to stream after the given position
             let witnesses = if let Some(output_num) = output_num {
                 bsync_data
@@ -76,8 +81,6 @@ impl UpdateNotes {
                 .write()
                 .await
                 .set_note_witnesses(&txid, &nullifier, witnesses);
-        } else {
-            // No witness, which means we don't have the spending key, so nothing to update.
         }
     }
 
