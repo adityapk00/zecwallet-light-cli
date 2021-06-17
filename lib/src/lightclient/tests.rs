@@ -13,10 +13,14 @@ use tokio::task::JoinHandle;
 use tonic::transport::{Channel, Server};
 use tonic::Request;
 
+use zcash_client_backend::address::RecipientAddress;
+use zcash_primitives::consensus::MAIN_NETWORK;
 use zcash_primitives::memo::Memo;
+use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
 use zcash_primitives::note_encryption::SaplingNoteEncryption;
 use zcash_primitives::primitives::{Note, Rseed, ValueCommitment};
 use zcash_primitives::redjubjub::Signature;
+use zcash_primitives::sapling::Node;
 use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_SIZE};
 use zcash_primitives::transaction::TransactionData;
 
@@ -144,7 +148,7 @@ async fn z_incoming_z_outgoing() {
     // 2. Send an incoming tx to fill the wallet
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
     let value = 100_000;
-    let (_nf, tx, _height) = fcbl.add_tx_paying(&extfvk1, value);
+    let (tx, _height, _) = fcbl.add_tx_paying(&extfvk1, value);
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     assert_eq!(lc.wallet.last_scanned_height().await, 101);
@@ -404,7 +408,7 @@ async fn z_incoming_multiz_outgoing() {
     // 2. Send an incoming tx to fill the wallet
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
     let value = 100_000;
-    let (_nf, _tx, _height) = fcbl.add_tx_paying(&extfvk1, value);
+    let (_tx, _height, _) = fcbl.add_tx_paying(&extfvk1, value);
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
     mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
 
@@ -437,6 +441,66 @@ async fn z_incoming_multiz_outgoing() {
         assert_eq!(jv["memo"], *memo.as_ref().unwrap());
         assert_eq!(jv["address"], addr.to_string());
     }
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn z_to_z_scan_together() {
+    // Create an incoming tx, and then send that tx, and scan everything together, to make sure it works.
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Start with 100 blocks that are unmined
+    fcbl.add_blocks(100);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 100_000;
+    let (tx, _height, note) = fcbl.add_tx_paying(&extfvk1, value);
+
+    // Calculate witness so we can get the nullifier without it getting mined
+    let tree = fcbl
+        .blocks
+        .iter()
+        .fold(CommitmentTree::<Node>::empty(), |mut tree, fcb| {
+            for tx in &fcb.block.vtx {
+                for co in &tx.outputs {
+                    tree.append(Node::new(co.cmu().unwrap().into())).unwrap();
+                }
+            }
+
+            tree
+        });
+    let witness = IncrementalWitness::from_tree(&tree);
+    let nf = note.nf(&extfvk1.fvk.vk, witness.position() as u64);
+
+    let pa = if let Some(RecipientAddress::Shielded(pa)) = RecipientAddress::decode(&MAIN_NETWORK, EXT_ZADDR) {
+        pa
+    } else {
+        panic!("Couldn't parse address")
+    };
+    let spent_tx = fcbl.add_tx_spending(&nf, 100, &extfvk1.fvk.ovk, &pa);
+
+    // Mine the blocks and sync the lightwallet
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    let list = lc.do_list_transactions(false).await;
+
+    assert_eq!(list[0]["block_height"].as_u64().unwrap(), 101);
+    assert_eq!(list[0]["txid"], tx.txid().to_string());
+
+    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 102);
+    assert_eq!(list[1]["txid"], spent_tx.txid().to_string());
+    assert_eq!(list[1]["amount"].as_i64().unwrap(), -(value as i64));
+    assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
+    assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), 100);
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();
