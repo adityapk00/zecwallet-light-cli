@@ -14,7 +14,9 @@ use tonic::transport::{Channel, Server};
 use tonic::Request;
 
 use zcash_client_backend::address::RecipientAddress;
-use zcash_client_backend::encoding::{encode_extended_full_viewing_key, encode_payment_address};
+use zcash_client_backend::encoding::{
+    encode_extended_full_viewing_key, encode_extended_spending_key, encode_payment_address,
+};
 use zcash_primitives::consensus::MAIN_NETWORK;
 use zcash_primitives::memo::Memo;
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
@@ -525,7 +527,8 @@ async fn z_incoming_viewkey() {
     assert_eq!(lc.do_balance().await["zbalance"].as_u64().unwrap(), 0);
 
     // 2. Create a new Viewkey and import it
-    let iextfvk = ExtendedFullViewingKey::from(&ExtendedSpendingKey::master(&[1u8; 32]));
+    let iextsk = ExtendedSpendingKey::master(&[1u8; 32]);
+    let iextfvk = ExtendedFullViewingKey::from(&iextsk);
     let iaddr = encode_payment_address(config.hrp_sapling_address(), &iextfvk.default_address().unwrap().1);
     let addrs = lc
         .do_import_vk(
@@ -560,6 +563,42 @@ async fn z_incoming_viewkey() {
     assert_eq!(list[0]["txid"], tx.txid().to_string());
     assert_eq!(list[0]["amount"].as_u64().unwrap(), value);
     assert_eq!(list[0]["address"], iaddr);
+
+    // 5. Import the corresponding spending key.
+    let sk_addr = lc
+        .do_import_sk(
+            encode_extended_spending_key(config.hrp_sapling_private_key(), &iextsk),
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sk_addr[0], iaddr);
+    assert_eq!(lc.do_balance().await["zbalance"].as_u64().unwrap(), value);
+    assert_eq!(lc.do_balance().await["spendable_zbalance"].as_u64().unwrap(), 0);
+
+    // 6. Rescan to make the funds spendable (i.e., update witnesses)
+    lc.do_rescan().await.unwrap();
+    assert_eq!(lc.do_balance().await["zbalance"].as_u64().unwrap(), value);
+    assert_eq!(lc.do_balance().await["spendable_zbalance"].as_u64().unwrap(), value);
+
+    // 7. Spend funds from the now-imported private key.
+    let sent_value = 1000;
+    let outgoing_memo = "Outgoing Memo".to_string();
+
+    let sent_txid = lc
+        .test_do_send(vec![(EXT_ZADDR, sent_value, Some(outgoing_memo.clone()))])
+        .await
+        .unwrap();
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // 8. Make sure tx is present
+    let list = lc.do_list_transactions(false).await;
+    assert_eq!(list[1]["txid"], sent_txid);
+    assert_eq!(list[1]["amount"].as_i64().unwrap(), -((sent_value + 1000) as i64));
+    assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
+    assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();

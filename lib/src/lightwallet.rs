@@ -722,8 +722,8 @@ impl LightWallet {
                         .iter()
                         .filter(|nd| nd.spent.is_none() && nd.unconfirmed_spent.is_none())
                         .filter(|nd| {
-                            // Check to see if we have this note's spending key.
-                            keys.have_spending_key(&nd.extfvk)
+                            // Check to see if we have this note's spending key and witnesses
+                            keys.have_spending_key(&nd.extfvk) && !nd.witnesses.is_empty()
                         })
                         .filter(|nd| {
                             // TODO, this whole section is shared with verified_balance. Refactor it.

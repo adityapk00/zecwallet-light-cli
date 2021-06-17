@@ -122,7 +122,7 @@ pub struct SaplingNoteData {
     pub note: Note,
 
     // Witnesses for the last 100 blocks. witnesses.last() is the latest witness
-    pub(super) witnesses: Vec<IncrementalWitness<Node>>,
+    pub(crate) witnesses: Vec<IncrementalWitness<Node>>,
     pub(super) nullifier: Nullifier,
     pub spent: Option<(TxId, u32)>, // If this note was confirmed spent
 
