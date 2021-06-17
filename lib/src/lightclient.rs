@@ -763,13 +763,16 @@ impl LightClient {
             .flat_map(|(_k, v)| {
                 let mut txns: Vec<JsonValue> = vec![];
 
-                if !v.spent_nullifiers.is_empty()
-                    || !v.outgoing_metadata.is_empty()
-                    || (v.total_sapling_value_spent + v.total_transparent_value_spent) > 0
-                {
+                if v.total_sapling_value_spent + v.total_transparent_value_spent > 0 {
                     // If money was spent, create a transaction. For this, we'll subtract
-                    // all the change notes. TODO: Add transparent change here to subtract it also
-                    let total_change: u64 = v.notes.iter().filter(|nd| nd.is_change).map(|nd| nd.note.value).sum();
+                    // all the change notes + Utxos
+                    let total_change = v
+                        .notes
+                        .iter()
+                        .filter(|nd| nd.is_change)
+                        .map(|nd| nd.note.value)
+                        .sum::<u64>()
+                        + v.utxos.iter().map(|ut| ut.value).sum::<u64>();
 
                     // TODO: What happens if change is > than sent ?
 

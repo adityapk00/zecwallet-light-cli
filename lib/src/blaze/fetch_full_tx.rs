@@ -238,6 +238,8 @@ impl FetchFullTxns {
 
         // If this Tx spent value, add the spent amount to the TxID
         if total_transparent_value_spent > 0 {
+            is_outgoing_tx = true;
+
             wallet_txns.write().await.add_taddr_spent(
                 tx.txid(),
                 height,
@@ -271,6 +273,8 @@ impl FetchFullTxns {
         // is invoked by a transparent transaction, and we have not seen this Tx from the trial_decryptions processor, the Note
         // might not exist, and the memo updating might be a No-Op. That's Ok, the memo will get updated when this Tx is scanned
         // a second time by the Full Tx Fetcher
+        let mut outgoing_metadatas = vec![];
+
         for output in tx.shielded_outputs.iter() {
             let cmu = output.cmu;
             let ct = output.enc_ciphertext;
@@ -301,7 +305,7 @@ impl FetchFullTxns {
             // the memo and value for our records
 
             // Search all ovks that we have
-            let mut outgoing_metadatas: Vec<_> = ovks
+            let omds = ovks
                 .iter()
                 .filter_map(|ovk| {
                     match try_sapling_output_recovery(
@@ -344,44 +348,46 @@ impl FetchFullTxns {
                         None => None,
                     }
                 })
-                .collect();
+                .collect::<Vec<_>>();
 
-            // If this Tx in outgoing, i.e., we recieved sent some money in this Tx, then we need to grab all transparent outputs
-            // that don't belong to us as the outgoing metadata
-            let mut taddr_outgoing_metadatas = vec![];
-            if is_outgoing_tx {
-                for vout in tx.vout.iter() {
-                    let taddr = keys.read().await.address_from_pubkeyhash(vout.script_pubkey.address());
-
-                    if taddr.is_some() && !taddrs_set.contains(&taddr.clone().unwrap()) {
-                        let taddr = taddr.unwrap();
-
-                        taddr_outgoing_metadatas.push(OutgoingTxMetadata {
-                            address: taddr,
-                            value: vout.value.into(),
-                            memo: Memo::Empty,
-                        });
-                    }
-                }
-
-                // Also, if this is an outgoing transaction, then mark all the *incoming* sapling notes to this Tx as change.
-                // Note that this is also done in `WalletTxns::add_new_spent`, but that doesn't take into account transparent spends,
-                // so we'll do it again here.
-                wallet_txns.write().await.mark_notes_as_change(&tx.txid());
-            }
-
-            // Add the z and t outgoing metadatas
-            outgoing_metadatas.extend(taddr_outgoing_metadatas);
-
-            if !outgoing_metadatas.is_empty() {
-                wallet_txns
-                    .write()
-                    .await
-                    .add_outgoing_metadata(&tx.txid(), outgoing_metadatas);
-            }
+            // Add it to the overall outgoing metadatas
+            outgoing_metadatas.extend(omds);
         }
 
-        // Step 4: If this Tx is in the mempool, remove it from there
+        // Step 4. Process t-address outputs
+        // If this Tx in outgoing, i.e., we recieved sent some money in this Tx, then we need to grab all transparent outputs
+        // that don't belong to us as the outgoing metadata
+        if wallet_txns.read().await.total_funds_spent_in(&tx.txid()) > 0 {
+            is_outgoing_tx = true;
+        }
+
+        if is_outgoing_tx {
+            for vout in &tx.vout {
+                let taddr = keys.read().await.address_from_pubkeyhash(vout.script_pubkey.address());
+
+                if taddr.is_some() && !taddrs_set.contains(taddr.as_ref().unwrap()) {
+                    outgoing_metadatas.push(OutgoingTxMetadata {
+                        address: taddr.unwrap(),
+                        value: vout.value.into(),
+                        memo: Memo::Empty,
+                    });
+                }
+            }
+
+            // Also, if this is an outgoing transaction, then mark all the *incoming* sapling notes to this Tx as change.
+            // Note that this is also done in `WalletTxns::add_new_spent`, but that doesn't take into account transparent spends,
+            // so we'll do it again here.
+            wallet_txns.write().await.mark_notes_as_change(&tx.txid());
+        }
+
+        if !outgoing_metadatas.is_empty() {
+            wallet_txns
+                .write()
+                .await
+                .add_outgoing_metadata(&tx.txid(), outgoing_metadatas);
+        }
+
+        // Step 5: If this Tx is in the mempool, remove it from there
         wallet_txns.write().await.remove_mempool(&tx.txid());
 
         info!("Finished Fetching full tx {}", tx.txid());
