@@ -327,9 +327,9 @@ async fn multiple_incoming_same_tx() {
         ctx.outputs.push(cout);
 
         td.shielded_outputs.push(od);
-        td.binding_sig = Signature::read(&vec![0u8; 64][..]).ok();
     }
 
+    td.binding_sig = Signature::read(&vec![0u8; 64][..]).ok();
     let tx = td.freeze().unwrap();
     ctx.hash = tx.txid().clone().0.to_vec();
 
@@ -341,6 +341,7 @@ async fn multiple_incoming_same_tx() {
 
     // 2. Check the notes - that we recieved 4 notes
     let notes = lc.do_list_notes(true).await;
+    let txns = lc.do_list_transactions(false).await;
     for i in 0..4 {
         assert_eq!(notes["unspent_notes"][i]["created_in_block"].as_u64().unwrap(), 101);
         assert_eq!(notes["unspent_notes"][i]["value"].as_u64().unwrap(), value + i as u64);
@@ -349,6 +350,14 @@ async fn multiple_incoming_same_tx() {
             notes["unspent_notes"][i]["address"],
             lc.wallet.keys().read().await.get_all_zaddresses()[0]
         );
+
+        assert_eq!(txns[i]["txid"], tx.txid().to_string());
+        assert_eq!(txns[i]["block_height"].as_u64().unwrap(), 101);
+        assert_eq!(
+            txns[i]["address"],
+            lc.wallet.keys().read().await.get_all_zaddresses()[0]
+        );
+        assert_eq!(txns[i]["amount"].as_u64().unwrap(), value + i as u64);
     }
 
     // 3. Send a big tx, so all the value is spent
@@ -360,13 +369,73 @@ async fn multiple_incoming_same_tx() {
     fcbl.add_pending_sends(&data).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
-    println!("{}", lc.do_list_notes(true).await.pretty(2));
-
-    // 5. Check the notes - that we recieved 4 notes
+    // 5. Check the notes - that we spent all 4 notes
     let notes = lc.do_list_notes(true).await;
+    let txns = lc.do_list_transactions(false).await;
     for i in 0..4 {
         assert_eq!(notes["spent_notes"][i]["spent"], sent_txid);
         assert_eq!(notes["spent_notes"][i]["spent_at_height"].as_u64().unwrap(), 107);
+    }
+    assert_eq!(txns[4]["txid"], sent_txid);
+    assert_eq!(txns[4]["block_height"], 107);
+    assert_eq!(txns[4]["amount"].as_i64().unwrap(), -(sent_value as i64) - 1000);
+    assert_eq!(txns[4]["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
+    assert_eq!(txns[4]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
+    assert_eq!(txns[4]["outgoing_metadata"][0]["memo"].is_null(), true);
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn z_incoming_multiz_outgoing() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 100 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 100_000;
+    let (_nf, _tx, _height) = fcbl.add_tx_paying(&extfvk1, value);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. send a txn to multiple addresses
+    let tos = vec![
+        (EXT_ZADDR, 1, Some("ext1-1".to_string())),
+        (EXT_ZADDR, 2, Some("ext1-2".to_string())),
+        (EXT_ZADDR2, 20, Some("ext2-20".to_string())),
+    ];
+    let sent_txid = lc.test_do_send(tos.clone()).await.unwrap();
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // 4. Check the outgoing txn list
+    let list = lc.do_list_transactions(false).await;
+
+    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 107);
+    assert_eq!(list[1]["txid"], sent_txid);
+    assert_eq!(
+        list[1]["amount"].as_i64().unwrap(),
+        -1000 - (tos.iter().map(|(_, a, _)| *a).sum::<u64>() as i64)
+    );
+
+    for (addr, amt, memo) in &tos {
+        // Find the correct value, since the outgoing metadata can be shuffled
+        let jv = list[1]["outgoing_metadata"]
+            .members()
+            .find(|j| j["value"].as_u64().unwrap() == *amt)
+            .unwrap();
+        assert_eq!(jv["memo"], *memo.as_ref().unwrap());
+        assert_eq!(jv["address"], addr.to_string());
     }
 
     // Shutdown everything cleanly
@@ -375,3 +444,4 @@ async fn multiple_incoming_same_tx() {
 }
 
 const EXT_ZADDR: &str = "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
+const EXT_ZADDR2: &str = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv";
