@@ -119,6 +119,7 @@ impl UpdateNotes {
                     .map_err(|e| format!("Error sending note for updating: {}", e))?;
             }
 
+            info!("Finished processing all existing notes in wallet");
             Ok(())
         });
 

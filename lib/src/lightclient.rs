@@ -1422,6 +1422,8 @@ impl LightClient {
         .map(|r| r.map_err(|e| format!("{}", e))?)
         .collect::<Result<(), String>>()?;
 
+        info!("Sync finished, doing post-processing");
+
         // Post sync, we have to do a bunch of stuff
         // 1. Get the last 100 blocks and store it into the wallet, needed for future re-orgs
         let blocks = bsync_data.read().await.block_data.finish_get_blocks(MAX_REORG).await;

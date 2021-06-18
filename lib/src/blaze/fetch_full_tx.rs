@@ -115,8 +115,8 @@ impl FetchFullTxns {
                 Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns, &price).await?;
             }
 
-            info!("Finished fetching all full transactions");
             bsync_data_i.read().await.sync_status.write().await.txn_scan_done = start_height - end_height + 1;
+            info!("Finished fetching all full transactions");
 
             Ok(())
         });
@@ -141,6 +141,7 @@ impl FetchFullTxns {
                 Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns, &price).await?;
             }
 
+            info!("Finished full_tx scanning all txns");
             Ok(())
         });
 

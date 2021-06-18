@@ -1,6 +1,7 @@
 use crate::compact_formats::RawTransaction;
 
 use crate::lightwallet::keys::Keys;
+use log::info;
 use std::sync::Arc;
 use tokio::join;
 use tokio::sync::mpsc::unbounded_channel;
@@ -89,9 +90,13 @@ impl FetchTaddrTxns {
                         txns_top[idx] = None;
                     }
 
-                    // Dispatch the result
-                    ordered_rtx_tx.send(txn).unwrap();
+                    // Dispatch the result only if it is in out scan range
+                    if txn.height <= start_height && txn.height >= end_height {
+                        ordered_rtx_tx.send(txn).unwrap();
+                    }
                 }
+
+                info!("Finished fetching all t-addr txns");
 
                 Ok(())
             });
@@ -115,6 +120,7 @@ impl FetchTaddrTxns {
                         .unwrap();
                 }
 
+                info!("Finished scanning all t-addr txns");
                 Ok(())
             });
 
@@ -232,7 +238,7 @@ mod test {
             Ok(total)
         });
 
-        let h3 = ftt.start(1, 100, taddr_fetcher_tx, full_tx_scanner_tx).await;
+        let h3 = ftt.start(100, 1, taddr_fetcher_tx, full_tx_scanner_tx).await;
 
         let (total_sent, total_recieved) = join!(h1, h2);
         assert_eq!(total_sent.unwrap().unwrap(), total_recieved.unwrap().unwrap());

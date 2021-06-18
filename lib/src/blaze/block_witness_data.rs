@@ -863,7 +863,7 @@ mod test {
             25_000,
         );
 
-        let cb = FakeCompactBlock::new(1, BlockHash([0u8; 32])).into();
+        let cb = FakeCompactBlock::new(1, BlockHash([0u8; 32])).into_cb();
         let blks = vec![BlockData::new(cb)];
 
         nw.setup_sync(blks.clone()).await;
