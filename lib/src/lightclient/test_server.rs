@@ -43,14 +43,14 @@ impl TestServerData {
         data
     }
 
-    pub fn add_txns(&mut self, txns: Vec<(Transaction, u64)>) {
-        for (tx, height) in txns {
+    pub fn add_txns(&mut self, txns: Vec<(Transaction, u64, Vec<String>)>) {
+        for (tx, height, taddrs) in txns {
             let mut rtx = RawTransaction::default();
             let mut data = vec![];
             tx.write(&mut data).unwrap();
             rtx.data = data;
             rtx.height = height;
-            self.txns.insert(tx.txid(), (vec![], rtx));
+            self.txns.insert(tx.txid(), (taddrs, rtx));
         }
     }
 

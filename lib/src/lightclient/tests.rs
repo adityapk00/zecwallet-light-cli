@@ -7,6 +7,7 @@ use json::JsonValue;
 use jubjub::ExtendedPoint;
 use portpicker;
 use rand::rngs::OsRng;
+use secp256k1::{PublicKey, Secp256k1};
 use tempdir::TempDir;
 use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
@@ -29,7 +30,7 @@ use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_S
 use zcash_primitives::transaction::TransactionData;
 use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
 
-use crate::blaze::test_utils::FakeCompactBlockList;
+use crate::blaze::test_utils::{FakeCompactBlockList, FakeTransaction};
 use crate::compact_formats::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamerServer;
 use crate::compact_formats::{CompactOutput, CompactTx, Empty};
@@ -344,7 +345,7 @@ async fn multiple_incoming_same_tx() {
     ctx.hash = tx.txid().clone().0.to_vec();
 
     // Add and mine the block
-    fcbl.txns.push((tx.clone(), fcbl.next_height));
+    fcbl.txns.push((tx.clone(), fcbl.next_height, vec![]));
     fcbl.add_empty_block().add_txs(vec![ctx]);
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
     assert_eq!(lc.wallet.last_scanned_height().await, 101);
@@ -613,5 +614,78 @@ async fn z_incoming_viewkey() {
     h1.await.unwrap();
 }
 
+#[tokio::test]
+async fn t_incoming_t_outgoing() {
+    let secp = Secp256k1::new();
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    lc.init_logging().unwrap();
+
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+
+    // 2. Get an incoming tx to a t address
+    let sk = lc.wallet.keys().read().await.tkeys[0];
+    let pk = PublicKey::from_secret_key(&secp, &sk);
+    let taddr = lc.wallet.keys().read().await.address_from_sk(&sk);
+    let value = 100_000;
+
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, taddr.clone(), value);
+    let (tx, _) = fcbl.add_ftx(ftx);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // 3. Test the list
+    let list = lc.do_list_transactions(false).await;
+    assert_eq!(list[0]["block_height"].as_u64().unwrap(), 11);
+    assert_eq!(list[0]["txid"], tx.txid().to_string());
+    assert_eq!(list[0]["address"], taddr);
+    assert_eq!(list[0]["amount"].as_u64().unwrap(), value);
+
+    // 4. We can spend the funds immediately, since this is a taddr
+    let sent_value = 20_000;
+    let sent_txid = lc.test_do_send(vec![(EXT_TADDR, sent_value, None)]).await.unwrap();
+
+    // 5. Test the unconfirmed send.
+    let list = lc.do_list_transactions(false).await;
+    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
+    assert_eq!(list[1]["txid"], sent_txid);
+    assert_eq!(
+        list[1]["amount"].as_i64().unwrap(),
+        -(sent_value as i64 + i64::from(DEFAULT_FEE))
+    );
+    assert_eq!(list[1]["unconfirmed"].as_bool().unwrap(), true);
+    assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_TADDR);
+    assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
+
+    // 7. Mine the sent transaction
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    let notes = lc.do_list_notes(true).await;
+    assert_eq!(notes["spent_utxos"][0]["created_in_block"].as_u64().unwrap(), 11);
+    assert_eq!(notes["spent_utxos"][0]["spent_at_height"].as_u64().unwrap(), 12);
+    assert_eq!(notes["spent_utxos"][0]["spent"], sent_txid);
+
+    // Change shielded note
+    assert_eq!(notes["unspent_notes"][0]["created_in_block"].as_u64().unwrap(), 12);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
+
+    // TODO: Is this correct?
+    println!("{}", lc.do_list_transactions(false).await.pretty(2));
+    lc.do_rescan().await.unwrap();
+    println!("{}", lc.do_list_transactions(false).await.pretty(2));
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+const EXT_TADDR: &str = "t1NoS6ZgaUTpmjkge2cVpXGcySasdYDrXqh";
 const EXT_ZADDR: &str = "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
 const EXT_ZADDR2: &str = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv";

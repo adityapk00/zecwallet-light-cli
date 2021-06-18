@@ -1,21 +1,24 @@
-use std::sync::Arc;
+use std::{convert::TryInto, sync::Arc};
 
 use crate::{
     compact_formats::{CompactBlock, CompactOutput, CompactSpend, CompactTx},
     lightclient::test_server::TestServerData,
-    lightwallet::data::BlockData,
+    lightwallet::{data::BlockData, keys::ToBase58Check},
 };
 use ff::{Field, PrimeField};
 use group::GroupEncoding;
 use jubjub::ExtendedPoint;
 use prost::Message;
 use rand::{rngs::OsRng, RngCore};
+use secp256k1::PublicKey;
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use zcash_primitives::{
     block::BlockHash,
     constants::SPENDING_KEY_GENERATOR,
     keys::OutgoingViewingKey,
+    legacy::{Script, TransparentAddress},
     memo::Memo,
     merkle_tree::{CommitmentTree, Hashable, IncrementalWitness, MerklePath},
     note_encryption::SaplingNoteEncryption,
@@ -24,8 +27,8 @@ use zcash_primitives::{
     redjubjub::Signature,
     sapling::Node,
     transaction::{
-        components::{Amount, OutputDescription, GROTH_PROOF_SIZE},
-        Transaction, TransactionData,
+        components::{Amount, OutPoint, OutputDescription, TxIn, TxOut, GROTH_PROOF_SIZE},
+        Transaction, TransactionData, TxId,
     },
     zip32::{ExtendedFullViewingKey, ExtendedSpendingKey},
 };
@@ -65,6 +68,125 @@ pub fn list_all_witness_nodes(cb: &CompactBlock) -> Vec<Node> {
     }
 
     nodes
+}
+
+pub struct FakeTransaction {
+    pub ctx: CompactTx,
+    pub td: TransactionData,
+    pub taddrs_involved: Vec<String>,
+}
+
+impl FakeTransaction {
+    pub fn new() -> Self {
+        Self {
+            ctx: CompactTx::default(),
+            td: TransactionData::new(),
+            taddrs_involved: vec![],
+        }
+    }
+
+    // Add a dummy compact output with given value sending it to 'to', and encode
+    // the output with the ovk if available
+    fn add_sapling_output(&mut self, value: u64, ovk: Option<OutgoingViewingKey>, to: &PaymentAddress) -> Note {
+        // Create a fake Note for the account
+        let mut rng = OsRng;
+        let note = Note {
+            g_d: to.diversifier().g_d().unwrap(),
+            pk_d: to.pk_d().clone(),
+            value,
+            rseed: Rseed::BeforeZip212(jubjub::Fr::random(rng)),
+        };
+
+        let mut encryptor = SaplingNoteEncryption::new(ovk, note.clone(), to.clone(), Memo::default().into(), &mut rng);
+
+        let mut rng = OsRng;
+        let rcv = jubjub::Fr::random(&mut rng);
+        let cv = ValueCommitment {
+            value,
+            randomness: rcv.clone(),
+        };
+
+        let cmu = note.cmu();
+        let od = OutputDescription {
+            cv: cv.commitment().into(),
+            cmu: note.cmu(),
+            ephemeral_key: ExtendedPoint::from(*encryptor.epk()),
+            enc_ciphertext: encryptor.encrypt_note_plaintext(),
+            out_ciphertext: encryptor.encrypt_outgoing_plaintext(&cv.commitment().into(), &cmu),
+            zkproof: [0; GROTH_PROOF_SIZE],
+        };
+
+        let mut cmu = vec![];
+        cmu.extend_from_slice(&note.cmu().to_repr());
+        let mut epk = vec![];
+        epk.extend_from_slice(&encryptor.epk().to_bytes());
+        let enc_ciphertext = encryptor.encrypt_note_plaintext();
+
+        // Create a fake CompactBlock containing the note
+        let mut cout = CompactOutput::default();
+        cout.cmu = cmu;
+        cout.epk = epk;
+        cout.ciphertext = enc_ciphertext[..52].to_vec();
+
+        self.td.shielded_outputs.push(od);
+        self.td.binding_sig = Signature::read(&vec![0u8; 64][..]).ok();
+
+        self.ctx.outputs.push(cout);
+
+        note
+    }
+
+    pub fn add_tx_spending(&mut self, nf: &Nullifier, value: u64, ovk: &OutgoingViewingKey, to: &PaymentAddress) {
+        let _ = self.add_sapling_output(value, Some(ovk.clone()), to);
+
+        let mut cs = CompactSpend::default();
+        cs.nf = nf.to_vec();
+        self.ctx.spends.push(cs);
+
+        // We should be adding the nullifier to the full tx (tx.shielded_spends) as well, but we don't use it,
+        // so we pretend it doen't exist :)
+    }
+
+    // Add a new tx into the block, paying the given address the amount.
+    // Returns the nullifier of the new note.
+    pub fn add_tx_paying(&mut self, extfvk: &ExtendedFullViewingKey, value: u64) -> Note {
+        let to = extfvk.default_address().unwrap().1;
+        let note = self.add_sapling_output(value, None, &to);
+
+        note
+    }
+
+    // Add a t output which will be paid to the given PubKey
+    pub fn add_t_output(&mut self, pk: &PublicKey, taddr: String, value: u64) {
+        let mut hash160 = ripemd160::Ripemd160::new();
+        hash160.update(Sha256::digest(&pk.serialize()[..].to_vec()));
+
+        let taddr_bytes = hash160.finalize();
+
+        self.td.vout.push(TxOut {
+            value: Amount::from_u64(value).unwrap(),
+            script_pubkey: TransparentAddress::PublicKey(taddr_bytes.try_into().unwrap()).script(),
+        });
+
+        self.taddrs_involved.push(taddr)
+    }
+
+    // Spend the given utxo
+    pub fn add_t_input(&mut self, txid: TxId, n: u32, taddr: String) {
+        self.td.vin.push(TxIn {
+            prevout: OutPoint::new(txid.0, n),
+            script_sig: Script { 0: vec![] },
+            sequence: 0,
+        });
+        self.taddrs_involved.push(taddr);
+    }
+
+    pub fn into_tx(mut self) -> (CompactTx, Transaction, Vec<String>) {
+        let tx = self.td.freeze().unwrap();
+        self.ctx.hash = tx.txid().clone().0.to_vec();
+
+        (self.ctx, tx, self.taddrs_involved)
+    }
 }
 
 pub struct FakeCompactBlock {
@@ -130,14 +252,14 @@ impl FakeCompactBlock {
         b
     }
 
-    pub fn into(self) -> CompactBlock {
+    pub fn into_cb(self) -> CompactBlock {
         self.block
     }
 }
 
 pub struct FakeCompactBlockList {
     pub blocks: Vec<FakeCompactBlock>,
-    pub txns: Vec<(Transaction, u64)>,
+    pub txns: Vec<(Transaction, u64, Vec<String>)>,
     pub prev_hash: BlockHash,
     pub next_height: u64,
 }
@@ -181,70 +303,37 @@ impl FakeCompactBlockList {
                 ctx.spends.push(cs);
             }
 
-            data.write().await.add_txns(vec![(tx.clone(), new_block.height)]);
+            let config = data.read().await.config.clone();
+            let taddrs = tx
+                .vout
+                .iter()
+                .filter_map(|vout| {
+                    if let Some(TransparentAddress::PublicKey(taddr_hash)) = vout.script_pubkey.address() {
+                        let taddr = taddr_hash.to_base58check(&config.base58_pubkey_address(), &[]);
+                        Some(taddr)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            data.write()
+                .await
+                .add_txns(vec![(tx.clone(), new_block.height, taddrs)]);
 
             ctx.hash = tx.txid().0.to_vec();
             new_block.add_txs(vec![ctx]);
         }
     }
 
-    // Create a dummy compact output with given value sending it to 'to', and encode
-    // the output with the ovk if available
-    fn create_sapling_output(
-        value: u64,
-        ovk: Option<OutgoingViewingKey>,
-        to: &PaymentAddress,
-    ) -> (CompactTx, Transaction, Note) {
-        // Create a fake Note for the account
-        let mut rng = OsRng;
-        let note = Note {
-            g_d: to.diversifier().g_d().unwrap(),
-            pk_d: to.pk_d().clone(),
-            value,
-            rseed: Rseed::BeforeZip212(jubjub::Fr::random(rng)),
-        };
+    pub fn add_ftx(&mut self, ftx: FakeTransaction) -> (Transaction, u64) {
+        let (ctx, tx, taddrs) = ftx.into_tx();
 
-        let mut encryptor = SaplingNoteEncryption::new(ovk, note.clone(), to.clone(), Memo::default().into(), &mut rng);
+        let height = self.next_height;
+        self.txns.push((tx.clone(), height, taddrs));
+        self.add_empty_block().add_txs(vec![ctx]);
 
-        let mut rng = OsRng;
-        let rcv = jubjub::Fr::random(&mut rng);
-        let cv = ValueCommitment {
-            value,
-            randomness: rcv.clone(),
-        };
-
-        let cmu = note.cmu();
-        let od = OutputDescription {
-            cv: cv.commitment().into(),
-            cmu: note.cmu(),
-            ephemeral_key: ExtendedPoint::from(*encryptor.epk()),
-            enc_ciphertext: encryptor.encrypt_note_plaintext(),
-            out_ciphertext: encryptor.encrypt_outgoing_plaintext(&cv.commitment().into(), &cmu),
-            zkproof: [0; GROTH_PROOF_SIZE],
-        };
-
-        let mut cmu = vec![];
-        cmu.extend_from_slice(&note.cmu().to_repr());
-        let mut epk = vec![];
-        epk.extend_from_slice(&encryptor.epk().to_bytes());
-        let enc_ciphertext = encryptor.encrypt_note_plaintext();
-
-        // Create a fake CompactBlock containing the note
-        let mut cout = CompactOutput::default();
-        cout.cmu = cmu;
-        cout.epk = epk;
-        cout.ciphertext = enc_ciphertext[..52].to_vec();
-
-        let mut td = TransactionData::new();
-        td.shielded_outputs.push(od);
-        td.binding_sig = Signature::read(&vec![0u8; 64][..]).ok();
-        let tx = td.freeze().unwrap();
-
-        let mut ctx = CompactTx::default();
-        ctx.hash = tx.txid().clone().0.to_vec();
-        ctx.outputs.push(cout);
-
-        (ctx, tx, note)
+        (tx, height)
     }
 
     pub fn add_tx_spending(
@@ -254,19 +343,10 @@ impl FakeCompactBlockList {
         ovk: &OutgoingViewingKey,
         to: &PaymentAddress,
     ) -> Transaction {
-        let (mut ctx, tx, _) = Self::create_sapling_output(value, Some(ovk.clone()), to);
+        let mut ftx = FakeTransaction::new();
+        ftx.add_tx_spending(nf, value, ovk, to);
 
-        println!("Spending nullifier {}", hex::encode(nf.0));
-        let mut cs = CompactSpend::default();
-        cs.nf = nf.to_vec();
-        ctx.spends.push(cs);
-
-        // We should be adding the nullifier to the full tx (tx.shielded_spends) as well, but we don't use it,
-        // so we pretend it doen't exist :)
-
-        let height = self.next_height;
-        self.txns.push((tx.clone(), height));
-        self.add_empty_block().add_txs(vec![ctx]);
+        let (tx, _) = self.add_ftx(ftx);
 
         tx
     }
@@ -274,12 +354,10 @@ impl FakeCompactBlockList {
     // Add a new tx into the block, paying the given address the amount.
     // Returns the nullifier of the new note.
     pub fn add_tx_paying(&mut self, extfvk: &ExtendedFullViewingKey, value: u64) -> (Transaction, u64, Note) {
-        let to = extfvk.default_address().unwrap().1;
-        let (ctx, tx, note) = Self::create_sapling_output(value, None, &to);
+        let mut ftx = FakeTransaction::new();
+        let note = ftx.add_tx_paying(extfvk, value);
 
-        let height = self.next_height;
-        self.txns.push((tx.clone(), height));
-        self.add_empty_block().add_txs(vec![ctx]);
+        let (tx, height) = self.add_ftx(ftx);
 
         (tx, height, note)
     }
@@ -316,7 +394,11 @@ impl FakeCompactBlockList {
     pub fn into_blockdatas(&mut self) -> Vec<BlockData> {
         let blocks = self.blocks.drain(..).collect::<Vec<_>>();
 
-        blocks.into_iter().map(|fcb| BlockData::new(fcb.into())).rev().collect()
+        blocks
+            .into_iter()
+            .map(|fcb| BlockData::new(fcb.into_cb()))
+            .rev()
+            .collect()
     }
 
     pub fn into_compact_blocks(&mut self) -> Vec<CompactBlock> {
@@ -325,7 +407,7 @@ impl FakeCompactBlockList {
         blocks.into_iter().map(|fcb| fcb.block).rev().collect()
     }
 
-    pub fn into_txns(&mut self) -> Vec<(Transaction, u64)> {
+    pub fn into_txns(&mut self) -> Vec<(Transaction, u64, Vec<String>)> {
         self.txns.drain(..).collect()
     }
 }
