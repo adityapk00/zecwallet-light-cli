@@ -24,6 +24,7 @@ use zcash_primitives::note_encryption::SaplingNoteEncryption;
 use zcash_primitives::primitives::{Note, Rseed, ValueCommitment};
 use zcash_primitives::redjubjub::Signature;
 use zcash_primitives::sapling::Node;
+use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
 use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_SIZE};
 use zcash_primitives::transaction::TransactionData;
 use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
@@ -35,7 +36,6 @@ use crate::compact_formats::{CompactOutput, CompactTx, Empty};
 use crate::lightclient::lightclient_config::LightClientConfig;
 use crate::lightclient::test_server::TestGRPCService;
 use crate::lightclient::LightClient;
-use crate::lightwallet::fee;
 
 use super::test_server::TestServerData;
 
@@ -194,8 +194,7 @@ async fn z_incoming_z_outgoing() {
     assert_eq!(b["z_addresses"][0]["unverified_zbalance"].as_u64().unwrap(), 0);
 
     // 5. Send z-to-z tx to external z address with a memo
-    let fee = fee::get_default_fee(107);
-    let sent_value = 1000;
+    let sent_value = 2000;
     let outgoing_memo = "Outgoing Memo".to_string();
 
     let sent_txid = lc
@@ -222,7 +221,10 @@ async fn z_incoming_z_outgoing() {
     let jv = list.members().find(|jv| jv["txid"] == sent_txid).unwrap();
 
     assert_eq!(jv["txid"], sent_txid);
-    assert_eq!(jv["amount"].as_i64().unwrap(), -(sent_value as i64 + fee as i64));
+    assert_eq!(
+        jv["amount"].as_i64().unwrap(),
+        -(sent_value as i64 + i64::from(DEFAULT_FEE))
+    );
     assert_eq!(jv["unconfirmed"].as_bool().unwrap(), true);
     assert_eq!(jv["block_height"].as_u64().unwrap(), 107);
 
@@ -249,7 +251,7 @@ async fn z_incoming_z_outgoing() {
     assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
     assert_eq!(
         notes["unspent_notes"][0]["value"].as_u64().unwrap(),
-        value - sent_value - 1000 /* TODO fees are messed up in tests because of block height issues */
+        value - sent_value - u64::from(DEFAULT_FEE)
     );
     assert_eq!(notes["unspent_notes"][0]["is_change"].as_bool().unwrap(), true);
     assert_eq!(notes["unspent_notes"][0]["spendable"].as_bool().unwrap(), false); // Not yet spendable
@@ -369,7 +371,7 @@ async fn multiple_incoming_same_tx() {
     }
 
     // 3. Send a big tx, so all the value is spent
-    let sent_value = value * 3 + 1000;
+    let sent_value = value * 3 + u64::from(DEFAULT_FEE);
     mine_random_blocks(&mut fcbl, &data, &lc, 5).await; // make the funds spentable
     let sent_txid = lc.test_do_send(vec![(EXT_ZADDR, sent_value, None)]).await.unwrap();
 
@@ -386,7 +388,10 @@ async fn multiple_incoming_same_tx() {
     }
     assert_eq!(txns[4]["txid"], sent_txid);
     assert_eq!(txns[4]["block_height"], 107);
-    assert_eq!(txns[4]["amount"].as_i64().unwrap(), -(sent_value as i64) - 1000);
+    assert_eq!(
+        txns[4]["amount"].as_i64().unwrap(),
+        -(sent_value as i64) - i64::from(DEFAULT_FEE)
+    );
     assert_eq!(txns[4]["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
     assert_eq!(txns[4]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
     assert_eq!(txns[4]["outgoing_metadata"][0]["memo"].is_null(), true);
@@ -433,7 +438,7 @@ async fn z_incoming_multiz_outgoing() {
     assert_eq!(list[1]["txid"], sent_txid);
     assert_eq!(
         list[1]["amount"].as_i64().unwrap(),
-        -1000 - (tos.iter().map(|(_, a, _)| *a).sum::<u64>() as i64)
+        -i64::from(DEFAULT_FEE) - (tos.iter().map(|(_, a, _)| *a).sum::<u64>() as i64)
     );
 
     for (addr, amt, memo) in &tos {
@@ -583,7 +588,7 @@ async fn z_incoming_viewkey() {
     assert_eq!(lc.do_balance().await["spendable_zbalance"].as_u64().unwrap(), value);
 
     // 7. Spend funds from the now-imported private key.
-    let sent_value = 1000;
+    let sent_value = 3000;
     let outgoing_memo = "Outgoing Memo".to_string();
 
     let sent_txid = lc
@@ -596,7 +601,10 @@ async fn z_incoming_viewkey() {
     // 8. Make sure tx is present
     let list = lc.do_list_transactions(false).await;
     assert_eq!(list[1]["txid"], sent_txid);
-    assert_eq!(list[1]["amount"].as_i64().unwrap(), -((sent_value + 1000) as i64));
+    assert_eq!(
+        list[1]["amount"].as_i64().unwrap(),
+        -((sent_value + u64::from(DEFAULT_FEE)) as i64)
+    );
     assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 

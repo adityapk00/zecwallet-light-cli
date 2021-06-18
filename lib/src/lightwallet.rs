@@ -27,7 +27,7 @@ use zcash_primitives::{
     serialize::Vector,
     transaction::{
         builder::Builder,
-        components::{Amount, OutPoint, TxOut},
+        components::{amount::DEFAULT_FEE, Amount, OutPoint, TxOut},
     },
     zip32::ExtendedFullViewingKey,
 };
@@ -49,7 +49,6 @@ use self::{
 
 pub(crate) mod data;
 mod extended_key;
-pub(crate) mod fee;
 pub(crate) mod keys;
 pub(crate) mod message;
 pub(crate) mod utils;
@@ -961,8 +960,7 @@ impl LightWallet {
         // Select notes to cover the target value
         println!("{}: Selecting notes", now() - start_time);
 
-        let fee = fee::get_default_fee(height as i32);
-        let target_value = Amount::from_u64(total_value).unwrap() + Amount::from_u64(fee).unwrap();
+        let target_value = Amount::from_u64(total_value).unwrap() + DEFAULT_FEE;
 
         // Select the candidate notes that are eligible to be spent
         let mut candidate_notes: Vec<_> = if transparent_only {

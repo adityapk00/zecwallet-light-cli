@@ -1,13 +1,11 @@
 use crate::lightwallet::keys::Keys;
-use crate::{
-    lightclient::LightClient,
-    lightwallet::{self, fee, utils},
-};
+use crate::{lightclient::LightClient, lightwallet::utils};
 use json::object;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use tokio::runtime::Runtime;
+use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
 
 lazy_static! {
     static ref RT: Runtime = tokio::runtime::Runtime::new().unwrap();
@@ -746,7 +744,7 @@ impl Command for SendCommand {
                     return format!("Couldn't parse argument as array\n{}", self.help());
                 }
 
-                let fee = lightwallet::fee::get_default_fee(lightclient.wallet.last_scanned_height().await as i32);
+                let fee = u64::from(DEFAULT_FEE);
                 let all_zbalance = lightclient.wallet.verified_zbalance(None).await.checked_sub(fee);
 
                 let maybe_send_args = json_args
@@ -786,9 +784,7 @@ impl Command for SendCommand {
                     Ok(amt) => amt,
                     Err(e) => {
                         if args[1] == "entire-verified-zbalance" {
-                            let fee = lightwallet::fee::get_default_fee(
-                                lightclient.wallet.last_scanned_height().await as i32,
-                            );
+                            let fee = u64::from(DEFAULT_FEE);
                             match lightclient.wallet.verified_zbalance(None).await.checked_sub(fee) {
                                 Some(amt) => amt,
                                 None => return format!("Not enough in wallet to pay transaction fee of {}", fee),
@@ -1079,22 +1075,13 @@ impl Command for DefaultFeeCommand {
         "Returns the default fee in zats for outgoing transactions".to_string()
     }
 
-    fn exec(&self, args: &[&str], lightclient: &LightClient) -> String {
+    fn exec(&self, args: &[&str], _lightclient: &LightClient) -> String {
         if args.len() > 1 {
             return format!("Was expecting at most 1 argument\n{}", self.help());
         }
 
         RT.block_on(async move {
-            let height = if args.len() == 1 {
-                match args[0].parse::<i32>() {
-                    Ok(h) => h,
-                    Err(e) => return format!("Couldn't parse height {}", e),
-                }
-            } else {
-                lightclient.wallet.last_scanned_height().await as i32
-            };
-
-            let j = object! { "defaultfee" => fee::get_default_fee(height)};
+            let j = object! { "defaultfee" => u64::from(DEFAULT_FEE)};
             j.pretty(2)
         })
     }

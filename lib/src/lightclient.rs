@@ -6,7 +6,7 @@ use crate::{
     },
     grpc_connector::GrpcConnector,
     lightclient::lightclient_config::MAX_REORG,
-    lightwallet::{self, fee, message::Message, LightWallet, NodePosition},
+    lightwallet::{self, message::Message, LightWallet, NodePosition},
 };
 use futures::future::join_all;
 use json::{array, object, JsonValue};
@@ -32,7 +32,7 @@ use zcash_primitives::{
     memo::{Memo, MemoBytes},
     merkle_tree::CommitmentTree,
     sapling::Node,
-    transaction::TxId,
+    transaction::{components::amount::DEFAULT_FEE, TxId},
 };
 use zcash_proofs::prover::LocalTxProver;
 
@@ -861,10 +861,9 @@ impl LightClient {
             .collect::<Vec<JsonValue>>();
 
         // Add in all mempool txns
-        let last_scanned_height = self.wallet.last_scanned_height().await;
         tx_list.extend(self.wallet.txns.read().await.mempool.iter().map(|(_, wtx)| {
             let amount: u64 = wtx.outgoing_metadata.iter().map(|om| om.value).sum::<u64>();
-            let fee = fee::get_default_fee(last_scanned_height as i32);
+            let fee = u64::from(DEFAULT_FEE);
 
             // Collect outgoing metadata
             let outgoing_json = wtx
@@ -1442,7 +1441,7 @@ impl LightClient {
     }
 
     pub async fn do_shield(&self, address: Option<String>) -> Result<String, String> {
-        let fee = fee::get_default_fee(self.wallet.last_scanned_height().await as i32);
+        let fee = u64::from(DEFAULT_FEE);
         let tbal = self.wallet.tbalance(None).await;
 
         // Make sure there is a balance, and it is greated than the amount
