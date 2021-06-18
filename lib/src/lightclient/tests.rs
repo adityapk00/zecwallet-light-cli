@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ff::{Field, PrimeField};
@@ -108,7 +107,24 @@ async fn mine_pending_blocks(fcbl: &mut FakeCompactBlockList, data: &Arc<RwLock<
     let cbs = fcbl.into_compact_blocks();
 
     data.write().await.add_blocks(cbs.clone());
-    data.write().await.add_txns(fcbl.into_txns());
+    let mut v = fcbl.into_txns();
+
+    // Add all the t-addr spend's t-addresses into the maps, so the test grpc server
+    // knows to serve this tx when the txns for this particular taddr are requested.
+    for (t, _h, taddrs) in v.iter_mut() {
+        for vin in &t.vin {
+            let prev_txid = WalletTx::new_txid(&vin.prevout.hash().to_vec());
+            if let Some(wtx) = lc.wallet.txns.read().await.current.get(&prev_txid) {
+                if let Some(utxo) = wtx.utxos.iter().find(|u| u.output_index as u32 == vin.prevout.n()) {
+                    if !taddrs.contains(&utxo.address) {
+                        taddrs.push(utxo.address.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    data.write().await.add_txns(v);
 
     lc.do_sync(true).await.unwrap();
 }
@@ -236,7 +252,7 @@ async fn z_incoming_z_outgoing() {
     assert_eq!(jv["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
     // 7. Mine the sent transaction
-    fcbl.add_pending_sends(&data, None).await;
+    fcbl.add_pending_sends(&data).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     let list = lc.do_list_transactions(false).await;
@@ -379,7 +395,7 @@ async fn multiple_incoming_same_tx() {
     let sent_txid = lc.test_do_send(vec![(EXT_ZADDR, sent_value, None)]).await.unwrap();
 
     // 4. Mine the sent transaction
-    fcbl.add_pending_sends(&data, None).await;
+    fcbl.add_pending_sends(&data).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     // 5. Check the notes - that we spent all 4 notes
@@ -431,7 +447,7 @@ async fn z_incoming_multiz_outgoing() {
         (EXT_ZADDR2, 20, Some("ext2-20".to_string())),
     ];
     let sent_txid = lc.test_do_send(tos.clone()).await.unwrap();
-    fcbl.add_pending_sends(&data, None).await;
+    fcbl.add_pending_sends(&data).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     // 4. Check the outgoing txn list
@@ -598,7 +614,7 @@ async fn z_incoming_viewkey() {
         .test_do_send(vec![(EXT_ZADDR, sent_value, Some(outgoing_memo.clone()))])
         .await
         .unwrap();
-    fcbl.add_pending_sends(&data, None).await;
+    fcbl.add_pending_sends(&data).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     // 8. Make sure tx is present
@@ -666,12 +682,7 @@ async fn t_incoming_t_outgoing() {
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
     // 7. Mine the sent transaction
-    let mut taddrs_map = HashMap::new();
-    taddrs_map.insert(
-        WalletTx::new_txid(&hex::decode(&sent_txid).unwrap().into_iter().rev().collect()),
-        vec![taddr],
-    );
-    fcbl.add_pending_sends(&data, Some(taddrs_map)).await;
+    fcbl.add_pending_sends(&data).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     let notes = lc.do_list_notes(true).await;

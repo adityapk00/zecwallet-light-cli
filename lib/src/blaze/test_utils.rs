@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::TryInto, sync::Arc};
+use std::{convert::TryInto, sync::Arc};
 
 use crate::{
     compact_formats::{CompactBlock, CompactOutput, CompactSpend, CompactTx},
@@ -278,14 +278,8 @@ impl FakeCompactBlockList {
         s
     }
 
-    pub async fn add_pending_sends(
-        &mut self,
-        data: &Arc<RwLock<TestServerData>>,
-        taddr_map: Option<HashMap<TxId, Vec<String>>>,
-    ) {
+    pub async fn add_pending_sends(&mut self, data: &Arc<RwLock<TestServerData>>) {
         let sent_txns = data.write().await.sent_txns.split_off(0);
-
-        let new_block = self.add_empty_block();
 
         for rtx in sent_txns {
             let tx = Transaction::read(&rtx.data[..]).unwrap();
@@ -308,7 +302,7 @@ impl FakeCompactBlockList {
             }
 
             let config = data.read().await.config.clone();
-            let mut taddrs = tx
+            let taddrs = tx
                 .vout
                 .iter()
                 .filter_map(|vout| {
@@ -321,16 +315,13 @@ impl FakeCompactBlockList {
                 })
                 .collect::<Vec<_>>();
 
-            if let Some(Some(taddrs_involved)) = taddr_map.as_ref().map(|tm| tm.get(&tx.txid())) {
-                taddrs.extend(taddrs_involved.clone());
-            }
-
-            data.write()
-                .await
-                .add_txns(vec![(tx.clone(), new_block.height, taddrs)]);
-
-            ctx.hash = tx.txid().0.to_vec();
-            new_block.add_txs(vec![ctx]);
+            let new_block_height = {
+                let new_block = self.add_empty_block();
+                ctx.hash = tx.txid().0.to_vec();
+                new_block.add_txs(vec![ctx]);
+                new_block.height
+            };
+            self.txns.push((tx.clone(), new_block_height, taddrs));
         }
     }
 
