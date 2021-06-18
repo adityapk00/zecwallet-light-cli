@@ -286,9 +286,11 @@ impl WalletTxns {
     }
 
     pub fn mark_notes_as_change(&mut self, txid: &TxId) {
-        self.current
-            .get_mut(txid)
-            .map(|wtx| wtx.notes.iter_mut().map(|n| n.is_change = true));
+        self.current.get_mut(txid).map(|wtx| {
+            wtx.notes.iter_mut().for_each(|n| {
+                n.is_change = true;
+            })
+        });
     }
 
     // Records a TxId as having spent some nullifiers from the wallet.

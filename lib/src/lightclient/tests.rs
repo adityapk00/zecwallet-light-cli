@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ff::{Field, PrimeField};
@@ -37,6 +38,7 @@ use crate::compact_formats::{CompactOutput, CompactTx, Empty};
 use crate::lightclient::lightclient_config::LightClientConfig;
 use crate::lightclient::test_server::TestGRPCService;
 use crate::lightclient::LightClient;
+use crate::lightwallet::data::WalletTx;
 
 use super::test_server::TestServerData;
 
@@ -234,7 +236,7 @@ async fn z_incoming_z_outgoing() {
     assert_eq!(jv["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
     // 7. Mine the sent transaction
-    fcbl.add_pending_sends(&data).await;
+    fcbl.add_pending_sends(&data, None).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     let list = lc.do_list_transactions(false).await;
@@ -377,7 +379,7 @@ async fn multiple_incoming_same_tx() {
     let sent_txid = lc.test_do_send(vec![(EXT_ZADDR, sent_value, None)]).await.unwrap();
 
     // 4. Mine the sent transaction
-    fcbl.add_pending_sends(&data).await;
+    fcbl.add_pending_sends(&data, None).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     // 5. Check the notes - that we spent all 4 notes
@@ -429,7 +431,7 @@ async fn z_incoming_multiz_outgoing() {
         (EXT_ZADDR2, 20, Some("ext2-20".to_string())),
     ];
     let sent_txid = lc.test_do_send(tos.clone()).await.unwrap();
-    fcbl.add_pending_sends(&data).await;
+    fcbl.add_pending_sends(&data, None).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     // 4. Check the outgoing txn list
@@ -596,7 +598,7 @@ async fn z_incoming_viewkey() {
         .test_do_send(vec![(EXT_ZADDR, sent_value, Some(outgoing_memo.clone()))])
         .await
         .unwrap();
-    fcbl.add_pending_sends(&data).await;
+    fcbl.add_pending_sends(&data, None).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     // 8. Make sure tx is present
@@ -664,7 +666,12 @@ async fn t_incoming_t_outgoing() {
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
     // 7. Mine the sent transaction
-    fcbl.add_pending_sends(&data).await;
+    let mut taddrs_map = HashMap::new();
+    taddrs_map.insert(
+        WalletTx::new_txid(&hex::decode(&sent_txid).unwrap().into_iter().rev().collect()),
+        vec![taddr],
+    );
+    fcbl.add_pending_sends(&data, Some(taddrs_map)).await;
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
     let notes = lc.do_list_notes(true).await;
@@ -675,11 +682,39 @@ async fn t_incoming_t_outgoing() {
     // Change shielded note
     assert_eq!(notes["unspent_notes"][0]["created_in_block"].as_u64().unwrap(), 12);
     assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
+    assert_eq!(notes["unspent_notes"][0]["is_change"].as_bool().unwrap(), true);
+    assert_eq!(
+        notes["unspent_notes"][0]["value"].as_u64().unwrap(),
+        value - sent_value - u64::from(DEFAULT_FEE)
+    );
 
-    // TODO: Is this correct?
-    println!("{}", lc.do_list_transactions(false).await.pretty(2));
+    let list = lc.do_list_transactions(false).await;
+    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
+    assert_eq!(list[1]["txid"], sent_txid);
+    assert_eq!(list[1]["unconfirmed"].as_bool(), None);
+    assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_TADDR);
+    assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
+
+    // Make sure everything is fine even after the rescan
+
     lc.do_rescan().await.unwrap();
-    println!("{}", lc.do_list_transactions(false).await.pretty(2));
+
+    let list = lc.do_list_transactions(false).await;
+    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
+    assert_eq!(list[1]["txid"], sent_txid);
+    assert_eq!(list[1]["unconfirmed"].as_bool(), None);
+    assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_TADDR);
+    assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
+
+    let notes = lc.do_list_notes(true).await;
+    // Change shielded note
+    assert_eq!(notes["unspent_notes"][0]["created_in_block"].as_u64().unwrap(), 12);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
+    assert_eq!(notes["unspent_notes"][0]["is_change"].as_bool().unwrap(), true);
+    assert_eq!(
+        notes["unspent_notes"][0]["value"].as_u64().unwrap(),
+        value - sent_value - u64::from(DEFAULT_FEE)
+    );
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();

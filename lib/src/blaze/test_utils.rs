@@ -1,4 +1,4 @@
-use std::{convert::TryInto, sync::Arc};
+use std::{collections::HashMap, convert::TryInto, sync::Arc};
 
 use crate::{
     compact_formats::{CompactBlock, CompactOutput, CompactSpend, CompactTx},
@@ -278,7 +278,11 @@ impl FakeCompactBlockList {
         s
     }
 
-    pub async fn add_pending_sends(&mut self, data: &Arc<RwLock<TestServerData>>) {
+    pub async fn add_pending_sends(
+        &mut self,
+        data: &Arc<RwLock<TestServerData>>,
+        taddr_map: Option<HashMap<TxId, Vec<String>>>,
+    ) {
         let sent_txns = data.write().await.sent_txns.split_off(0);
 
         let new_block = self.add_empty_block();
@@ -304,7 +308,7 @@ impl FakeCompactBlockList {
             }
 
             let config = data.read().await.config.clone();
-            let taddrs = tx
+            let mut taddrs = tx
                 .vout
                 .iter()
                 .filter_map(|vout| {
@@ -316,6 +320,10 @@ impl FakeCompactBlockList {
                     }
                 })
                 .collect::<Vec<_>>();
+
+            if let Some(Some(taddrs_involved)) = taddr_map.as_ref().map(|tm| tm.get(&tx.txid())) {
+                taddrs.extend(taddrs_involved.clone());
+            }
 
             data.write()
                 .await

@@ -222,6 +222,7 @@ impl LightClientConfig {
     pub fn get_log_path(&self) -> Box<Path> {
         let mut log_path = self.get_zcash_data_path().into_path_buf();
         log_path.push(LOGFILE_NAME);
+        //println!("LogFile:\n{}", log_path.to_str().unwrap());
 
         log_path.into_boxed_path()
     }

@@ -196,14 +196,28 @@ impl CompactTxStreamer for TestGRPCService {
         let buf_size = cmp::max(self.data.read().await.txns.len(), 1);
         let (tx, rx) = mpsc::channel(buf_size);
 
-        let taddr = request.into_inner().address;
+        let request = request.into_inner();
+        let taddr = request.address;
+        let start_block = request.range.as_ref().unwrap().start.as_ref().unwrap().height;
+        let end_block = request.range.as_ref().unwrap().end.as_ref().unwrap().height;
 
         let txns = self.data.read().await.txns.clone();
         tokio::spawn(async move {
-            for (taddrs, rtx) in txns.values() {
-                if taddrs.contains(&taddr) {
-                    tx.send(Ok(rtx.clone())).await.unwrap();
-                }
+            let mut txns_to_send = txns
+                .values()
+                .filter_map(|(taddrs, rtx)| {
+                    if taddrs.contains(&taddr) && rtx.height >= start_block && rtx.height <= end_block {
+                        Some(rtx.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            txns_to_send.sort_by_key(|rtx| rtx.height);
+
+            for rtx in txns_to_send {
+                tx.send(Ok(rtx)).await.unwrap();
             }
         });
 

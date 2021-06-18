@@ -176,7 +176,6 @@ impl FetchFullTxns {
                     let output_taddr = hash.to_base58check(&config.base58_pubkey_address(), &[]);
                     if taddrs_set.contains(&output_taddr) {
                         // This is our address. Add this as an output to the txid
-
                         wallet_txns.write().await.add_new_taddr_output(
                             tx.txid(),
                             output_taddr.clone(),
