@@ -309,8 +309,6 @@ impl LightClient {
     pub fn read_from_disk(config: &LightClientConfig) -> io::Result<Self> {
         let wallet_path = if config.wallet_exists() {
             config.get_wallet_path()
-        } else if config.v14_wallet_exists() {
-            config.get_v14_wallet_path()
         } else {
             return Err(Error::new(
                 ErrorKind::AlreadyExists,

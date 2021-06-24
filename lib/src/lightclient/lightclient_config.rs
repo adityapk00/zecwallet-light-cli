@@ -20,8 +20,7 @@ use zcash_primitives::constants::{mainnet, regtest, testnet};
 use crate::{grpc_connector::GrpcConnector, lightclient::checkpoints};
 
 pub const DEFAULT_SERVER: &str = "https://lwdv3.zecwallet.co";
-pub const V14_WALLET_NAME: &str = "zecwallet-light-wallet.dat";
-pub const WALLET_NAME: &str = "zecwallet-light-wallet.bsync.beta.dat";
+pub const WALLET_NAME: &str = "zecwallet-light-wallet.dat";
 pub const LOGFILE_NAME: &str = "zecwallet-light-wallet.debug.log";
 pub const ANCHOR_OFFSET: u32 = 4;
 pub const MAX_REORG: usize = 100;
@@ -176,22 +175,11 @@ impl LightClientConfig {
         }
     }
 
-    pub fn get_v14_wallet_path(&self) -> Box<Path> {
-        let mut wallet_location = self.get_zcash_data_path().into_path_buf();
-        wallet_location.push(V14_WALLET_NAME);
-
-        wallet_location.into_boxed_path()
-    }
-
     pub fn get_wallet_path(&self) -> Box<Path> {
         let mut wallet_location = self.get_zcash_data_path().into_path_buf();
         wallet_location.push(WALLET_NAME);
 
         wallet_location.into_boxed_path()
-    }
-
-    pub fn v14_wallet_exists(&self) -> bool {
-        return self.get_v14_wallet_path().exists();
     }
 
     pub fn wallet_exists(&self) -> bool {

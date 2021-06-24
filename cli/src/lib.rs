@@ -82,7 +82,7 @@ pub fn startup(
     let lightclient = match seed {
         Some(phrase) => Arc::new(LightClient::new_from_phrase(phrase, &config, birthday, false)?),
         None => {
-            if config.wallet_exists() || config.v14_wallet_exists() {
+            if config.wallet_exists() {
                 Arc::new(LightClient::read_from_disk(&config)?)
             } else {
                 println!("Creating a new wallet");
