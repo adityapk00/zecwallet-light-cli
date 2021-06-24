@@ -496,6 +496,12 @@ impl LightClient {
         }
     }
 
+    pub fn do_save_to_buffer_sync(&self) -> Result<Vec<u8>, String> {
+        Runtime::new()
+            .unwrap()
+            .block_on(async move { self.do_save_to_buffer().await })
+    }
+
     pub async fn do_save_to_buffer(&self) -> Result<Vec<u8>, String> {
         // If the wallet is encrypted but unlocked, lock it again.
         {
@@ -580,6 +586,12 @@ impl LightClient {
             "txid" => progress.last_txid,
             "error" => progress.last_error,
         })
+    }
+
+    pub fn do_seed_phrase_sync(&self) -> Result<JsonValue, &str> {
+        Runtime::new()
+            .unwrap()
+            .block_on(async move { self.do_seed_phrase().await })
     }
 
     pub async fn do_seed_phrase(&self) -> Result<JsonValue, &str> {
