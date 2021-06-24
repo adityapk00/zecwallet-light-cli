@@ -569,6 +569,7 @@ impl BlockAndWitnessData {
                         });
                         i += 1;
                     } else {
+                        info!("Waiting for workers. Have {}, waiting for {}", i, total);
                         yield_now().await;
                     }
                 }
@@ -595,6 +596,7 @@ impl BlockAndWitnessData {
 
     async fn wait_for_first_block(&self) -> u64 {
         while self.blocks.read().await.is_empty() {
+            info!("Waiting for first block, blocks are empty!");
             yield_now().await;
         }
 
@@ -605,6 +607,11 @@ impl BlockAndWitnessData {
         self.wait_for_first_block().await;
 
         while self.blocks.read().await.last().unwrap().height > height {
+            info!(
+                "Waiting for block {}, current at {}",
+                height,
+                self.blocks.read().await.last().unwrap().height
+            );
             yield_now().await;
         }
     }
