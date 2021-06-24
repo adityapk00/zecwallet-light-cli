@@ -285,12 +285,16 @@ impl WalletTxns {
         note_data.note.value
     }
 
-    pub fn mark_notes_as_change(&mut self, txid: &TxId) {
-        self.current.get_mut(txid).map(|wtx| {
-            wtx.notes.iter_mut().for_each(|n| {
-                n.is_change = true;
-            })
-        });
+    // Check this transaction to see if it is an outgoing transaction, and if it is, mark all recieved notes in this
+    // transction as change. i.e., If any funds were spent in this transaction, all recieved notes are change notes.
+    pub fn check_notes_mark_change(&mut self, txid: &TxId) {
+        if self.total_funds_spent_in(txid) > 0 {
+            self.current.get_mut(txid).map(|wtx| {
+                wtx.notes.iter_mut().for_each(|n| {
+                    n.is_change = true;
+                })
+            });
+        }
     }
 
     // Records a TxId as having spent some nullifiers from the wallet.
@@ -320,10 +324,10 @@ impl WalletTxns {
                 wtx.spent_nullifiers.push(nullifier);
                 wtx.total_sapling_value_spent += value;
             }
-
-            // Since this Txid has spent some funds, output notes in this Tx that are sent to us are actually change.
-            wtx.notes.iter_mut().for_each(|nd| nd.is_change = true);
         }
+
+        // Since this Txid has spent some funds, output notes in this Tx that are sent to us are actually change.
+        self.check_notes_mark_change(&txid);
 
         // Mark the source note's nullifier as spent
         {
@@ -353,6 +357,8 @@ impl WalletTxns {
         }
         let wtx = self.current.get_mut(&txid).expect("Txid should be present");
         wtx.total_transparent_value_spent = total_transparent_value_spent;
+
+        self.check_notes_mark_change(&txid);
     }
 
     pub fn mark_txid_utxo_spent(
@@ -440,29 +446,35 @@ impl WalletTxns {
             self.current
                 .insert(txid, WalletTx::new(height.into(), timestamp, &txid, price));
         }
-        let wtx = self.current.get_mut(&txid).expect("Txid should be present");
-        // Update the block height, in case this was a mempool or unconfirmed tx.
-        wtx.block = height;
 
-        let nullifier = note.nf(&extfvk.fvk.vk, witness.position() as u64);
-        let witnesses = if have_spending_key { vec![witness] } else { vec![] };
+        // Check if this is a change note
+        let is_change = self.total_funds_spent_in(&txid) > 0;
 
-        if wtx.notes.iter().find(|n| n.nullifier == nullifier).is_none() {
-            // Note: We first add the notes as "not change", but after we scan the full tx, we will update the "is_change", depending on if any funds were spent in this tx.
-            let nd = SaplingNoteData {
-                extfvk: extfvk.clone(),
-                diversifier: *to.diversifier(),
-                note,
-                witnesses,
-                nullifier,
-                spent: None,
-                unconfirmed_spent: None,
-                memo: None,
-                is_change: false,
-                have_spending_key,
-            };
+        {
+            let wtx = self.current.get_mut(&txid).expect("Txid should be present");
+            // Update the block height, in case this was a mempool or unconfirmed tx.
+            wtx.block = height;
 
-            wtx.notes.push(nd);
+            let nullifier = note.nf(&extfvk.fvk.vk, witness.position() as u64);
+            let witnesses = if have_spending_key { vec![witness] } else { vec![] };
+
+            if wtx.notes.iter().find(|n| n.nullifier == nullifier).is_none() {
+                // Note: We first add the notes as "not change", but after we scan the full tx, we will update the "is_change", depending on if any funds were spent in this tx.
+                let nd = SaplingNoteData {
+                    extfvk: extfvk.clone(),
+                    diversifier: *to.diversifier(),
+                    note,
+                    witnesses,
+                    nullifier,
+                    spent: None,
+                    unconfirmed_spent: None,
+                    memo: None,
+                    is_change,
+                    have_spending_key,
+                };
+
+                wtx.notes.push(nd);
+            }
         }
     }
 

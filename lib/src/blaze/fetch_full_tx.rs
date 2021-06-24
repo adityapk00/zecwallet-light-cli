@@ -10,7 +10,7 @@ use crate::{
 use futures::future::join_all;
 use log::info;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     convert::{TryFrom, TryInto},
     iter::FromIterator,
     sync::Arc,
@@ -75,7 +75,7 @@ impl FetchFullTxns {
 
         let bsync_data_i = bsync_data.clone();
 
-        let fetched_txids = Arc::new(RwLock::new(HashSet::new()));
+        let fetched_txids = Arc::new(RwLock::new(HashMap::<TxId, Transaction>::new()));
 
         let (txid_tx, mut txid_rx) = unbounded_channel::<(TxId, BlockHeight)>();
         let h1: JoinHandle<Result<(), String>> = tokio::spawn(async move {
@@ -83,34 +83,35 @@ impl FetchFullTxns {
 
             while let Some((txid, height)) = txid_rx.recv().await {
                 // It is possible that we recieve the same txid multiple times, so we keep track of all the txids that were fetched
-                if fetched_txids.read().await.contains(&txid) {
-                    // We're already processing it or already processed it, so ignore
-                    continue;
-                }
+                let tx = match fetched_txids.read().await.get(&txid) {
+                    Some(tx) => tx.clone(),
+                    None => {
+                        let fulltx_fetcher = fulltx_fetcher.clone();
+
+                        // Fetch the TxId from LightwalletD and process all the parts of it.
+                        let tx = {
+                            let (tx, rx) = oneshot::channel();
+                            fulltx_fetcher.send((txid, tx)).unwrap();
+                            rx.await.unwrap()?
+                        };
+
+                        tx
+                    }
+                };
 
                 // Record that we fetched this txid
-                fetched_txids.write().await.insert(txid.clone());
-
-                let config = config.clone();
-                let keys = keys.clone();
-                let wallet_txns = wallet_txns.clone();
-
-                let fulltx_fetcher = fulltx_fetcher.clone();
-
-                let block_time = bsync_data_i.read().await.block_data.get_block_timestamp(&height).await;
-
-                // Fetch the TxId from LightwalletD and process all the parts of it.
-                let tx = {
-                    let (tx, rx) = oneshot::channel();
-                    fulltx_fetcher.send((txid, tx)).unwrap();
-                    rx.await.unwrap()?
-                };
+                fetched_txids.write().await.insert(txid.clone(), tx.clone());
 
                 let progress = start_height - u64::from(height);
                 if progress > last_progress {
                     bsync_data_i.read().await.sync_status.write().await.txn_scan_done = progress;
                     last_progress = progress;
                 }
+
+                let config = config.clone();
+                let keys = keys.clone();
+                let wallet_txns = wallet_txns.clone();
+                let block_time = bsync_data_i.read().await.block_data.get_block_timestamp(&height).await;
 
                 Self::scan_full_tx(config, tx, height, block_time, keys, wallet_txns, &price).await?;
             }
@@ -377,7 +378,7 @@ impl FetchFullTxns {
             // Also, if this is an outgoing transaction, then mark all the *incoming* sapling notes to this Tx as change.
             // Note that this is also done in `WalletTxns::add_new_spent`, but that doesn't take into account transparent spends,
             // so we'll do it again here.
-            wallet_txns.write().await.mark_notes_as_change(&tx.txid());
+            wallet_txns.write().await.check_notes_mark_change(&tx.txid());
         }
 
         if !outgoing_metadatas.is_empty() {

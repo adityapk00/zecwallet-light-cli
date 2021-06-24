@@ -11,7 +11,7 @@ use crate::{
 };
 use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
 use log::{info, warn};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::{
         mpsc::{self, unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -19,6 +19,7 @@ use tokio::{
         RwLock,
     },
     task::{yield_now, JoinHandle},
+    time::sleep,
 };
 use zcash_primitives::{
     consensus::BlockHeight,
@@ -570,6 +571,7 @@ impl BlockAndWitnessData {
                         i += 1;
                     } else {
                         info!("Waiting for workers. Have {}, waiting for {}", i, total);
+                        sleep(Duration::from_millis(100)).await;
                         yield_now().await;
                     }
                 }
@@ -596,8 +598,10 @@ impl BlockAndWitnessData {
 
     async fn wait_for_first_block(&self) -> u64 {
         while self.blocks.read().await.is_empty() {
-            info!("Waiting for first block, blocks are empty!");
             yield_now().await;
+            sleep(Duration::from_millis(100)).await;
+
+            info!("Waiting for first block, blocks are empty!");
         }
 
         self.blocks.read().await.first().unwrap().height
@@ -607,12 +611,14 @@ impl BlockAndWitnessData {
         self.wait_for_first_block().await;
 
         while self.blocks.read().await.last().unwrap().height > height {
+            yield_now().await;
+            sleep(Duration::from_millis(100)).await;
+
             info!(
                 "Waiting for block {}, current at {}",
                 height,
                 self.blocks.read().await.last().unwrap().height
             );
-            yield_now().await;
         }
     }
 
