@@ -33,13 +33,27 @@ impl SyncStatus {
         }
     }
 
+    pub fn start_new(&mut self) {
+        self.sync_id += 1;
+        self.in_progress = true;
+        self.blocks_done = 0;
+        self.blocks_tree_done = 0;
+        self.trial_dec_done = 0;
+        self.blocks_total = 0;
+        self.txn_scan_done = 0;
+    }
+
     /// Finish up a sync
     pub fn finish(&mut self) {
         self.in_progress = false;
     }
 
     fn perct(&self, num: u64) -> u8 {
-        cmp::min(((num * 100) / self.blocks_total) as u8, 100)
+        if self.blocks_total > 0 {
+            cmp::min(((num * 100) / self.blocks_total) as u8, 100)
+        } else {
+            0
+        }
     }
 }
 

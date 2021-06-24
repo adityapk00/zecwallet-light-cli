@@ -31,7 +31,7 @@ impl BlazeSyncData {
         {
             let mut guard = self.sync_status.write().await;
             let prev_sync_status = guard.clone();
-            (*guard) = SyncStatus::new_sync(prev_sync_status.sync_id + 1, start_block, end_block);
+            (*guard) = SyncStatus::new_sync(prev_sync_status.sync_id, start_block, end_block);
         }
 
         self.block_data.setup_sync(existing_blocks).await;

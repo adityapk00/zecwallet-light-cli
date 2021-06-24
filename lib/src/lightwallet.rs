@@ -203,7 +203,7 @@ impl LightWallet {
             WalletZecPriceInfo::read(&mut reader)?
         };
 
-        let lw = Self {
+        let mut lw = Self {
             keys: Arc::new(RwLock::new(keys)),
             txns: Arc::new(RwLock::new(txns)),
             blocks: Arc::new(RwLock::new(blocks)),
@@ -218,6 +218,10 @@ impl LightWallet {
         if version <= 14 {
             lw.remove_unused_taddrs().await;
             lw.remove_unused_zaddrs().await;
+        }
+
+        if version <= 14 {
+            lw.set_witness_block_heights().await;
         }
 
         Ok(lw)
@@ -254,6 +258,16 @@ impl LightWallet {
         self.price.read().await.write(&mut writer)?;
 
         Ok(())
+    }
+
+    // Before version 20, witnesses didn't store their height, so we need to update them.
+    pub async fn set_witness_block_heights(&mut self) {
+        let top_height = self.last_scanned_height().await;
+        self.txns.write().await.current.iter_mut().for_each(|(_, wtx)| {
+            wtx.notes.iter_mut().for_each(|nd| {
+                nd.witnesses.top_height = top_height;
+            });
+        });
     }
 
     pub fn keys(&self) -> Arc<RwLock<Keys>> {
@@ -722,7 +736,7 @@ impl LightWallet {
                         .filter(|nd| nd.spent.is_none() && nd.unconfirmed_spent.is_none())
                         .filter(|nd| {
                             // Check to see if we have this note's spending key and witnesses
-                            keys.have_spending_key(&nd.extfvk) && !nd.witnesses.is_empty()
+                            keys.have_spending_key(&nd.extfvk) && nd.witnesses.len() > 0
                         })
                         .filter(|nd| {
                             // TODO, this whole section is shared with verified_balance. Refactor it.

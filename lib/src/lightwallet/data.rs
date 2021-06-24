@@ -2,7 +2,9 @@ use crate::compact_formats::CompactBlock;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use prost::Message;
 use std::io::{self, Read, Write};
+use std::usize;
 
+use crate::blaze::fixed_size_buffer::FixedSizeBuffer;
 use zcash_primitives::{consensus::BlockHeight, zip32::ExtendedSpendingKey};
 use zcash_primitives::{
     memo::Memo,
@@ -113,6 +115,52 @@ impl BlockData {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct WitnessCache {
+    witnesses: Vec<IncrementalWitness<Node>>,
+    pub(crate) top_height: u64,
+}
+
+impl WitnessCache {
+    pub fn new(witnesses: Vec<IncrementalWitness<Node>>, top_height: u64) -> Self {
+        Self { witnesses, top_height }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            witnesses: vec![],
+            top_height: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.witnesses.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.witnesses.clear();
+    }
+
+    pub fn get(&self, i: usize) -> Option<&IncrementalWitness<Node>> {
+        self.witnesses.get(i)
+    }
+
+    pub fn last(&self) -> Option<&IncrementalWitness<Node>> {
+        self.witnesses.last()
+    }
+
+    pub fn into_fsb(self, fsb: &mut FixedSizeBuffer<IncrementalWitness<Node>>) {
+        self.witnesses.into_iter().for_each(|w| fsb.push(w));
+    }
+
+    pub fn pop(&mut self, at_height: u64) {
+        while !self.witnesses.is_empty() && self.top_height >= at_height {
+            self.witnesses.pop();
+            self.top_height -= 1;
+        }
+    }
+}
+
 pub struct SaplingNoteData {
     // Technically, this should be recoverable from the account number,
     // but we're going to refactor this in the future, so I'll write it again here.
@@ -122,7 +170,7 @@ pub struct SaplingNoteData {
     pub note: Note,
 
     // Witnesses for the last 100 blocks. witnesses.last() is the latest witness
-    pub(crate) witnesses: Vec<IncrementalWitness<Node>>,
+    pub(crate) witnesses: WitnessCache,
     pub(super) nullifier: Nullifier,
     pub spent: Option<(TxId, u32)>, // If this note was confirmed spent
 
@@ -169,33 +217,6 @@ impl SaplingNoteData {
     fn serialized_version() -> u64 {
         20
     }
-
-    // pub fn new(walletkey: &WalletZKey, output: zcash_client_backend::wallet::WalletShieldedOutput) -> Self {
-    //     let witness = output.witness;
-
-    //     let have_spending_key = walletkey.have_spending_key();
-
-    //     let nf = {
-    //         let mut nf = [0; 32];
-    //         nf.copy_from_slice(&output.note.nf(&walletkey.extfvk.fvk.vk, witness.position() as u64));
-    //         nf
-    //     };
-
-    //     SaplingNoteData {
-    //         account: output.account,
-    //         extfvk: walletkey.extfvk.clone(),
-    //         diversifier: *output.to.diversifier(),
-    //         note: output.note,
-    //         witnesses: if have_spending_key { vec![witness] } else { vec![] },
-    //         nullifier: nf,
-    //         spent: None,
-    //         spent_at_height: None,
-    //         unconfirmed_spent: None,
-    //         memo: None,
-    //         is_change: output.is_change,
-    //         have_spending_key,
-    //     }
-    // }
 
     // Reading a note also needs the corresponding address to read from.
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -246,7 +267,13 @@ impl SaplingNoteData {
             )),
         }?;
 
-        let witnesses = Vector::read(&mut reader, |r| IncrementalWitness::<Node>::read(r))?;
+        let witnesses_vec = Vector::read(&mut reader, |r| IncrementalWitness::<Node>::read(r))?;
+        let top_height = if version < 20 {
+            0
+        } else {
+            reader.read_u64::<LittleEndian>()?
+        };
+        let witnesses = WitnessCache::new(witnesses_vec, top_height);
 
         let mut nullifier = [0u8; 32];
         reader.read_exact(&mut nullifier)?;
@@ -339,7 +366,8 @@ impl SaplingNoteData {
 
         write_rseed(&mut writer, &self.note.rseed)?;
 
-        Vector::write(&mut writer, &self.witnesses, |wr, wi| wi.write(wr))?;
+        Vector::write(&mut writer, &self.witnesses.witnesses, |wr, wi| wi.write(wr))?;
+        writer.write_u64::<LittleEndian>(self.witnesses.top_height)?;
 
         writer.write_all(&self.nullifier.0)?;
 

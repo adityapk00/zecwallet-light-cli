@@ -42,13 +42,12 @@ impl UpdateNotes {
         txid: TxId,
         nullifier: Nullifier,
         output_num: Option<u32>,
-        note_height: BlockHeight,
     ) {
         // Get the data first, so we don't hold on to the lock
         let wtn = wallet_txns.read().await.get_note_witness(&txid, &nullifier);
 
         if let Some((witnesses, created_height)) = wtn {
-            if witnesses.is_empty() {
+            if witnesses.len() == 0 {
                 // No witnesses, likely a Viewkey or we don't have spending key, so don't bother
                 return;
             }
@@ -68,7 +67,7 @@ impl UpdateNotes {
                     .read()
                     .await
                     .block_data
-                    .update_witness_after_block(&note_height, witnesses)
+                    .update_witness_after_block(witnesses)
                     .await
             };
 
@@ -177,7 +176,6 @@ impl UpdateNotes {
                         txid,
                         nf,
                         output_num,
-                        at_height,
                     )));
                 }
 

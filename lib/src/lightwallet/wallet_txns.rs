@@ -16,7 +16,7 @@ use zcash_primitives::{
     zip32::ExtendedFullViewingKey,
 };
 
-use super::data::{OutgoingTxMetadata, SaplingNoteData, Utxo, WalletTx, WalletZecPriceInfo};
+use super::data::{OutgoingTxMetadata, SaplingNoteData, Utxo, WalletTx, WalletZecPriceInfo, WitnessCache};
 
 /// List of all transactions in a wallet.
 /// Note that the parent is expected to hold a RwLock, so we will assume that all accesses to
@@ -197,7 +197,7 @@ impl WalletTxns {
                     // The latest witness is at the last() position, so just pop() it.
                     // We should be checking if there is a witness at all, but if there is none, it is an
                     // empty vector, for which pop() is a no-op.
-                    let _discard = nd.witnesses.pop();
+                    let _discard = nd.witnesses.pop(u64::from(reorg_height));
                 }
             }
         }
@@ -238,11 +238,7 @@ impl WalletTxns {
             .collect()
     }
 
-    pub fn get_note_witness(
-        &self,
-        txid: &TxId,
-        nullifier: &Nullifier,
-    ) -> Option<(Vec<IncrementalWitness<Node>>, BlockHeight)> {
+    pub(crate) fn get_note_witness(&self, txid: &TxId, nullifier: &Nullifier) -> Option<(WitnessCache, BlockHeight)> {
         self.current.get(txid).map(|wtx| {
             wtx.notes
                 .iter()
@@ -251,7 +247,7 @@ impl WalletTxns {
         })?
     }
 
-    pub fn set_note_witnesses(&mut self, txid: &TxId, nullifier: &Nullifier, witnesses: Vec<IncrementalWitness<Node>>) {
+    pub(crate) fn set_note_witnesses(&mut self, txid: &TxId, nullifier: &Nullifier, witnesses: WitnessCache) {
         self.current
             .get_mut(txid)
             .unwrap()
@@ -281,7 +277,7 @@ impl WalletTxns {
 
         note_data.spent = Some((spent_txid.clone(), spent_at_height.into()));
         note_data.unconfirmed_spent = None;
-        note_data.witnesses = vec![];
+        note_data.witnesses = WitnessCache::empty();
         note_data.note.value
     }
 
@@ -456,7 +452,11 @@ impl WalletTxns {
             wtx.block = height;
 
             let nullifier = note.nf(&extfvk.fvk.vk, witness.position() as u64);
-            let witnesses = if have_spending_key { vec![witness] } else { vec![] };
+            let witnesses = if have_spending_key {
+                WitnessCache::new(vec![witness], u64::from(height))
+            } else {
+                WitnessCache::empty()
+            };
 
             if wtx.notes.iter().find(|n| n.nullifier == nullifier).is_none() {
                 // Note: We first add the notes as "not change", but after we scan the full tx, we will update the "is_change", depending on if any funds were spent in this tx.

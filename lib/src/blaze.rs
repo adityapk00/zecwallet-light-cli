@@ -7,7 +7,7 @@ pub(super) mod syncdata;
 pub(super) mod trial_decryptions;
 pub(super) mod update_notes;
 
-mod fixed_size_buffer;
+pub(crate) mod fixed_size_buffer;
 
 #[cfg(test)]
 pub mod test_utils;

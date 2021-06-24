@@ -1251,7 +1251,9 @@ impl LightClient {
                     }
 
                     let progress = format!("{}", sync_status.read().await);
-                    println!("{}", progress);
+                    if print_updates {
+                        println!("{}", progress);
+                    }
 
                     // Check to see if we're making any progress
                     if prev_progress != progress {
@@ -1281,12 +1283,11 @@ impl LightClient {
             r_fut.await
         };
 
+        // Mark the sync data as finished, which should clear everything
+        self.bsync_data.read().await.finish().await;
+
         match sync_result {
-            Ok(r) => {
-                // Mark the sync data as finished, which should clear everything
-                self.bsync_data.read().await.finish().await;
-                r
-            }
+            Ok(r) => r,
             Err(a) => {
                 warn!("Aborted!");
                 Ok(object! {
@@ -1305,7 +1306,7 @@ impl LightClient {
         let _lock = self.sync_lock.lock().await;
 
         // Increment the sync ID so the caller can determine when it is over
-        self.bsync_data.write().await.sync_status.write().await.sync_id += 1;
+        self.bsync_data.write().await.sync_status.write().await.start_new();
 
         // See if we need to verify first
         if !self.wallet.is_sapling_tree_verified() {

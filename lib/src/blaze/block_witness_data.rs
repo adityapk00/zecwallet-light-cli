@@ -5,7 +5,7 @@ use crate::{
         lightclient_config::{LightClientConfig, MAX_REORG},
     },
     lightwallet::{
-        data::{BlockData, WalletTx},
+        data::{BlockData, WalletTx, WitnessCache},
         wallet_txns::WalletTxns,
     },
 };
@@ -728,12 +728,8 @@ impl BlockAndWitnessData {
     }
 
     // Stream all the outputs start at the block till the highest block available.
-    pub async fn update_witness_after_block(
-        &self,
-        height: &BlockHeight,
-        witnesses: Vec<IncrementalWitness<Node>>,
-    ) -> Vec<IncrementalWitness<Node>> {
-        let height = u64::from(*height);
+    pub(crate) async fn update_witness_after_block(&self, witnesses: WitnessCache) -> WitnessCache {
+        let height = witnesses.top_height + 1;
 
         // Check if we've already synced all the requested blocks
         if height > self.wait_for_first_block().await {
@@ -744,16 +740,17 @@ impl BlockAndWitnessData {
 
         let mut fsb = FixedSizeBuffer::new(MAX_REORG);
 
-        {
+        let top_block = {
             let mut blocks = self.blocks.read().await;
-            let pos = blocks.first().unwrap().height - height;
+            let top_block = blocks.first().unwrap().height;
+            let pos = top_block - height;
             if blocks[pos as usize].height != height {
                 panic!("Wrong block");
             }
 
             // Get the last witness, and then use that.
             let mut w = witnesses.last().unwrap().clone();
-            witnesses.into_iter().for_each(|w| fsb.push(w));
+            witnesses.into_fsb(&mut fsb);
 
             for i in (0..pos + 1).rev() {
                 let cb = &blocks.get(i as usize).unwrap().cb();
@@ -774,24 +771,26 @@ impl BlockAndWitnessData {
                     blocks = self.blocks.read().await;
                 }
             }
-        }
 
-        return fsb.into_vec();
+            top_block
+        };
+
+        return WitnessCache::new(fsb.into_vec(), top_block);
     }
 
-    pub async fn update_witness_after_pos(
+    pub(crate) async fn update_witness_after_pos(
         &self,
         height: &BlockHeight,
         txid: &TxId,
         output_num: u32,
-        mut witnesses: Vec<IncrementalWitness<Node>>,
-    ) -> Vec<IncrementalWitness<Node>> {
+        witnesses: WitnessCache,
+    ) -> WitnessCache {
         let height = u64::from(*height);
         self.wait_for_block(height).await;
 
         // We'll update the rest of the block's witnesses here. Notice we pop the last witness, and we'll
         // add the updated one back into the array at the end of this function.
-        let mut w = witnesses.pop().unwrap().clone();
+        let mut w = witnesses.last().unwrap().clone();
 
         {
             let blocks = self.blocks.read().await;
@@ -830,12 +829,9 @@ impl BlockAndWitnessData {
         }
 
         // Replace the last witness in the vector with the newly computed one.
-        witnesses.push(w);
+        let witnesses = WitnessCache::new(vec![w], height);
 
-        // Also update the witnesses for the remaining blocks, till the latest block.
-        let next_height = BlockHeight::from_u32((height + 1) as u32);
-
-        return self.update_witness_after_block(&next_height, witnesses).await;
+        return self.update_witness_after_block(witnesses).await;
     }
 }
 
@@ -859,7 +855,7 @@ mod test {
     use crate::blaze::sync_status::SyncStatus;
     use crate::blaze::test_utils::{incw_to_string, list_all_witness_nodes, tree_to_string};
     use crate::compact_formats::TreeState;
-    use crate::lightwallet::data::WalletTx;
+    use crate::lightwallet::data::{WalletTx, WitnessCache};
     use crate::lightwallet::wallet_txns::WalletTxns;
     use crate::{
         blaze::test_utils::{FakeCompactBlock, FakeCompactBlockList},
@@ -1428,6 +1424,7 @@ mod test {
             let test_data = vec![(1, 1, 1), (1, 0, 0), (10, 1, 1), (10, 0, 0), (3, 0, 1), (5, 1, 0)];
 
             for (block_height, tx_num, output_num) in test_data {
+                println!("Testing {}, {}, {}", block_height, tx_num, output_num);
                 let cb = blocks.iter().find(|b| b.height == block_height).unwrap().cb();
 
                 // Get the Incremental witness for the note
@@ -1472,7 +1469,7 @@ mod test {
                         &BlockHeight::from_u32(block_height as u32),
                         &WalletTx::new_txid(&txid),
                         output_num as u32,
-                        vec![witness],
+                        WitnessCache::new(vec![witness], block_height),
                     )
                     .await
                     .last()
