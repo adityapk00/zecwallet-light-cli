@@ -1275,6 +1275,9 @@ impl LightClient {
         // If we allow multiple syncs, they'll all get jumbled up.
         let _lock = self.sync_lock.lock().await;
 
+        // Increment the sync ID so the caller can determine when it is over
+        self.bsync_data.write().await.sync_status.write().await.sync_id += 1;
+
         // See if we need to verify first
         if !self.wallet.is_sapling_tree_verified() {
             match self.do_verify_from_last_checkpoint().await {

@@ -89,10 +89,10 @@ impl Command for SyncStatusCommand {
             let o = if status.in_progress {
                 object! {
                     "sync_id" => status.sync_id,
-                    "in_prorgess" => status.in_progress,
+                    "in_progress" => status.in_progress,
                     "start_block" => status.start_block,
                     "end_block" => status.end_block,
-                    "witness_block" => status.blocks_tree_done,
+                    "witness_blocks" => status.blocks_tree_done,
                     "synced_blocks" => status.blocks_done,
                     "trial_decryptions_blocks" => status.trial_dec_done,
                     "txn_scan_blocks" => status.txn_scan_done,
