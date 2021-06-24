@@ -8,7 +8,7 @@ use crate::{
     lightclient::lightclient_config::MAX_REORG,
     lightwallet::{self, message::Message, LightWallet, NodePosition},
 };
-use futures::future::join_all;
+use futures::future::{join_all, AbortHandle, Abortable};
 use json::{array, object, JsonValue};
 use log::{error, info, warn};
 use std::{
@@ -1228,13 +1228,14 @@ impl LightClient {
         // Remember the previous sync id first
         let prev_sync_id = self.bsync_data.read().await.sync_status.read().await.sync_id;
 
-        // Start the sync
-        let r_fut = self.start_sync();
+        // Start the sync with an abortable handle
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        let r_fut = Abortable::new(self.start_sync(), abort_registration);
 
         // If printing updates, start a new task to print updates every 2 seconds.
         let sync_result = if print_updates {
             let sync_status = self.bsync_data.read().await.sync_status.clone();
-            let (tx, mut rx) = oneshot::channel();
+            let (tx, mut rx) = oneshot::channel::<i32>();
 
             tokio::spawn(async move {
                 while sync_status.read().await.sync_id == prev_sync_id {
@@ -1242,11 +1243,31 @@ impl LightClient {
                     sleep(Duration::from_secs(1)).await;
                 }
 
+                let mut prev_progress = format!("");
+                let mut stuck_ctr = 0;
                 loop {
                     if let Ok(_t) = rx.try_recv() {
                         break;
                     }
-                    println!("{}", sync_status.read().await);
+
+                    let progress = format!("{}", sync_status.read().await);
+                    println!("{}", progress);
+
+                    // Check to see if we're making any progress
+                    if prev_progress != progress {
+                        stuck_ctr = 0;
+                        prev_progress = progress;
+                    } else {
+                        info!("Sync stuck for {} secs", stuck_ctr * 2);
+                        stuck_ctr += 1;
+                    }
+
+                    // Abort if we're stuck for more than 60*2 seconds
+                    if stuck_ctr > 60 {
+                        // TODO: We need to probably reset the witnesses for existing notes, which
+                        // might have been updated already
+                        abort_handle.abort();
+                    }
 
                     yield_now().await;
                     sleep(Duration::from_secs(2)).await;
@@ -1260,10 +1281,20 @@ impl LightClient {
             r_fut.await
         };
 
-        // Mark the sync data as finished, which should clear everything
-        self.bsync_data.read().await.finish().await;
-
-        sync_result
+        match sync_result {
+            Ok(r) => {
+                // Mark the sync data as finished, which should clear everything
+                self.bsync_data.read().await.finish().await;
+                r
+            }
+            Err(a) => {
+                warn!("Aborted!");
+                Ok(object! {
+                    "result" => "aborted",
+                    "error" => format!("{}", a)
+                })
+            }
+        }
     }
 
     /// start_sync will start synchronizing the blockchain from the wallet's last height. This function will return immediately after starting the sync
