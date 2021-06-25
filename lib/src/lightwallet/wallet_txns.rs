@@ -458,22 +458,30 @@ impl WalletTxns {
                 WitnessCache::empty()
             };
 
-            if wtx.notes.iter().find(|n| n.nullifier == nullifier).is_none() {
-                // Note: We first add the notes as "not change", but after we scan the full tx, we will update the "is_change", depending on if any funds were spent in this tx.
-                let nd = SaplingNoteData {
-                    extfvk: extfvk.clone(),
-                    diversifier: *to.diversifier(),
-                    note,
-                    witnesses,
-                    nullifier,
-                    spent: None,
-                    unconfirmed_spent: None,
-                    memo: None,
-                    is_change,
-                    have_spending_key,
-                };
+            match wtx.notes.iter_mut().find(|n| n.nullifier == nullifier) {
+                None => {
+                    let nd = SaplingNoteData {
+                        extfvk: extfvk.clone(),
+                        diversifier: *to.diversifier(),
+                        note,
+                        witnesses,
+                        nullifier,
+                        spent: None,
+                        unconfirmed_spent: None,
+                        memo: None,
+                        is_change,
+                        have_spending_key,
+                    };
 
-                wtx.notes.push(nd);
+                    wtx.notes.push(nd);
+                }
+                Some(n) => {
+                    // If this note already exists, then just reset the witnesses, because we'll start scanning the witnesses
+                    // again after this.
+                    // This is likely to happen if the previous wallet wasn't synced properly or was aborted in the middle of a sync,
+                    // and has some dangling witnesses
+                    n.witnesses = witnesses;
+                }
             }
         }
     }

@@ -732,6 +732,276 @@ async fn t_incoming_t_outgoing() {
     h1.await.unwrap();
 }
 
+#[tokio::test]
+async fn mixed_txn() {
+    let secp = Secp256k1::new();
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let zvalue = 100_000;
+    let (_ztx, _height, _) = fcbl.add_tx_paying(&extfvk1, zvalue);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. Send an incoming t-address txn
+    let sk = lc.wallet.keys().read().await.tkeys[0];
+    let pk = PublicKey::from_secret_key(&secp, &sk);
+    let taddr = lc.wallet.keys().read().await.address_from_sk(&sk);
+    let tvalue = 200_000;
+
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, taddr.clone(), tvalue);
+    let (_ttx, _) = fcbl.add_ftx(ftx);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // 4. Send a tx to both external t-addr and external z addr and mine it
+    let sent_zvalue = 80_000;
+    let sent_tvalue = 140_000;
+    let sent_zmemo = "Ext z".to_string();
+    let tos = vec![
+        (EXT_ZADDR, sent_zvalue, Some(sent_zmemo.clone())),
+        (EXT_TADDR, sent_tvalue, None),
+    ];
+    lc.test_do_send(tos).await.unwrap();
+
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    let notes = lc.do_list_notes(true).await;
+    let list = lc.do_list_transactions(false).await;
+
+    // 5. Check everything
+    assert_eq!(notes["unspent_notes"].len(), 1);
+    assert_eq!(notes["unspent_notes"][0]["created_in_block"].as_u64().unwrap(), 18);
+    assert_eq!(notes["unspent_notes"][0]["is_change"].as_bool().unwrap(), true);
+    assert_eq!(
+        notes["unspent_notes"][0]["value"].as_u64().unwrap(),
+        tvalue + zvalue - sent_tvalue - sent_zvalue - u64::from(DEFAULT_FEE)
+    );
+
+    assert_eq!(notes["spent_notes"].len(), 1);
+    assert_eq!(
+        notes["spent_notes"][0]["spent"],
+        notes["unspent_notes"][0]["created_in_txid"]
+    );
+
+    assert_eq!(notes["pending_notes"].len(), 0);
+    assert_eq!(notes["utxos"].len(), 0);
+    assert_eq!(notes["pending_utxos"].len(), 0);
+
+    assert_eq!(notes["spent_utxos"].len(), 1);
+    assert_eq!(
+        notes["spent_utxos"][0]["spent"],
+        notes["unspent_notes"][0]["created_in_txid"]
+    );
+
+    assert_eq!(list.len(), 3);
+    assert_eq!(list[2]["block_height"].as_u64().unwrap(), 18);
+    assert_eq!(
+        list[2]["amount"].as_i64().unwrap(),
+        0 - (sent_tvalue + sent_zvalue + u64::from(DEFAULT_FEE)) as i64
+    );
+    assert_eq!(list[2]["txid"], notes["unspent_notes"][0]["created_in_txid"]);
+    assert_eq!(
+        list[2]["outgoing_metadata"]
+            .members()
+            .find(|j| j["address"].to_string() == EXT_ZADDR && j["value"].as_u64().unwrap() == sent_zvalue)
+            .unwrap()["memo"]
+            .to_string(),
+        sent_zmemo
+    );
+    assert_eq!(
+        list[2]["outgoing_metadata"]
+            .members()
+            .find(|j| j["address"].to_string() == EXT_TADDR)
+            .unwrap()["value"]
+            .as_u64()
+            .unwrap(),
+        sent_tvalue
+    );
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn aborted_resync() {
+    let secp = Secp256k1::new();
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let zvalue = 100_000;
+    let (_ztx, _height, _) = fcbl.add_tx_paying(&extfvk1, zvalue);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. Send an incoming t-address txn
+    let sk = lc.wallet.keys().read().await.tkeys[0];
+    let pk = PublicKey::from_secret_key(&secp, &sk);
+    let taddr = lc.wallet.keys().read().await.address_from_sk(&sk);
+    let tvalue = 200_000;
+
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, taddr.clone(), tvalue);
+    let (_ttx, _) = fcbl.add_ftx(ftx);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // 4. Send a tx to both external t-addr and external z addr and mine it
+    let sent_zvalue = 80_000;
+    let sent_tvalue = 140_000;
+    let sent_zmemo = "Ext z".to_string();
+    let tos = vec![
+        (EXT_ZADDR, sent_zvalue, Some(sent_zmemo.clone())),
+        (EXT_TADDR, sent_tvalue, None),
+    ];
+    let sent_txid = lc.test_do_send(tos).await.unwrap();
+
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    let notes_before = lc.do_list_notes(true).await;
+    let list_before = lc.do_list_transactions(false).await;
+    let witness_before = lc
+        .wallet
+        .txns
+        .read()
+        .await
+        .current
+        .get(&WalletTx::new_txid(
+            &hex::decode(sent_txid.clone()).unwrap().into_iter().rev().collect(),
+        ))
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+
+    // 5. Now, we'll manually remove some of the blocks in the wallet, pretending that the sync was aborted in the middle.
+    // We'll remove the top 20 blocks, so now the wallet only has the first 3 blocks
+    lc.wallet.blocks.write().await.drain(0..20);
+    assert_eq!(lc.wallet.last_scanned_height().await, 3);
+
+    // 6. Do a sync again
+    lc.do_sync(true).await.unwrap();
+    assert_eq!(lc.wallet.last_scanned_height().await, 23);
+
+    // 7. Should be exactly the same
+    let notes_after = lc.do_list_notes(true).await;
+    let list_after = lc.do_list_transactions(false).await;
+    let witness_after = lc
+        .wallet
+        .txns
+        .read()
+        .await
+        .current
+        .get(&WalletTx::new_txid(
+            &hex::decode(sent_txid).unwrap().into_iter().rev().collect(),
+        ))
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+
+    assert_eq!(notes_before, notes_after);
+    assert_eq!(list_before, list_after);
+    assert_eq!(witness_before.top_height, witness_after.top_height);
+    assert_eq!(witness_before.len(), witness_after.len());
+    for i in 0..witness_before.len() {
+        let mut before_bytes = vec![];
+        witness_before.get(i).unwrap().write(&mut before_bytes).unwrap();
+
+        let mut after_bytes = vec![];
+        witness_after.get(i).unwrap().write(&mut after_bytes).unwrap();
+
+        assert_eq!(hex::encode(before_bytes), hex::encode(after_bytes));
+    }
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn no_change() {
+    let secp = Secp256k1::new();
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let zvalue = 100_000;
+    let (_ztx, _height, _) = fcbl.add_tx_paying(&extfvk1, zvalue);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. Send an incoming t-address txn
+    let sk = lc.wallet.keys().read().await.tkeys[0];
+    let pk = PublicKey::from_secret_key(&secp, &sk);
+    let taddr = lc.wallet.keys().read().await.address_from_sk(&sk);
+    let tvalue = 200_000;
+
+    let mut ftx = FakeTransaction::new();
+    ftx.add_t_output(&pk, taddr.clone(), tvalue);
+    let (_ttx, _) = fcbl.add_ftx(ftx);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // 4. Send a tx to both external t-addr and external z addr and mine it
+    let sent_zvalue = tvalue + zvalue - u64::from(DEFAULT_FEE);
+    let tos = vec![(EXT_ZADDR, sent_zvalue, None)];
+    let sent_txid = lc.test_do_send(tos).await.unwrap();
+
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    let notes = lc.do_list_notes(true).await;
+    assert_eq!(notes["unspent_notes"].len(), 0);
+    assert_eq!(notes["pending_notes"].len(), 0);
+    assert_eq!(notes["utxos"].len(), 0);
+    assert_eq!(notes["pending_utxos"].len(), 0);
+
+    assert_eq!(notes["spent_notes"].len(), 1);
+    assert_eq!(notes["spent_utxos"].len(), 1);
+    assert_eq!(notes["spent_notes"][0]["spent"], sent_txid);
+    assert_eq!(notes["spent_utxos"][0]["spent"], sent_txid);
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
 const EXT_TADDR: &str = "t1NoS6ZgaUTpmjkge2cVpXGcySasdYDrXqh";
 const EXT_ZADDR: &str = "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
 const EXT_ZADDR2: &str = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv";

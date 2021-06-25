@@ -159,6 +159,16 @@ impl WitnessCache {
             self.top_height -= 1;
         }
     }
+
+    // pub fn get_as_string(&self, i: usize) -> String {
+    //     if i >= self.witnesses.len() {
+    //         return "".to_string();
+    //     }
+
+    //     let mut buf = vec![];
+    //     self.get(i).unwrap().write(&mut buf).unwrap();
+    //     return hex::encode(buf);
+    // }
 }
 
 pub struct SaplingNoteData {

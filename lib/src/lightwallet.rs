@@ -100,7 +100,7 @@ pub struct LightWallet {
     birthday: AtomicU64,
 
     // The last 100 blocks, used if something gets re-orged
-    blocks: Arc<RwLock<Vec<BlockData>>>,
+    pub(super) blocks: Arc<RwLock<Vec<BlockData>>>,
 
     // List of all txns. TODO: Move to it's own class
     pub(crate) txns: Arc<RwLock<WalletTxns>>,
