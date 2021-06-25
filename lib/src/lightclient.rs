@@ -1292,10 +1292,12 @@ impl LightClient {
         match sync_result {
             Ok(r) => r,
             Err(a) => {
-                warn!("Aborted!");
+                let errstr = format!("{}", a);
+                warn!("Aborted! {}", errstr);
+                self.bsync_data.read().await.sync_status.write().await.last_error = Some(errstr.clone());
                 Ok(object! {
                     "result" => "aborted",
-                    "error" => format!("{}", a)
+                    "error" => errstr
                 })
             }
         }

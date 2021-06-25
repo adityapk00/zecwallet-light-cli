@@ -4,6 +4,7 @@ use std::cmp;
 #[derive(Clone, Debug, Default)]
 pub struct SyncStatus {
     pub in_progress: bool,
+    pub last_error: Option<String>,
 
     pub sync_id: u64,
     pub start_block: u64,
@@ -22,6 +23,7 @@ impl SyncStatus {
     pub fn new_sync(sync_id: u64, start_block: u64, end_block: u64) -> Self {
         Self {
             in_progress: true,
+            last_error: None,
             sync_id,
             start_block,
             end_block,
@@ -35,6 +37,7 @@ impl SyncStatus {
 
     pub fn start_new(&mut self) {
         self.sync_id += 1;
+        self.last_error = None;
         self.in_progress = true;
         self.blocks_done = 0;
         self.blocks_tree_done = 0;
@@ -70,7 +73,13 @@ impl fmt::Display for SyncStatus {
                 self.perct(self.txn_scan_done),
             )
         } else {
-            write!(f, "id: {}, in_progress: {}", self.sync_id, self.in_progress)
+            write!(
+                f,
+                "id: {}, in_progress: {}, errors: {}",
+                self.sync_id,
+                self.in_progress,
+                self.last_error.as_ref().unwrap_or(&"None".to_string())
+            )
         }
     }
 }

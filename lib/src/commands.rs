@@ -90,6 +90,7 @@ impl Command for SyncStatusCommand {
                 object! {
                     "sync_id" => status.sync_id,
                     "in_progress" => status.in_progress,
+                    "last_error" => status.last_error,
                     "start_block" => status.start_block,
                     "end_block" => status.end_block,
                     "witness_blocks" => status.blocks_tree_done,
@@ -102,6 +103,7 @@ impl Command for SyncStatusCommand {
                 object! {
                     "sync_id" => status.sync_id,
                     "in_prorgess" => status.in_progress,
+                    "last_error" => status.last_error,
                 }
             };
             o.pretty(2)
