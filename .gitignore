@@ -1,7 +1,5 @@
+/target
+/testdata
+/procgov
 .DS_Store
-target/
-.vscode/
-history.txt
-/.idea/
-tarpaulin-report.html
-/log*
+*.json.txt

@@ -135,6 +135,7 @@ message GetAddressUtxosReplyList {
     repeated GetAddressUtxosReply addressUtxos = 1;
 }
 
+
 message PriceRequest {
     // List of timestamps(in sec) at which the price is being requested
     uint64 timestamp = 1;
@@ -162,7 +163,7 @@ service CompactTxStreamer {
     rpc GetBlock(BlockID) returns (CompactBlock) {}
     // Return a list of consecutive compact blocks
     rpc GetBlockRange(BlockRange) returns (stream CompactBlock) {}
-
+    
     // Get the historical and current prices 
     rpc GetZECPrice(PriceRequest) returns (PriceResponse) {}
     rpc GetCurrentZECPrice(Empty) returns (PriceResponse) {}

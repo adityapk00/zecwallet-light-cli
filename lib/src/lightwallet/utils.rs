@@ -1,6 +1,6 @@
-use std::io::{self, Read, Write};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use zcash_primitives::note_encryption::Memo;
+use std::io::{self, Read, Write};
+use zcash_primitives::memo::{Memo, MemoBytes};
 
 pub fn read_string<R: Read>(mut reader: R) -> io::Result<String> {
     // Strings are written as <littleendian> len + bytes
@@ -8,9 +8,7 @@ pub fn read_string<R: Read>(mut reader: R) -> io::Result<String> {
     let mut str_bytes = vec![0; str_len as usize];
     reader.read_exact(&mut str_bytes)?;
 
-    let str = String::from_utf8(str_bytes).map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidData, e.to_string())
-    })?;
+    let str = String::from_utf8(str_bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
     Ok(str)
 }
@@ -22,23 +20,23 @@ pub fn write_string<W: Write>(mut writer: W, s: &String) -> io::Result<()> {
 }
 
 // Interpret a string or hex-encoded memo, and return a Memo object
-pub fn interpret_memo_string(memo_str: String) -> Result<Memo, String> {
+pub fn interpret_memo_string(memo_str: String) -> Result<MemoBytes, String> {
     // If the string starts with an "0x", and contains only hex chars ([a-f0-9]+) then
     // interpret it as a hex
     let s_bytes = if memo_str.to_lowercase().starts_with("0x") {
         match hex::decode(&memo_str[2..memo_str.len()]) {
             Ok(data) => data,
-            Err(_) => Vec::from(memo_str.as_bytes())
+            Err(_) => Vec::from(memo_str.as_bytes()),
         }
     } else {
         Vec::from(memo_str.as_bytes())
     };
 
     match Memo::from_bytes(&s_bytes) {
-        None => {
+        Err(_) => {
             let e = format!("Error creating output. Memo {:?} is too long", memo_str);
             return Err(e);
-        },
-        Some(m) => Ok(m)
+        }
+        Ok(m) => Ok(m.into()),
     }
 }
