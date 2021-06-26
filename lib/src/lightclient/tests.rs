@@ -148,8 +148,8 @@ async fn basic_no_wallet_txns() {
     let lc = LightClient::test_new(&config, None).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
-    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
-    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
 
     stop_tx.send(true).unwrap();
     h1.await.unwrap();
@@ -164,9 +164,9 @@ async fn z_incoming_z_outgoing() {
     let lc = LightClient::test_new(&config, None).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
-    // 1. Mine 100 blocks
-    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
-    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
 
     // 2. Send an incoming tx to fill the wallet
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
@@ -174,7 +174,7 @@ async fn z_incoming_z_outgoing() {
     let (tx, _height, _) = fcbl.add_tx_paying(&extfvk1, value);
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
 
-    assert_eq!(lc.wallet.last_scanned_height().await, 101);
+    assert_eq!(lc.wallet.last_scanned_height().await, 11);
 
     // 3. Check the balance is correct, and we recieved the incoming tx from outside
     let b = lc.do_balance().await;
@@ -197,7 +197,7 @@ async fn z_incoming_z_outgoing() {
         assert_eq!(jv["txid"], tx.txid().to_string());
         assert_eq!(jv["amount"].as_u64().unwrap(), value);
         assert_eq!(jv["address"], lc.wallet.keys().read().await.get_all_zaddresses()[0]);
-        assert_eq!(jv["block_height"].as_u64().unwrap(), 101);
+        assert_eq!(jv["block_height"].as_u64().unwrap(), 11);
     } else {
         panic!("Expecting an array");
     }
@@ -245,7 +245,7 @@ async fn z_incoming_z_outgoing() {
         -(sent_value as i64 + i64::from(DEFAULT_FEE))
     );
     assert_eq!(jv["unconfirmed"].as_bool().unwrap(), true);
-    assert_eq!(jv["block_height"].as_u64().unwrap(), 107);
+    assert_eq!(jv["block_height"].as_u64().unwrap(), 17);
 
     assert_eq!(jv["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
     assert_eq!(jv["outgoing_metadata"][0]["memo"], outgoing_memo);
@@ -261,12 +261,12 @@ async fn z_incoming_z_outgoing() {
     let jv = list.members().find(|jv| jv["txid"] == sent_txid).unwrap();
 
     assert_eq!(jv.contains("unconfirmed"), false);
-    assert_eq!(jv["block_height"].as_u64().unwrap(), 107);
+    assert_eq!(jv["block_height"].as_u64().unwrap(), 17);
 
     // 8. Check the notes to see that we have one spent note and one unspent note (change)
     let notes = lc.do_list_notes(true).await;
     assert_eq!(notes["unspent_notes"].len(), 1);
-    assert_eq!(notes["unspent_notes"][0]["created_in_block"].as_u64().unwrap(), 107);
+    assert_eq!(notes["unspent_notes"][0]["created_in_block"].as_u64().unwrap(), 17);
     assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
     assert_eq!(
         notes["unspent_notes"][0]["value"].as_u64().unwrap(),
@@ -276,12 +276,12 @@ async fn z_incoming_z_outgoing() {
     assert_eq!(notes["unspent_notes"][0]["spendable"].as_bool().unwrap(), false); // Not yet spendable
 
     assert_eq!(notes["spent_notes"].len(), 1);
-    assert_eq!(notes["spent_notes"][0]["created_in_block"].as_u64().unwrap(), 101);
+    assert_eq!(notes["spent_notes"][0]["created_in_block"].as_u64().unwrap(), 11);
     assert_eq!(notes["spent_notes"][0]["value"].as_u64().unwrap(), value);
     assert_eq!(notes["spent_notes"][0]["is_change"].as_bool().unwrap(), false);
     assert_eq!(notes["spent_notes"][0]["spendable"].as_bool().unwrap(), false); // Already spent
     assert_eq!(notes["spent_notes"][0]["spent"], sent_txid);
-    assert_eq!(notes["spent_notes"][0]["spent_at_height"].as_u64().unwrap(), 107);
+    assert_eq!(notes["spent_notes"][0]["spent_at_height"].as_u64().unwrap(), 17);
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();
@@ -300,9 +300,9 @@ async fn multiple_incoming_same_tx() {
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
     let value = 100_000;
 
-    // 1. Mine 100 blocks
-    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
-    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
 
     // 2. Construct the Fake tx.
     let to = extfvk1.default_address().unwrap().1;
@@ -366,13 +366,13 @@ async fn multiple_incoming_same_tx() {
     fcbl.txns.push((tx.clone(), fcbl.next_height, vec![]));
     fcbl.add_empty_block().add_txs(vec![ctx]);
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
-    assert_eq!(lc.wallet.last_scanned_height().await, 101);
+    assert_eq!(lc.wallet.last_scanned_height().await, 11);
 
     // 2. Check the notes - that we recieved 4 notes
     let notes = lc.do_list_notes(true).await;
     let txns = lc.do_list_transactions(false).await;
     for i in 0..4 {
-        assert_eq!(notes["unspent_notes"][i]["created_in_block"].as_u64().unwrap(), 101);
+        assert_eq!(notes["unspent_notes"][i]["created_in_block"].as_u64().unwrap(), 11);
         assert_eq!(notes["unspent_notes"][i]["value"].as_u64().unwrap(), value + i as u64);
         assert_eq!(notes["unspent_notes"][i]["is_change"].as_bool().unwrap(), false);
         assert_eq!(
@@ -381,7 +381,7 @@ async fn multiple_incoming_same_tx() {
         );
 
         assert_eq!(txns[i]["txid"], tx.txid().to_string());
-        assert_eq!(txns[i]["block_height"].as_u64().unwrap(), 101);
+        assert_eq!(txns[i]["block_height"].as_u64().unwrap(), 11);
         assert_eq!(
             txns[i]["address"],
             lc.wallet.keys().read().await.get_all_zaddresses()[0]
@@ -403,10 +403,10 @@ async fn multiple_incoming_same_tx() {
     let txns = lc.do_list_transactions(false).await;
     for i in 0..4 {
         assert_eq!(notes["spent_notes"][i]["spent"], sent_txid);
-        assert_eq!(notes["spent_notes"][i]["spent_at_height"].as_u64().unwrap(), 107);
+        assert_eq!(notes["spent_notes"][i]["spent_at_height"].as_u64().unwrap(), 17);
     }
     assert_eq!(txns[4]["txid"], sent_txid);
-    assert_eq!(txns[4]["block_height"], 107);
+    assert_eq!(txns[4]["block_height"], 17);
     assert_eq!(
         txns[4]["amount"].as_i64().unwrap(),
         -(sent_value as i64) - i64::from(DEFAULT_FEE)
@@ -429,9 +429,9 @@ async fn z_incoming_multiz_outgoing() {
     let lc = LightClient::test_new(&config, None).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
-    // 1. Mine 100 blocks
-    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
-    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
 
     // 2. Send an incoming tx to fill the wallet
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
@@ -453,7 +453,7 @@ async fn z_incoming_multiz_outgoing() {
     // 4. Check the outgoing txn list
     let list = lc.do_list_transactions(false).await;
 
-    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 107);
+    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 17);
     assert_eq!(list[1]["txid"], sent_txid);
     assert_eq!(
         list[1]["amount"].as_i64().unwrap(),
@@ -485,8 +485,8 @@ async fn z_to_z_scan_together() {
     let lc = LightClient::test_new(&config, None).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
-    // 1. Start with 100 blocks that are unmined
-    fcbl.add_blocks(100);
+    // 1. Start with 10 blocks that are unmined
+    fcbl.add_blocks(10);
 
     // 2. Send an incoming tx to fill the wallet
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
@@ -514,7 +514,8 @@ async fn z_to_z_scan_together() {
     } else {
         panic!("Couldn't parse address")
     };
-    let spent_tx = fcbl.add_tx_spending(&nf, 100, &extfvk1.fvk.ovk, &pa);
+    let spent_value = 250;
+    let spent_tx = fcbl.add_tx_spending(&nf, spent_value, &extfvk1.fvk.ovk, &pa);
 
     // 4. Mine the blocks and sync the lightwallet
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
@@ -522,14 +523,14 @@ async fn z_to_z_scan_together() {
     // 5. Check the tx list to make sure we got all txns
     let list = lc.do_list_transactions(false).await;
 
-    assert_eq!(list[0]["block_height"].as_u64().unwrap(), 101);
+    assert_eq!(list[0]["block_height"].as_u64().unwrap(), 11);
     assert_eq!(list[0]["txid"], tx.txid().to_string());
 
-    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 102);
+    assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
     assert_eq!(list[1]["txid"], spent_tx.txid().to_string());
     assert_eq!(list[1]["amount"].as_i64().unwrap(), -(value as i64));
     assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_ZADDR.to_string());
-    assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), 100);
+    assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), spent_value);
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();
@@ -545,9 +546,9 @@ async fn z_incoming_viewkey() {
     let lc = LightClient::test_new(&config, None).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
-    // 1. Mine 100 blocks
-    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
-    assert_eq!(lc.wallet.last_scanned_height().await, 100);
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
     assert_eq!(lc.do_balance().await["zbalance"].as_u64().unwrap(), 0);
 
     // 2. Create a new Viewkey and import it

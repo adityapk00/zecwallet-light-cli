@@ -7,11 +7,14 @@ use crate::compact_formats::{
 use crate::lightwallet::data::WalletTx;
 use crate::lightwallet::now;
 use futures::Stream;
+use rand::rngs::OsRng;
+use rand::Rng;
 use std::cmp;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::sleep;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use zcash_primitives::block::BlockHash;
@@ -97,11 +100,18 @@ impl TestGRPCService {
 
         (s, data)
     }
+
+    async fn wait_random() {
+        let msecs = OsRng.gen_range(0, 100);
+        sleep(std::time::Duration::from_millis(msecs)).await;
+    }
 }
 
 #[tonic::async_trait]
 impl CompactTxStreamer for TestGRPCService {
     async fn get_latest_block(&self, _request: Request<ChainSpec>) -> Result<Response<BlockId>, Status> {
+        Self::wait_random().await;
+
         match self.data.read().await.blocks.iter().max_by_key(|b| b.height) {
             Some(latest_block) => Ok(Response::new(BlockId {
                 height: latest_block.height,
@@ -112,6 +122,8 @@ impl CompactTxStreamer for TestGRPCService {
     }
 
     async fn get_block(&self, request: Request<BlockId>) -> Result<Response<CompactBlock>, Status> {
+        Self::wait_random().await;
+
         let height = request.into_inner().height;
 
         match self.data.read().await.blocks.iter().find(|b| b.height == height) {
@@ -147,6 +159,8 @@ impl CompactTxStreamer for TestGRPCService {
         tokio::spawn(async move {
             for b in blocks {
                 if b.height <= start && b.height >= end {
+                    Self::wait_random().await;
+
                     tx.send(Ok(b)).await.unwrap();
                 }
             }
@@ -160,6 +174,8 @@ impl CompactTxStreamer for TestGRPCService {
     }
 
     async fn get_current_zec_price(&self, _request: Request<Empty>) -> Result<Response<PriceResponse>, Status> {
+        Self::wait_random().await;
+
         let mut res = PriceResponse::default();
         res.currency = "USD".to_string();
         res.timestamp = now() as i64;
@@ -169,6 +185,8 @@ impl CompactTxStreamer for TestGRPCService {
     }
 
     async fn get_transaction(&self, request: Request<TxFilter>) -> Result<Response<RawTransaction>, Status> {
+        Self::wait_random().await;
+
         let txid = WalletTx::new_txid(&request.into_inner().hash);
         match self.data.read().await.txns.get(&txid) {
             Some((_taddrs, tx)) => Ok(Response::new(tx.clone())),
@@ -217,6 +235,8 @@ impl CompactTxStreamer for TestGRPCService {
             txns_to_send.sort_by_key(|rtx| rtx.height);
 
             for rtx in txns_to_send {
+                Self::wait_random().await;
+
                 tx.send(Ok(rtx)).await.unwrap();
             }
         });
@@ -251,6 +271,8 @@ impl CompactTxStreamer for TestGRPCService {
     }
 
     async fn get_tree_state(&self, request: Request<BlockId>) -> Result<Response<TreeState>, Status> {
+        Self::wait_random().await;
+
         let block = request.into_inner();
 
         let tree = self
@@ -308,6 +330,8 @@ impl CompactTxStreamer for TestGRPCService {
     }
 
     async fn get_lightd_info(&self, _request: Request<Empty>) -> Result<Response<LightdInfo>, Status> {
+        Self::wait_random().await;
+
         let mut ld = LightdInfo::default();
         ld.version = format!("Test GRPC Server");
         ld.block_height = self
