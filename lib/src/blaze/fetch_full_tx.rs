@@ -10,7 +10,7 @@ use crate::{
 use futures::future::join_all;
 use log::info;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     convert::{TryFrom, TryInto},
     iter::FromIterator,
     sync::Arc,
@@ -75,32 +75,18 @@ impl FetchFullTxns {
 
         let bsync_data_i = bsync_data.clone();
 
-        let fetched_txids = Arc::new(RwLock::new(HashMap::<TxId, Transaction>::new()));
-
         let (txid_tx, mut txid_rx) = unbounded_channel::<(TxId, BlockHeight)>();
         let h1: JoinHandle<Result<(), String>> = tokio::spawn(async move {
             let mut last_progress = 0;
 
             while let Some((txid, height)) = txid_rx.recv().await {
                 // It is possible that we recieve the same txid multiple times, so we keep track of all the txids that were fetched
-                let tx = match fetched_txids.read().await.get(&txid) {
-                    Some(tx) => tx.clone(),
-                    None => {
-                        let fulltx_fetcher = fulltx_fetcher.clone();
-
-                        // Fetch the TxId from LightwalletD and process all the parts of it.
-                        let tx = {
-                            let (tx, rx) = oneshot::channel();
-                            fulltx_fetcher.send((txid, tx)).unwrap();
-                            rx.await.unwrap()?
-                        };
-
-                        tx
-                    }
+                let tx = {
+                    // Fetch the TxId from LightwalletD and process all the parts of it.
+                    let (tx, rx) = oneshot::channel();
+                    fulltx_fetcher.send((txid, tx)).unwrap();
+                    rx.await.unwrap()?
                 };
-
-                // Record that we fetched this txid
-                fetched_txids.write().await.insert(txid.clone(), tx.clone());
 
                 let progress = start_height - u64::from(height);
                 if progress > last_progress {
