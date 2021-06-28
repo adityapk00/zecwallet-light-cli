@@ -16,26 +16,13 @@ pub struct SyncStatus {
     pub txn_scan_done: u64,
 
     pub blocks_total: u64,
+
+    pub batch_num: usize,
+    pub batch_total: usize,
 }
 
 impl SyncStatus {
-    /// Setup a new sync status in prep for an upcoming sync
-    pub fn new_sync(sync_id: u64, start_block: u64, end_block: u64) -> Self {
-        Self {
-            in_progress: true,
-            last_error: None,
-            sync_id,
-            start_block,
-            end_block,
-            blocks_done: 0,
-            blocks_tree_done: 0,
-            trial_dec_done: 0,
-            blocks_total: 0,
-            txn_scan_done: 0,
-        }
-    }
-
-    pub fn start_new(&mut self) {
+    pub fn start_new(&mut self, batch_total: usize) {
         self.sync_id += 1;
         self.last_error = None;
         self.in_progress = true;
@@ -44,6 +31,23 @@ impl SyncStatus {
         self.trial_dec_done = 0;
         self.blocks_total = 0;
         self.txn_scan_done = 0;
+        self.batch_num = 0;
+        self.batch_total = batch_total;
+    }
+
+    /// Setup a new sync status in prep for an upcoming sync
+    pub fn new_sync_batch(&mut self, start_block: u64, end_block: u64, batch_num: usize) {
+        self.in_progress = true;
+        self.last_error = None;
+
+        self.start_block = start_block;
+        self.end_block = end_block;
+        self.blocks_done = 0;
+        self.blocks_tree_done = 0;
+        self.trial_dec_done = 0;
+        self.blocks_total = 0;
+        self.txn_scan_done = 0;
+        self.batch_num = batch_num;
     }
 
     /// Finish up a sync
@@ -52,11 +56,19 @@ impl SyncStatus {
     }
 
     fn perct(&self, num: u64) -> u8 {
-        if self.blocks_total > 0 {
-            cmp::min(((num * 100) / self.blocks_total) as u8, 100)
+        let a = if self.blocks_total > 0 {
+            let (b, d) = if self.batch_total > 0 {
+                ((self.batch_num * 100 / self.batch_total), self.batch_total)
+            } else {
+                (0, 1)
+            };
+            let p = cmp::min(((num * 100) / self.blocks_total) as u8, 100);
+            b + (p as usize / d)
         } else {
             0
-        }
+        };
+
+        cmp::min(100, a as u8)
     }
 }
 

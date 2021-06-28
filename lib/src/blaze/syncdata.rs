@@ -22,17 +22,22 @@ impl BlazeSyncData {
         }
     }
 
-    pub async fn setup_for_sync(&mut self, start_block: u64, end_block: u64, existing_blocks: Vec<BlockData>) {
+    pub async fn setup_for_sync(
+        &mut self,
+        start_block: u64,
+        end_block: u64,
+        batch_num: usize,
+        existing_blocks: Vec<BlockData>,
+    ) {
         if start_block < end_block {
             panic!("Blocks should be backwards");
         }
 
-        // Replace the contents with a new syncstatus, essentially clearing it
-        {
-            let mut guard = self.sync_status.write().await;
-            let prev_sync_status = guard.clone();
-            (*guard) = SyncStatus::new_sync(prev_sync_status.sync_id, start_block, end_block);
-        }
+        // Clear the status for a new sync batch
+        self.sync_status
+            .write()
+            .await
+            .new_sync_batch(start_block, end_block, batch_num);
 
         self.block_data.setup_sync(existing_blocks).await;
     }

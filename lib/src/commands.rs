@@ -98,6 +98,8 @@ impl Command for SyncStatusCommand {
                     "trial_decryptions_blocks" => status.trial_dec_done,
                     "txn_scan_blocks" => status.txn_scan_done,
                     "total_blocks" => status.blocks_total,
+                    "batch_num" => status.batch_num,
+                    "batch_total" => status.batch_total
                 }
             } else {
                 object! {

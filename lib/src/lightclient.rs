@@ -12,6 +12,7 @@ use futures::future::{join_all, AbortHandle, Abortable};
 use json::{array, object, JsonValue};
 use log::{error, info, warn};
 use std::{
+    cmp,
     collections::HashSet,
     fs::File,
     io::{self, BufReader, Error, ErrorKind, Read, Write},
@@ -1303,15 +1304,12 @@ impl LightClient {
         }
     }
 
-    /// start_sync will start synchronizing the blockchain from the wallet's last height. This function will return immediately after starting the sync
-    /// Use the `sync_status` command to get the status of the sync
-    pub async fn start_sync(&self) -> Result<JsonValue, String> {
+    /// Start syncing in batches with the max size, so we don't consume memory more than
+    // wha twe can handle.
+    async fn start_sync(&self) -> Result<JsonValue, String> {
         // We can only do one sync at a time because we sync blocks in serial order
         // If we allow multiple syncs, they'll all get jumbled up.
         let _lock = self.sync_lock.lock().await;
-
-        // Increment the sync ID so the caller can determine when it is over
-        self.bsync_data.write().await.sync_status.write().await.start_new();
 
         // See if we need to verify first
         if !self.wallet.is_sapling_tree_verified() {
@@ -1331,11 +1329,10 @@ impl LightClient {
             }
         }
 
-        let uri = self.config.server.clone();
-
         // The top of the wallet
         let last_scanned_height = self.wallet.last_scanned_height().await;
 
+        let uri = self.config.server.clone();
         let latest_block = GrpcConnector::get_latest_block(uri.clone()).await?.height;
         if latest_block < last_scanned_height {
             let w = format!(
@@ -1345,6 +1342,46 @@ impl LightClient {
             warn!("{}", w);
             return Err(w);
         }
+
+        let batch_size = 400_000;
+
+        let mut latest_block_batches = vec![];
+        let mut prev = last_scanned_height;
+        while latest_block_batches.is_empty() || prev != latest_block {
+            let batch = cmp::min(latest_block, prev + batch_size);
+            prev = batch;
+            latest_block_batches.push(batch);
+        }
+
+        //println!("Batches are {:?}", latest_block_batches);
+
+        // Increment the sync ID so the caller can determine when it is over
+        self.bsync_data
+            .write()
+            .await
+            .sync_status
+            .write()
+            .await
+            .start_new(latest_block_batches.len());
+
+        let mut res = Err("No batches were run!".to_string());
+        for (batch_num, batch_latest_block) in latest_block_batches.into_iter().enumerate() {
+            res = self.start_sync_batch(batch_latest_block, batch_num).await;
+            if res.is_err() {
+                return res;
+            }
+        }
+
+        res
+    }
+
+    /// start_sync will start synchronizing the blockchain from the wallet's last height. This function will return immediately after starting the sync
+    /// Use the `sync_status` command to get the status of the sync
+    async fn start_sync_batch(&self, latest_block: u64, batch_num: usize) -> Result<JsonValue, String> {
+        let uri = self.config.server.clone();
+
+        // The top of the wallet
+        let last_scanned_height = self.wallet.last_scanned_height().await;
 
         info!(
             "Latest block is {}, wallet block is {}",
@@ -1366,7 +1403,7 @@ impl LightClient {
         bsync_data
             .write()
             .await
-            .setup_for_sync(start_block, end_block, self.wallet.get_blocks().await)
+            .setup_for_sync(start_block, end_block, batch_num, self.wallet.get_blocks().await)
             .await;
 
         // 2. Update the current price
