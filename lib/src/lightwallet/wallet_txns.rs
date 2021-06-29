@@ -378,10 +378,12 @@ impl WalletTxns {
 
                 spent_utxo.value
             } else {
-                panic!("Couldn't find UTXO that was spent");
+                error!("Couldn't find UTXO that was spent");
+                0
             }
         } else {
-            panic!("Couldn't find TxID that was spent!");
+            error!("Couldn't find TxID that was spent!");
+            0
         };
 
         // Return the value of the note that was spent.

@@ -102,7 +102,7 @@ pub struct LightWallet {
     // The last 100 blocks, used if something gets re-orged
     pub(super) blocks: Arc<RwLock<Vec<BlockData>>>,
 
-    // List of all txns. TODO: Move to it's own class
+    // List of all txns
     pub(crate) txns: Arc<RwLock<WalletTxns>>,
 
     // Non-serialized fields
@@ -593,17 +593,14 @@ impl LightWallet {
             .map(|tx| {
                 tx.notes
                     .iter()
-                    .filter(|nd| {
-                        // TODO, this whole section is shared with verified_balance. Refactor it.
-                        match addr.clone() {
-                            Some(a) => {
-                                a == encode_payment_address(
-                                    self.config.hrp_sapling_address(),
-                                    &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
-                                )
-                            }
-                            None => true,
+                    .filter(|nd| match addr.clone() {
+                        Some(a) => {
+                            a == encode_payment_address(
+                                self.config.hrp_sapling_address(),
+                                &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
+                            )
                         }
+                        None => true,
                     })
                     .map(|nd| if nd.spent.is_none() { nd.note.value } else { 0 })
                     .sum::<u64>()
@@ -656,17 +653,14 @@ impl LightWallet {
                         // Check to see if we have this note's spending key.
                         keys.have_spending_key(&nd.extfvk)
                     })
-                    .filter(|nd| {
-                        // TODO, this whole section is shared with verified_balance. Refactor it.
-                        match addr.clone() {
-                            Some(a) => {
-                                a == encode_payment_address(
-                                    self.config.hrp_sapling_address(),
-                                    &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
-                                )
-                            }
-                            None => true,
+                    .filter(|nd| match addr.clone() {
+                        Some(a) => {
+                            a == encode_payment_address(
+                                self.config.hrp_sapling_address(),
+                                &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
+                            )
                         }
+                        None => true,
                     })
                     .map(|nd| {
                         if tx.block <= BlockHeight::from_u32(anchor_height) {
@@ -698,17 +692,14 @@ impl LightWallet {
                     tx.notes
                         .iter()
                         .filter(|nd| nd.spent.is_none() && nd.unconfirmed_spent.is_none())
-                        .filter(|nd| {
-                            // TODO, this whole section is shared with verified_balance. Refactor it.
-                            match addr.clone() {
-                                Some(a) => {
-                                    a == encode_payment_address(
-                                        self.config.hrp_sapling_address(),
-                                        &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
-                                    )
-                                }
-                                None => true,
+                        .filter(|nd| match addr.clone() {
+                            Some(a) => {
+                                a == encode_payment_address(
+                                    self.config.hrp_sapling_address(),
+                                    &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
+                                )
                             }
+                            None => true,
                         })
                         .map(|nd| nd.note.value)
                         .sum::<u64>()
@@ -738,17 +729,14 @@ impl LightWallet {
                             // Check to see if we have this note's spending key and witnesses
                             keys.have_spending_key(&nd.extfvk) && nd.witnesses.len() > 0
                         })
-                        .filter(|nd| {
-                            // TODO, this whole section is shared with verified_balance. Refactor it.
-                            match addr.clone() {
-                                Some(a) => {
-                                    a == encode_payment_address(
-                                        self.config.hrp_sapling_address(),
-                                        &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
-                                    )
-                                }
-                                None => true,
+                        .filter(|nd| match addr.clone() {
+                            Some(a) => {
+                                a == encode_payment_address(
+                                    self.config.hrp_sapling_address(),
+                                    &nd.extfvk.fvk.vk.to_payment_address(nd.diversifier).unwrap(),
+                                )
                             }
+                            None => true,
                         })
                         .map(|nd| nd.note.value)
                         .sum::<u64>()
@@ -1108,7 +1096,7 @@ impl LightWallet {
             );
         }
 
-        // TODO: We're using the first ovk to encrypt outgoing Txns. Is that Ok?
+        // We'll use the first ovk to encrypt outgoing Txns
         let ovk = self.keys.read().await.zkeys[0].extfvk.fvk.ovk;
         let mut total_z_recepients = 0u32;
         for (to, value, memo) in recepients {

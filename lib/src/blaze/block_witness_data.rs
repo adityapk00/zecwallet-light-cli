@@ -106,9 +106,6 @@ impl BlockAndWitnessData {
             let blocks = self.blocks.read().await;
             let pos = blocks.first().unwrap().height - height;
             let bd = blocks.get(pos as usize).unwrap();
-            if bd.height != height {
-                panic!("Wrong block");
-            }
 
             bd.cb()
         };
@@ -152,8 +149,6 @@ impl BlockAndWitnessData {
             for v in verification_list.iter() {
                 let pos = blocks.first().unwrap().height - v.height;
 
-                // TODO: We need to keep some old blocks (100) around so that we can get the previous tree
-                // and also handle reorgs
                 if pos >= blocks.len() as u64 {
                     continue;
                 }
@@ -308,7 +303,7 @@ impl BlockAndWitnessData {
         }
 
         if !queue.is_empty() {
-            panic!("Block Data queue at the end of processing was not empty!");
+            return Err(format!("Block Data queue at the end of processing was not empty!"));
         }
 
         if blocks.read().await.last().is_none() {
@@ -358,8 +353,6 @@ impl BlockAndWitnessData {
                 }
 
                 // Step 1: Fetch the (earliest's block - 1)'s sapling root from the server
-                // TODO: If this is the earliest block, and we already have the prev block's tree with us,
-                // we should use that
                 let height_to_fetch = blks.last().unwrap().height - 1;
                 let mut tree = if height_to_fetch < sapling_activation_height {
                     CommitmentTree::empty()
@@ -678,9 +671,6 @@ impl BlockAndWitnessData {
 
                     let pos = blocks.first().unwrap().height - height;
                     let bd = blocks.get(pos as usize).unwrap();
-                    if bd.height != prev_height + 1 {
-                        panic!("Wrong block");
-                    }
 
                     bd.cb()
                 }
@@ -701,9 +691,6 @@ impl BlockAndWitnessData {
 
                         let prev_pos = blocks.first().unwrap().height - prev_height;
                         let prev_bd = blocks.get(prev_pos as usize).unwrap();
-                        if prev_bd.height != prev_height {
-                            panic!("Wrong block");
-                        }
                         prev_bd.tree.as_ref().unwrap().clone()
                     }
                 }
@@ -744,9 +731,6 @@ impl BlockAndWitnessData {
             let mut blocks = self.blocks.read().await;
             let top_block = blocks.first().unwrap().height;
             let pos = top_block - height;
-            if blocks[pos as usize].height != height {
-                panic!("Wrong block");
-            }
 
             // Get the last witness, and then use that.
             let mut w = witnesses.last().unwrap().clone();
@@ -795,9 +779,6 @@ impl BlockAndWitnessData {
         {
             let blocks = self.blocks.read().await;
             let pos = blocks.first().unwrap().height - height;
-            if blocks[pos as usize].height != height {
-                panic!("Wrong block");
-            }
 
             let mut txid_found = false;
             let mut output_found = false;

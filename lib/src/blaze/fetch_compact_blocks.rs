@@ -32,7 +32,7 @@ impl FetchCompactBlocks {
             let start = b;
             let end = max((b as i64) - (STEP as i64) + 1, end_block as i64) as u64;
             if start < end {
-                panic!("Wrong block order");
+                return Err(format!("Wrong block order"));
             }
 
             info!("Fetching blocks {}-{}", start, end);

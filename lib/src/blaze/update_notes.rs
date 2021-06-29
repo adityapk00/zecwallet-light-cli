@@ -71,9 +71,6 @@ impl UpdateNotes {
                     .await
             };
 
-            if witnesses.len() > MAX_REORG {
-                panic!("Witnesses are too big");
-            }
             info!("Finished updating witnesses for {}", txid);
 
             wallet_txns

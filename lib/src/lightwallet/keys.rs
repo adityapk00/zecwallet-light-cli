@@ -140,8 +140,6 @@ impl Keys {
         let tpk = Self::get_taddr_from_bip39seed(&config, &bip39_seed.as_bytes(), 0);
         let taddr = Self::address_from_prefix_sk(&config.base58_pubkey_address(), &tpk);
 
-        // TODO: We need to monitor addresses, and always keep 1 "free" address, so
-        // users can import a seed phrase and automatically get all used addresses
         let hdkey_num = 0;
         let (extsk, _, _) = Self::get_zaddr_from_bip39seed(&config, &bip39_seed.as_bytes(), hdkey_num);
 

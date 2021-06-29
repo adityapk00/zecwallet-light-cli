@@ -683,7 +683,7 @@ impl LightClient {
                                 "created_in_txid"    => format!("{}", txid),
                                 "value"              => utxo.value,
                                 "scriptkey"          => hex::encode(utxo.script.clone()),
-                                "is_change"          => false, // TODO: Identify notes as change if we send change to taddrs
+                                "is_change"          => false, // TODO: Identify notes as change if we send change to our own taddrs
                                 "address"            => utxo.address.clone(),
                                 "spent_at_height"    => utxo.spent_at_height,
                                 "spent"              => utxo.spent.map(|spent_txid| format!("{}", spent_txid)),
@@ -784,8 +784,6 @@ impl LightClient {
                         .map(|nd| nd.note.value)
                         .sum::<u64>()
                         + v.utxos.iter().map(|ut| ut.value).sum::<u64>();
-
-                    // TODO: What happens if change is > than sent ?
 
                     // Collect outgoing metadata
                     let outgoing_json = v
@@ -1270,8 +1268,6 @@ impl LightClient {
 
                     // Abort if we're stuck for more than 60*2 seconds
                     if stuck_ctr > 60 {
-                        // TODO: We need to probably reset the witnesses for existing notes, which
-                        // might have been updated already
                         abort_handle.abort();
                     }
 
