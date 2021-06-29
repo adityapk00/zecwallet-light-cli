@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
-use crate::lightclient::lightclient_config::MAX_REORG;
 use crate::lightwallet::data::WalletZecPriceInfo;
 use crate::lightwallet::{data::WalletTx, wallet_txns::WalletTxns};
+use std::sync::Arc;
 
 use futures::future::join_all;
 use log::info;
