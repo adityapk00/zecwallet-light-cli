@@ -1055,8 +1055,8 @@ impl LightClient {
             return Ok(true);
         }
 
-        // Get the first block's details, and make sure we can compute it from the last checkpoint
-        // Note that we get the first block in the wallet (Not the last one). This is expected to be tip - 100 blocks.
+        // Get the oldest block's details, and make sure we can compute it from the last checkpoint
+        // Note that we get the oldest block in the wallet (Not the latest one). This is expected to be tip - 100 blocks.
         // We use this block to prevent any reorg risk.
         let (end_height, _, end_tree) = match self.wallet.get_wallet_sapling_tree(NodePosition::Oldest).await {
             Ok(r) => r,
@@ -1079,10 +1079,12 @@ impl LightClient {
                 self.wallet.set_sapling_tree_verified();
             } else {
                 warn!("Sapling tree verification failed!");
-                warn!(
+                let e = format!(
                     "Verification Results:\nCalculated\n{}\nExpected\n{}\n",
                     start_tree, end_tree
                 );
+                warn!("{}", e);
+                return Err(e);
             }
 
             return Ok(verified);
@@ -1100,7 +1102,8 @@ impl LightClient {
 
         let h1 = tokio::spawn(async move {
             let grpc_conn = GrpcConnector::new(uri);
-            grpc_conn.get_block_range(start_height, end_height, tx).await
+            // Since both start and end block are inclusive, do start_height+1 to end_height
+            grpc_conn.get_block_range(start_height + 1, end_height, tx).await
         });
 
         let commit_tree = commit_tree_computed.clone();
@@ -1140,10 +1143,16 @@ impl LightClient {
             self.wallet.set_sapling_tree_verified();
         } else {
             warn!("Sapling tree verification failed!");
-            warn!(
-                "Verification Results:\nCalculated\n{}\nExpected\n{}\n",
-                computed_tree, end_tree
+            let e = format!(
+                "Verification Results:\nComputed@{}-{}\n{}\nExpected@{}\n{}\n",
+                start_height + 1,
+                end_height,
+                computed_tree,
+                end_height,
+                end_tree
             );
+            warn!("{}", e);
+            return Err(e);
         }
 
         return Ok(verified);
