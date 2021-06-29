@@ -563,7 +563,7 @@ impl BlockAndWitnessData {
                         });
                         i += 1;
                     } else {
-                        info!("Waiting for workers. Have {}, waiting for {}", i, total);
+                        //info!("Waiting for workers. Have {}, waiting for {}", i, total);
                         sleep(Duration::from_millis(100)).await;
                         yield_now().await;
                     }
@@ -594,7 +594,7 @@ impl BlockAndWitnessData {
             yield_now().await;
             sleep(Duration::from_millis(100)).await;
 
-            info!("Waiting for first block, blocks are empty!");
+            //info!("Waiting for first block, blocks are empty!");
         }
 
         self.blocks.read().await.first().unwrap().height
@@ -607,11 +607,11 @@ impl BlockAndWitnessData {
             yield_now().await;
             sleep(Duration::from_millis(100)).await;
 
-            info!(
-                "Waiting for block {}, current at {}",
-                height,
-                self.blocks.read().await.last().unwrap().height
-            );
+            // info!(
+            //     "Waiting for block {}, current at {}",
+            //     height,
+            //     self.blocks.read().await.last().unwrap().height
+            // );
         }
     }
 

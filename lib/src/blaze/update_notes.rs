@@ -131,7 +131,7 @@ impl UpdateNotes {
                     .is_nf_spent(nf, at_height.into())
                     .await
                 {
-                    info!("Note was spent, just add it as spent for TxId {}", txid);
+                    //info!("Note was spent, just add it as spent for TxId {}", txid);
                     let (ctx, ts) = bsync_data
                         .read()
                         .await
@@ -162,7 +162,7 @@ impl UpdateNotes {
                     // Send the future Tx to be fetched too, in case it has only spent nullifiers and not recieved any change
                     fetch_full_sender.send((spent_txid, spent_at_height)).unwrap();
                 } else {
-                    info!("Note was NOT spent, update its witnesses for TxId {}", txid);
+                    //info!("Note was NOT spent, update its witnesses for TxId {}", txid);
 
                     // If this note's nullifier was not spent, then we need to update the witnesses for this.
                     workers.push(tokio::spawn(Self::update_witnesses(
