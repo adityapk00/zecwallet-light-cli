@@ -30,7 +30,7 @@ use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_S
 use zcash_primitives::transaction::TransactionData;
 use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
 
-use crate::blaze::test_utils::{FakeCompactBlockList, FakeTransaction};
+use crate::blaze::test_utils::{tree_to_string, FakeCompactBlockList, FakeTransaction};
 use crate::compact_formats::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamerServer;
 use crate::compact_formats::{CompactOutput, CompactTx, Empty};
@@ -39,6 +39,7 @@ use crate::lightclient::test_server::TestGRPCService;
 use crate::lightclient::LightClient;
 use crate::lightwallet::data::WalletTx;
 
+use super::checkpoints;
 use super::test_server::TestServerData;
 
 async fn create_test_server() -> (
@@ -71,7 +72,15 @@ async fn create_test_server() -> (
 
         // Send the path name. Do into_path() to preserve the temp directory
         data_dir_tx
-            .send(temp_dir.path().canonicalize().unwrap().to_str().unwrap().to_string())
+            .send(
+                temp_dir
+                    .into_path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            )
             .unwrap();
 
         ready_tx.send(true).unwrap();
@@ -145,7 +154,7 @@ async fn basic_no_wallet_txns() {
         .into_inner();
     println!("{:?}", r);
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
@@ -161,7 +170,7 @@ async fn z_incoming_z_outgoing() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -294,7 +303,7 @@ async fn multiple_incoming_same_tx() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
@@ -426,7 +435,7 @@ async fn z_incoming_multiz_outgoing() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -482,7 +491,7 @@ async fn z_to_z_scan_together() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Start with 10 blocks that are unmined
@@ -543,7 +552,7 @@ async fn z_incoming_viewkey() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -640,9 +649,7 @@ async fn t_incoming_t_outgoing() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
-    lc.init_logging().unwrap();
-
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -740,7 +747,7 @@ async fn mixed_txn() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -843,7 +850,7 @@ async fn aborted_resync() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -954,7 +961,7 @@ async fn no_change() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -1003,6 +1010,130 @@ async fn no_change() {
     h1.await.unwrap();
 }
 
+#[tokio::test]
+async fn recover_at_checkpoint() {
+    // 1. Wait for test server to start
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+    ready_rx.await.unwrap();
+
+    // Get checkpoint at 1220000
+    let (ckpt_height, hash, tree) = checkpoints::get_all_main_checkpoints()
+        .into_iter()
+        .find(|(h, _, _)| *h == 1220000)
+        .unwrap();
+    // Manually insert the checkpoint at -100, so the test server can return it.
+    data.write()
+        .await
+        .tree_states
+        .push((ckpt_height, hash.to_string(), tree.to_string()));
+
+    // 2. Mine 110 blocks after 1220000
+    let mut fcbl = FakeCompactBlockList::new(0);
+    fcbl.next_height = ckpt_height + 1;
+    {
+        let blk = fcbl.add_empty_block();
+        blk.block.prev_hash = hex::decode(hash).unwrap().into_iter().rev().collect();
+    }
+    let cbs = fcbl.add_blocks(109).into_compact_blocks();
+    data.write().await.add_blocks(cbs.clone());
+
+    // 3. Calculate witness
+    let sapling_tree = hex::decode(tree).unwrap();
+    let start_tree = CommitmentTree::<Node>::read(&sapling_tree[..])
+        .map_err(|e| format!("{}", e))
+        .unwrap();
+    let tree = cbs.iter().rev().fold(start_tree, |mut tree, cb| {
+        for tx in &cb.vtx {
+            for co in &tx.outputs {
+                tree.append(Node::new(co.cmu().unwrap().into())).unwrap();
+            }
+        }
+
+        tree
+    });
+
+    // 4. Test1: create a new lightclient, restoring at exactly the checkpoint
+    let lc = LightClient::test_new(&config, Some(TEST_SEED.to_string()), ckpt_height)
+        .await
+        .unwrap();
+    lc.init_logging().unwrap();
+    assert_eq!(
+        json::parse(lc.do_info().await.as_str()).unwrap()["latest_block_height"]
+            .as_u64()
+            .unwrap(),
+        ckpt_height + 110
+    );
+
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), false);
+    assert_eq!(lc.do_verify_from_last_checkpoint().await.unwrap(), true);
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), true);
+
+    lc.do_sync(true).await.unwrap();
+
+    // Check the trees
+    assert_eq!(
+        lc.wallet.blocks.read().await.first().map(|b| b.clone()).unwrap().height,
+        1220110
+    );
+    assert_eq!(
+        tree_to_string(
+            &lc.wallet
+                .blocks
+                .read()
+                .await
+                .first()
+                .map(|b| b.clone())
+                .unwrap()
+                .tree
+                .unwrap()
+        ),
+        tree_to_string(&tree)
+    );
+
+    // 5: Test2: Create a new lightwallet, restoring at checkpoint + 100
+    let lc = LightClient::test_new(&config, Some(TEST_SEED.to_string()), ckpt_height + 100)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        json::parse(lc.do_info().await.as_str()).unwrap()["latest_block_height"]
+            .as_u64()
+            .unwrap(),
+        ckpt_height + 110
+    );
+
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), false);
+    assert_eq!(lc.do_verify_from_last_checkpoint().await.unwrap(), true);
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), true);
+
+    lc.do_sync(true).await.unwrap();
+
+    // Check the trees
+    assert_eq!(
+        lc.wallet.blocks.read().await.first().map(|b| b.clone()).unwrap().height,
+        1220110
+    );
+    assert_eq!(
+        tree_to_string(
+            &lc.wallet
+                .blocks
+                .read()
+                .await
+                .first()
+                .map(|b| b.clone())
+                .unwrap()
+                .tree
+                .unwrap()
+        ),
+        tree_to_string(&tree)
+    );
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
 const EXT_TADDR: &str = "t1NoS6ZgaUTpmjkge2cVpXGcySasdYDrXqh";
 const EXT_ZADDR: &str = "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
 const EXT_ZADDR2: &str = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv";
+const TEST_SEED: &str = "chimney better bulb horror rebuild whisper improve intact letter giraffe brave rib appear bulk aim burst snap salt hill sad merge tennis phrase raise";

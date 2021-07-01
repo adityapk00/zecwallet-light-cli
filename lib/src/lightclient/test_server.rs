@@ -31,6 +31,7 @@ pub struct TestServerData {
     pub sent_txns: Vec<RawTransaction>,
     pub config: LightClientConfig,
     pub zec_price: f64,
+    pub tree_states: Vec<(u64, String, String)>,
 }
 
 impl TestServerData {
@@ -41,6 +42,7 @@ impl TestServerData {
             sent_txns: vec![],
             config,
             zec_price: 140.5,
+            tree_states: vec![],
         };
 
         data
@@ -141,26 +143,20 @@ impl CompactTxStreamer for TestGRPCService {
         let start = request.start.unwrap().height;
         let end = request.end.unwrap().height;
 
-        if start < end {
-            return Err(Status::unimplemented(format!(
-                "Can't stream blocks from smaller to heighest yet"
-            )));
-        }
-
-        if self.data.read().await.blocks.len() > 1 {
-            if self.data.read().await.blocks.first().unwrap().height
-                < self.data.read().await.blocks.last().unwrap().height
-            {}
-        }
+        let rev = start < end;
 
         let (tx, rx) = mpsc::channel(self.data.read().await.blocks.len());
 
         let blocks = self.data.read().await.blocks.clone();
         tokio::spawn(async move {
-            for b in blocks {
-                if b.height <= start && b.height >= end {
+            let (iter, min, max) = if rev {
+                (blocks.iter().rev().map(|b| b.clone()).collect(), start, end)
+            } else {
+                (blocks, end, start)
+            };
+            for b in iter {
+                if b.height >= min && b.height <= max {
                     Self::wait_random().await;
-
                     tx.send(Ok(b)).await.unwrap();
                 }
             }
@@ -274,6 +270,36 @@ impl CompactTxStreamer for TestGRPCService {
         Self::wait_random().await;
 
         let block = request.into_inner();
+        println!("Getting tree state at {}", block.height);
+
+        // See if it is manually set.
+        if let Some((height, hash, tree)) = self
+            .data
+            .read()
+            .await
+            .tree_states
+            .iter()
+            .find(|(h, _, _)| *h == block.height)
+        {
+            let mut ts = TreeState::default();
+            ts.height = *height;
+            ts.hash = hash.clone();
+            ts.tree = tree.clone();
+
+            return Ok(Response::new(ts));
+        }
+
+        let start_block = self.data.read().await.blocks.last().map(|b| b.height - 1).unwrap_or(0);
+
+        let start_tree = self
+            .data
+            .read()
+            .await
+            .tree_states
+            .iter()
+            .find(|(h, _, _)| *h == start_block)
+            .map(|(_, _, t)| CommitmentTree::<Node>::read(&hex::decode(t).unwrap()[..]).unwrap())
+            .unwrap_or(CommitmentTree::<Node>::empty());
 
         let tree = self
             .data
@@ -281,7 +307,9 @@ impl CompactTxStreamer for TestGRPCService {
             .await
             .blocks
             .iter()
-            .fold(CommitmentTree::<Node>::empty(), |mut tree, cb| {
+            .rev()
+            .take_while(|cb| cb.height <= block.height)
+            .fold(start_tree, |mut tree, cb| {
                 for tx in &cb.vtx {
                     for co in &tx.outputs {
                         tree.append(Node::new(co.cmu().unwrap().into())).unwrap();
@@ -300,7 +328,7 @@ impl CompactTxStreamer for TestGRPCService {
                 .blocks
                 .iter()
                 .find(|cb| cb.height == block.height)
-                .unwrap()
+                .expect(format!("Couldn't find block {}", block.height).as_str())
                 .hash[..],
         )
         .to_string();

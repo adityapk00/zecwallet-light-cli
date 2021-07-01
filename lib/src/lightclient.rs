@@ -75,7 +75,7 @@ pub struct LightClient {
 impl LightClient {
     /// Method to create a test-only version of the LightClient
     #[allow(dead_code)]
-    pub async fn test_new(config: &LightClientConfig, seed_phrase: Option<String>) -> io::Result<Self> {
+    pub async fn test_new(config: &LightClientConfig, seed_phrase: Option<String>, height: u64) -> io::Result<Self> {
         if seed_phrase.is_some() && config.wallet_exists() {
             return Err(Error::new(
                 ErrorKind::AlreadyExists,
@@ -84,7 +84,7 @@ impl LightClient {
         }
 
         let mut l = LightClient {
-            wallet: LightWallet::new(config.clone(), seed_phrase, 0)?,
+            wallet: LightWallet::new(config.clone(), seed_phrase, height)?,
             config: config.clone(),
             sapling_output: vec![],
             sapling_spend: vec![],
@@ -92,7 +92,7 @@ impl LightClient {
             sync_lock: Mutex::new(()),
         };
 
-        l.set_wallet_initial_state(0).await;
+        l.set_wallet_initial_state(height).await;
 
         #[cfg(feature = "embed_params")]
         l.read_sapling_params();

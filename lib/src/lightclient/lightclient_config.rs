@@ -217,15 +217,11 @@ impl LightClientConfig {
 
     pub async fn get_initial_state(&self, height: u64) -> Option<(u64, String, String)> {
         if height <= self.sapling_activation_height {
-            return checkpoints::get_closest_checkpoint(&self.chain_name, height)
-                .map(|(height, hash, tree)| (height, hash.to_string(), tree.to_string()));
+            return None;
         }
 
-        // We'll get the initial state from the server. Get it at height - 100 blocks, so there is no risk
-        // of a reorg
-        let fetch_height = std::cmp::max(height - 100, self.sapling_activation_height);
-        info!("Getting sapling tree from LightwalletD at height {}", fetch_height);
-        match GrpcConnector::get_sapling_tree(self.server.clone(), fetch_height).await {
+        info!("Getting sapling tree from LightwalletD at height {}", height);
+        match GrpcConnector::get_sapling_tree(self.server.clone(), height).await {
             Ok(tree_state) => {
                 let hash = tree_state.hash.clone();
                 let tree = tree_state.tree.clone();

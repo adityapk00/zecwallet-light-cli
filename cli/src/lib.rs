@@ -86,7 +86,8 @@ pub fn startup(
                 Arc::new(LightClient::read_from_disk(&config)?)
             } else {
                 println!("Creating a new wallet");
-                Arc::new(LightClient::new(&config, latest_block_height)?)
+                // Create a wallet with height - 100, to protect against reorgs
+                Arc::new(LightClient::new(&config, latest_block_height.saturating_sub(100))?)
             }
         }
     };

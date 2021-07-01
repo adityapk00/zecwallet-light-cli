@@ -1251,6 +1251,7 @@ pub mod tests {
             .block_on(LightClient::test_new(
                 &LightClientConfig::create_unconnected("main".to_string(), None),
                 Some(TEST_SEED.to_string()),
+                0,
             ))
             .unwrap();
 
