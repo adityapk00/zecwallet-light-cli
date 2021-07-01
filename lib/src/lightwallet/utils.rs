@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Read, Write};
-use zcash_primitives::memo::{Memo, MemoBytes};
+use zcash_primitives::memo::MemoBytes;
 
 pub fn read_string<R: Read>(mut reader: R) -> io::Result<String> {
     // Strings are written as <littleendian> len + bytes
@@ -32,11 +32,5 @@ pub fn interpret_memo_string(memo_str: String) -> Result<MemoBytes, String> {
         Vec::from(memo_str.as_bytes())
     };
 
-    match Memo::from_bytes(&s_bytes) {
-        Err(_) => {
-            let e = format!("Error creating output. Memo {:?} is too long", memo_str);
-            return Err(e);
-        }
-        Ok(m) => Ok(m.into()),
-    }
+    MemoBytes::from_bytes(&s_bytes).map_err(|_| format!("Error creating output. Memo '{:?}' is too long", memo_str))
 }

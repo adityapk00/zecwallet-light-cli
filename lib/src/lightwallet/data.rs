@@ -1,8 +1,10 @@
 use crate::compact_formats::CompactBlock;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use prost::Message;
+use std::convert::TryFrom;
 use std::io::{self, Read, Write};
 use std::usize;
+use zcash_primitives::memo::MemoBytes;
 
 use crate::blaze::fixed_size_buffer::FixedSizeBuffer;
 use zcash_primitives::{consensus::BlockHeight, zip32::ExtendedSpendingKey};
@@ -334,9 +336,17 @@ impl SaplingNoteData {
         let memo = Optional::read(&mut reader, |r| {
             let mut memo_bytes = [0u8; 512];
             r.read_exact(&mut memo_bytes)?;
-            match Memo::from_bytes(&memo_bytes) {
-                Ok(m) => Ok(m),
-                Err(_) => Err(io::Error::new(io::ErrorKind::InvalidInput, "Couldn't create the memo")),
+
+            // Attempt to read memo, first as text, else as arbitrary 512 bytes
+            match MemoBytes::from_bytes(&memo_bytes) {
+                Ok(mb) => match Memo::try_from(mb.clone()) {
+                    Ok(m) => Ok(m),
+                    Err(_) => Ok(Memo::Future(mb)),
+                },
+                Err(e) => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Couldn't create memo: {}", e),
+                )),
             }
         })?;
 
@@ -537,7 +547,16 @@ impl OutgoingTxMetadata {
 
         let mut memo_bytes = [0u8; 512];
         reader.read_exact(&mut memo_bytes)?;
-        let memo = Memo::from_bytes(&memo_bytes).unwrap();
+        let memo = match MemoBytes::from_bytes(&memo_bytes) {
+            Ok(mb) => match Memo::try_from(mb.clone()) {
+                Ok(m) => Ok(m),
+                Err(_) => Ok(Memo::Future(mb)),
+            },
+            Err(e) => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Couldn't create memo: {}", e),
+            )),
+        }?;
 
         Ok(OutgoingTxMetadata { address, value, memo })
     }
