@@ -230,6 +230,7 @@ pub fn attempt_recover_seed(_password: Option<String>) {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "main".to_string(),
         sapling_activation_height: 0,
+        monitor_mempool: false,
         anchor_offset: 0,
         data_dir: None,
     };

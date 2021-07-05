@@ -36,6 +36,7 @@ pub struct LightClientConfig {
     pub chain_name: String,
     pub sapling_activation_height: u64,
     pub anchor_offset: u32,
+    pub monitor_mempool: bool,
     pub data_dir: Option<String>,
 }
 
@@ -46,6 +47,7 @@ impl LightClientConfig {
             server: http::Uri::default(),
             chain_name: chain_name,
             sapling_activation_height: 1,
+            monitor_mempool: false,
             anchor_offset: ANCHOR_OFFSET,
             data_dir: dir,
         }
@@ -73,6 +75,7 @@ impl LightClientConfig {
             let config = LightClientConfig {
                 server,
                 chain_name: info.chain_name,
+                monitor_mempool: true,
                 sapling_activation_height: info.sapling_activation_height,
                 anchor_offset: ANCHOR_OFFSET,
                 data_dir: None,

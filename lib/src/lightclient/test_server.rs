@@ -381,4 +381,13 @@ impl CompactTxStreamer for TestGRPCService {
     async fn ping(&self, _request: Request<Duration>) -> Result<Response<PingResponse>, Status> {
         todo!()
     }
+
+    type GetMempoolStreamStream = Pin<Box<dyn Stream<Item = Result<RawTransaction, Status>> + Send + Sync>>;
+
+    async fn get_mempool_stream(
+        &self,
+        _request: tonic::Request<crate::compact_formats::Empty>,
+    ) -> Result<tonic::Response<Self::GetMempoolStreamStream>, tonic::Status> {
+        todo!()
+    }
 }

@@ -266,6 +266,29 @@ impl GrpcConnector {
         Ok(response.into_inner())
     }
 
+    pub async fn monitor_mempool(uri: http::Uri) -> Result<(), String> {
+        let client = Arc::new(GrpcConnector::new(uri));
+
+        let mut client = client
+            .get_client()
+            .await
+            .map_err(|e| format!("Error getting client: {:?}", e))?;
+
+        let request = Request::new(Empty {});
+
+        let mut response = client
+            .get_mempool_stream(request)
+            .await
+            .map_err(|e| format!("{}", e))?
+            .into_inner();
+        while let Some(rtx) = response.message().await.map_err(|e| format!("{}", e))? {
+            let tx = Transaction::read(&rtx.data[..]).unwrap();
+            println!("Got mempool tx: {}", tx.txid())
+        }
+
+        Ok(())
+    }
+
     pub async fn get_sapling_tree(uri: http::Uri, height: u64) -> Result<TreeState, String> {
         let client = Arc::new(GrpcConnector::new(uri));
         let mut client = client

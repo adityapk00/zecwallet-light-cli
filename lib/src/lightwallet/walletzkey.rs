@@ -317,6 +317,7 @@ pub mod tests {
         LightClientConfig {
             server: "0.0.0.0:0".parse().unwrap(),
             chain_name: "main".to_string(),
+            monitor_mempool: false,
             sapling_activation_height: 0,
             anchor_offset: 0,
             data_dir: None,

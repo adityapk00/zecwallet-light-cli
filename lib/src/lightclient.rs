@@ -17,14 +17,14 @@ use std::{
     fs::File,
     io::{self, BufReader, Error, ErrorKind, Read, Write},
     path::Path,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
     join,
     runtime::Runtime,
-    sync::{mpsc::unbounded_channel, oneshot, Mutex},
-    task::yield_now,
+    sync::{mpsc::unbounded_channel, oneshot, Mutex, RwLock},
+    task::{yield_now, JoinHandle},
     time::sleep,
 };
 use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
@@ -63,13 +63,15 @@ pub struct LightClient {
     pub(crate) config: LightClientConfig,
     pub(crate) wallet: LightWallet,
 
+    mempool_monitor: RwLock<Option<JoinHandle<()>>>,
+
     // zcash-params
     pub sapling_output: Vec<u8>,
     pub sapling_spend: Vec<u8>,
 
     sync_lock: Mutex<()>,
 
-    bsync_data: Arc<tokio::sync::RwLock<BlazeSyncData>>,
+    bsync_data: Arc<RwLock<BlazeSyncData>>,
 }
 
 impl LightClient {
@@ -88,7 +90,8 @@ impl LightClient {
             config: config.clone(),
             sapling_output: vec![],
             sapling_spend: vec![],
-            bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
+            mempool_monitor: RwLock::new(None),
+            bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             sync_lock: Mutex::new(()),
         };
 
@@ -218,8 +221,9 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
+                mempool_monitor: RwLock::new(None),
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
+                bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
 
             l.set_wallet_initial_state(latest_block).await;
@@ -261,8 +265,9 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
+                mempool_monitor: RwLock::new(None),
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
+                bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
 
             println!("Setting birthday to {}", birthday);
@@ -291,8 +296,9 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
+                mempool_monitor: RwLock::new(None),
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
+                bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
 
             #[cfg(feature = "embed_params")]
@@ -327,8 +333,9 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
+                mempool_monitor: RwLock::new(None),
                 sync_lock: Mutex::new(()),
-                bsync_data: Arc::new(tokio::sync::RwLock::new(BlazeSyncData::new(&config))),
+                bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
 
             #[cfg(feature = "embed_params")]
@@ -1113,7 +1120,7 @@ impl LightClient {
                 for tx in cb.vtx.iter() {
                     for so in tx.outputs.iter() {
                         let node = Node::new(so.cmu().ok().unwrap().into());
-                        commit_tree.write().unwrap().append(node).unwrap();
+                        commit_tree.write().await.append(node).unwrap();
                     }
                 }
 
@@ -1132,7 +1139,7 @@ impl LightClient {
         let mut write_buf = vec![];
         commit_tree_computed
             .write()
-            .unwrap()
+            .await
             .write(&mut write_buf)
             .map_err(|e| format!("{}", e))?;
         let computed_tree = hex::encode(write_buf);
@@ -1235,7 +1242,29 @@ impl LightClient {
         self.bsync_data.read().await.sync_status.read().await.clone()
     }
 
+    async fn start_mempool_monitor(&self) {
+        if self.mempool_monitor.read().await.is_some() {
+            println!("Monitor already started!");
+            return;
+        }
+
+        let uri = self.config.server.clone();
+
+        // Start monitoring the mempool in a new thread
+        let h = tokio::spawn(async move {
+            loop {
+                let r = GrpcConnector::monitor_mempool(uri.clone()).await;
+                println!("Monitor returned {:?}", r);
+            }
+        });
+
+        *self.mempool_monitor.write().await = Some(h);
+    }
+
     pub async fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
+        // Start the mempool monitor
+        self.start_mempool_monitor().await;
+
         // Remember the previous sync id first
         let prev_sync_id = self.bsync_data.read().await.sync_status.read().await.sync_id;
 
