@@ -1243,6 +1243,10 @@ impl LightClient {
     }
 
     async fn start_mempool_monitor(&self) {
+        if !self.config.monitor_mempool {
+            return;
+        }
+
         if self.mempool_monitor.read().await.is_some() {
             println!("Monitor already started!");
             return;
