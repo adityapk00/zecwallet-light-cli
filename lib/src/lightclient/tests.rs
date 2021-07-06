@@ -234,7 +234,11 @@ async fn z_incoming_z_outgoing() {
     // 6.1 Check notes
 
     let notes = lc.do_list_notes(true).await;
-    assert_eq!(notes["unspent_notes"].len(), 0);
+    // Has a new (unconfirmed) unspent note (the change)
+    assert_eq!(notes["unspent_notes"].len(), 1);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
+    assert_eq!(notes["unspent_notes"][0]["unconfirmed"].as_bool().unwrap(), true);
+
     assert_eq!(notes["spent_notes"].len(), 0);
     assert_eq!(notes["pending_notes"].len(), 1);
     assert_eq!(notes["pending_notes"][0]["created_in_txid"], tx.txid().to_string());
@@ -708,9 +712,10 @@ async fn t_incoming_t_outgoing() {
     );
 
     let list = lc.do_list_transactions(false).await;
+
     assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
     assert_eq!(list[1]["txid"], sent_txid);
-    assert_eq!(list[1]["unconfirmed"].as_bool(), None);
+    assert_eq!(list[1]["unconfirmed"].as_bool().unwrap(), false);
     assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_TADDR);
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
@@ -721,7 +726,7 @@ async fn t_incoming_t_outgoing() {
     let list = lc.do_list_transactions(false).await;
     assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
     assert_eq!(list[1]["txid"], sent_txid);
-    assert_eq!(list[1]["unconfirmed"].as_bool(), None);
+    assert_eq!(list[1]["unconfirmed"].as_bool().unwrap(), false);
     assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_TADDR);
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
@@ -1056,7 +1061,7 @@ async fn recover_at_checkpoint() {
     let lc = LightClient::test_new(&config, Some(TEST_SEED.to_string()), ckpt_height)
         .await
         .unwrap();
-    lc.init_logging().unwrap();
+    //lc.init_logging().unwrap();
     assert_eq!(
         json::parse(lc.do_info().await.as_str()).unwrap()["latest_block_height"]
             .as_u64()
@@ -1127,6 +1132,111 @@ async fn recover_at_checkpoint() {
         ),
         tree_to_string(&tree)
     );
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn witness_clearing() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
+    //lc.init_logging().unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 100_000;
+    let (tx, _height, _) = fcbl.add_tx_paying(&extfvk1, value);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. Send z-to-z tx to external z address with a memo
+    let sent_value = 2000;
+    let outgoing_memo = "Outgoing Memo".to_string();
+
+    let _sent_txid = lc
+        .test_do_send(vec![(EXT_ZADDR, sent_value, Some(outgoing_memo.clone()))])
+        .await
+        .unwrap();
+
+    // Tx is not yet mined, so witnesses should still be there
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 6);
+
+    // 4. Mine the sent transaction
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // Tx is now mined, but witnesses should still be there because not 100 blocks yet (i.e., could get reorged)
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 6);
+
+    // 5. Mine 50 blocks, witness should still be there
+    mine_random_blocks(&mut fcbl, &data, &lc, 50).await;
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 6);
+
+    // 5. Mine 100 blocks, witness should now disappear
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 0);
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();

@@ -266,7 +266,7 @@ impl GrpcConnector {
         Ok(response.into_inner())
     }
 
-    pub async fn monitor_mempool(uri: http::Uri) -> Result<(), String> {
+    pub async fn monitor_mempool(uri: http::Uri, mempool_tx: UnboundedSender<RawTransaction>) -> Result<(), String> {
         let client = Arc::new(GrpcConnector::new(uri));
 
         let mut client = client
@@ -282,8 +282,7 @@ impl GrpcConnector {
             .map_err(|e| format!("{}", e))?
             .into_inner();
         while let Some(rtx) = response.message().await.map_err(|e| format!("{}", e))? {
-            let tx = Transaction::read(&rtx.data[..]).unwrap();
-            println!("Got mempool tx: {}", tx.txid())
+            mempool_tx.send(rtx).map_err(|e| format!("{}", e))?;
         }
 
         Ok(())

@@ -152,6 +152,7 @@ impl UpdateNotes {
                     wallet_txns.write().await.add_new_spent(
                         spent_txid,
                         spent_at_height,
+                        false,
                         ts,
                         nf,
                         value,

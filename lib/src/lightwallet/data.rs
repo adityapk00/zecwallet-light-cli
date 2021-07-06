@@ -139,6 +139,10 @@ impl WitnessCache {
         self.witnesses.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.witnesses.is_empty()
+    }
+
     pub fn clear(&mut self) {
         self.witnesses.clear();
     }
@@ -575,6 +579,9 @@ pub struct WalletTx {
     // Block in which this tx was included
     pub block: BlockHeight,
 
+    // Is this Tx unconfirmed (i.e., not yet mined)
+    pub unconfirmed: bool,
+
     // Timestamp of Tx. Added in v4
     pub datetime: u64,
 
@@ -609,11 +616,17 @@ pub struct WalletTx {
 
 impl WalletTx {
     pub fn serialized_version() -> u64 {
-        return 20;
+        return 21;
     }
 
-    pub fn new(height: BlockHeight, datetime: u64, txid: &TxId, price: &WalletZecPriceInfo) -> Self {
-        let zec_price = match price.zec_price {
+    pub fn new_txid(txid: &Vec<u8>) -> TxId {
+        let mut txid_bytes = [0u8; 32];
+        txid_bytes.copy_from_slice(txid);
+        TxId { 0: txid_bytes }
+    }
+
+    pub fn get_price(datetime: u64, price: &WalletZecPriceInfo) -> Option<f64> {
+        match price.zec_price {
             None => None,
             Some((t, p)) => {
                 // If the price was fetched within 24 hours of this Tx, we use the "current" price
@@ -624,10 +637,13 @@ impl WalletTx {
                     None
                 }
             }
-        };
+        }
+    }
 
+    pub fn new(height: BlockHeight, datetime: u64, txid: &TxId, unconfirmed: bool, price: &WalletZecPriceInfo) -> Self {
         WalletTx {
             block: height,
+            unconfirmed,
             datetime,
             txid: txid.clone(),
             spent_nullifiers: vec![],
@@ -637,20 +653,16 @@ impl WalletTx {
             total_sapling_value_spent: 0,
             outgoing_metadata: vec![],
             full_tx_scanned: false,
-            zec_price,
+            zec_price: Self::get_price(datetime, price),
         }
-    }
-
-    pub fn new_txid(txid: &Vec<u8>) -> TxId {
-        let mut txid_bytes = [0u8; 32];
-        txid_bytes.copy_from_slice(txid);
-        TxId { 0: txid_bytes }
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let version = reader.read_u64::<LittleEndian>()?;
 
         let block = BlockHeight::from_u32(reader.read_i32::<LittleEndian>()? as u32);
+
+        let unconfirmed = if version <= 20 { false } else { reader.read_u8()? == 1 };
 
         let datetime = if version >= 4 {
             reader.read_u64::<LittleEndian>()?
@@ -692,6 +704,7 @@ impl WalletTx {
 
         Ok(Self {
             block,
+            unconfirmed,
             datetime,
             txid,
             notes,
@@ -710,6 +723,8 @@ impl WalletTx {
 
         let block: u32 = self.block.into();
         writer.write_i32::<LittleEndian>(block as i32)?;
+
+        writer.write_u8(if self.unconfirmed { 1 } else { 0 })?;
 
         writer.write_u64::<LittleEndian>(self.datetime)?;
 

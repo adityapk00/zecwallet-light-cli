@@ -4,9 +4,10 @@ use crate::{
         sync_status::SyncStatus, syncdata::BlazeSyncData, trial_decryptions::TrialDecryptions,
         update_notes::UpdateNotes,
     },
+    compact_formats::RawTransaction,
     grpc_connector::GrpcConnector,
     lightclient::lightclient_config::MAX_REORG,
-    lightwallet::{self, message::Message, LightWallet, NodePosition},
+    lightwallet::{self, message::Message, now, LightWallet, NodePosition},
 };
 use futures::future::{join_all, AbortHandle, Abortable};
 use json::{array, object, JsonValue};
@@ -33,7 +34,7 @@ use zcash_primitives::{
     memo::{Memo, MemoBytes},
     merkle_tree::CommitmentTree,
     sapling::Node,
-    transaction::{components::amount::DEFAULT_FEE, TxId},
+    transaction::{components::amount::DEFAULT_FEE, Transaction, TxId},
 };
 use zcash_proofs::prover::LocalTxProver;
 
@@ -650,6 +651,7 @@ impl LightClient {
                                 "datetime"           => wtx.datetime,
                                 "created_in_txid"    => format!("{}", txid),
                                 "value"              => nd.note.value,
+                                "unconfirmed"        => wtx.unconfirmed,
                                 "is_change"          => nd.is_change,
                                 "address"            => address,
                                 "spendable"          => spendable,
@@ -815,6 +817,7 @@ impl LightClient {
                     let block_height: u32 = v.block.into();
                     txns.push(object! {
                         "block_height" => block_height,
+                        "unconfirmed" => v.unconfirmed,
                         "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
                         "zec_price"    => v.zec_price,
@@ -830,6 +833,7 @@ impl LightClient {
                     let block_height: u32 = v.block.into();
                     let mut o = object! {
                         "block_height" => block_height,
+                        "unconfirmed" => v.unconfirmed,
                         "datetime"     => v.datetime,
                         "position"     => i,
                         "txid"         => format!("{}", v.txid),
@@ -863,6 +867,7 @@ impl LightClient {
                     let block_height: u32 = v.block.into();
                     txns.push(object! {
                         "block_height" => block_height,
+                        "unconfirmed" => v.unconfirmed,
                         "datetime"     => v.datetime,
                         "txid"         => format!("{}", v.txid),
                         "zec_price"    => v.zec_price,
@@ -875,43 +880,6 @@ impl LightClient {
                 txns
             })
             .collect::<Vec<JsonValue>>();
-
-        // Add in all mempool txns
-        tx_list.extend(self.wallet.txns.read().await.mempool.iter().map(|(_, wtx)| {
-            let amount: u64 = wtx.outgoing_metadata.iter().map(|om| om.value).sum::<u64>();
-            let fee = u64::from(DEFAULT_FEE);
-
-            // Collect outgoing metadata
-            let outgoing_json = wtx
-                .outgoing_metadata
-                .iter()
-                .map(|om| {
-                    let mut o = object! {
-                        "address" => om.address.clone(),
-                        "value"   => om.value,
-                        "memo"    => LightWallet::memo_str(Some(om.memo.clone())),
-                    };
-
-                    if include_memo_hex {
-                        let memo_bytes: MemoBytes = om.memo.clone().into();
-                        o.insert("memohex", hex::encode(memo_bytes.as_slice())).unwrap();
-                    }
-
-                    return o;
-                })
-                .collect::<Vec<JsonValue>>();
-
-            let block_height: u32 = wtx.block.into();
-            object! {
-                "block_height" => block_height,
-                "datetime"     => wtx.datetime,
-                "txid"         => format!("{}", wtx.txid),
-                "zec_price"    => wtx.zec_price,
-                "amount"       => -1 * (fee + amount) as i64,
-                "unconfirmed"  => true,
-                "outgoing_metadata" => outgoing_json,
-            }
-        }));
 
         tx_list.sort_by(|a, b| {
             if a["block_height"] == b["block_height"] {
@@ -1251,13 +1219,40 @@ impl LightClient {
             return;
         }
 
-        let uri = self.config.server.clone();
+        let config = self.config.clone();
+        let uri = config.server.clone();
+        let keys = self.wallet.keys();
+        let wallet_txns = self.wallet.txns.clone();
+        let price = self.wallet.price.clone();
 
         // Start monitoring the mempool in a new thread
         let h = tokio::spawn(async move {
+            let (mempool_tx, mut mempool_rx) = unbounded_channel::<RawTransaction>();
+            tokio::spawn(async move {
+                while let Some(rtx) = mempool_rx.recv().await {
+                    if let Ok(tx) = Transaction::read(&rtx.data[..]) {
+                        let price = price.read().await.clone();
+
+                        FetchFullTxns::scan_full_tx(
+                            config.clone(),
+                            tx,
+                            BlockHeight::from_u32(rtx.height as u32),
+                            true,
+                            now() as u32,
+                            keys.clone(),
+                            wallet_txns.clone(),
+                            &price,
+                        )
+                        .await;
+                    }
+                }
+            });
+
             loop {
-                let r = GrpcConnector::monitor_mempool(uri.clone()).await;
-                println!("Monitor returned {:?}", r);
+                let r = GrpcConnector::monitor_mempool(uri.clone(), mempool_tx.clone()).await;
+                if r.is_err() {
+                    warn!("Mempool monitor returned {:?}, will restart listening", r);
+                }
             }
         });
 
@@ -1558,6 +1553,10 @@ impl LightClient {
 
         // 3. Mark the sync finished, which will clear the nullifier cache etc...
         bsync_data.read().await.finish().await;
+
+        // 4. Remove the witnesses for spent notes more than 100 blocks old, since now there
+        // is no risk of reorg
+        self.wallet.txns().write().await.clear_old_witnesses(latest_block);
 
         Ok(object! {
             "result" => "success",

@@ -1,3 +1,4 @@
+use crate::blaze::test_utils::tree_to_string;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamer;
 use crate::compact_formats::{
     Address, AddressList, Balance, BlockId, BlockRange, ChainSpec, CompactBlock, CompactTx, Duration, Empty, Exclude,
@@ -333,10 +334,7 @@ impl CompactTxStreamer for TestGRPCService {
         )
         .to_string();
         ts.height = block.height;
-
-        let mut tree_bytes = vec![];
-        tree.write(&mut tree_bytes).unwrap();
-        ts.tree = hex::encode(tree_bytes);
+        ts.tree = tree_to_string(&tree);
 
         Ok(Response::new(ts))
     }
