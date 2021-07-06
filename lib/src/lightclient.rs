@@ -1248,7 +1248,6 @@ impl LightClient {
         }
 
         if self.mempool_monitor.read().await.is_some() {
-            println!("Monitor already started!");
             return;
         }
 

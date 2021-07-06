@@ -408,12 +408,14 @@ impl WalletTxns {
         let wtx = self.current.get_mut(&txid).expect("Txid should be present");
 
         // Add this UTXO if it doesn't already exist
-        if wtx
+        if let Some(utxo) = wtx
             .utxos
-            .iter()
+            .iter_mut()
             .find(|utxo| utxo.txid == txid && utxo.output_index == output_num as u64)
-            .is_none()
         {
+            // If it already exists, it is likely an mempool tx, so update the height
+            utxo.height = height as i32
+        } else {
             wtx.utxos.push(Utxo {
                 address: taddr,
                 txid: txid.clone(),
