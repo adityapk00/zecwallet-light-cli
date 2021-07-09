@@ -1265,6 +1265,7 @@ async fn mempool_clearing() {
     let orig_txid = tx.txid().to_string();
     mine_pending_blocks(&mut fcbl, &data, &lc).await;
     mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+    assert_eq!(lc.do_last_txid().await["last_txid"], orig_txid);
 
     // 3. Send z-to-z tx to external z address with a memo
     let sent_value = 2000;
@@ -1276,6 +1277,7 @@ async fn mempool_clearing() {
         .unwrap();
 
     // 4. The tx is not yet sent, it is just sitting in the test GRPC server, so remove it from there to make sure it doesn't get mined.
+    assert_eq!(lc.do_last_txid().await["last_txid"], sent_txid);
     let mut sent_txns = data.write().await.sent_txns.drain(..).collect::<Vec<_>>();
     assert_eq!(sent_txns.len(), 1);
     let sent_tx = sent_txns.remove(0);
