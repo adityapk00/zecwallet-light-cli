@@ -426,6 +426,12 @@ impl LightClient {
         }
     }
 
+    pub async fn do_last_txid(&self) -> JsonValue {
+        object! {
+            "last_txid" => self.wallet.txns().read().await.get_last_txid().map(|t| t.to_string())
+        }
+    }
+
     pub async fn do_balance(&self) -> JsonValue {
         // Collect z addresses
         let mut z_addresses = vec![];

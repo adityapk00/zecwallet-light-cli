@@ -25,6 +25,7 @@ use super::data::{OutgoingTxMetadata, SaplingNoteData, Utxo, WalletTx, WalletZec
 /// this struct are threadsafe/locked properly.
 pub struct WalletTxns {
     pub(crate) current: HashMap<TxId, WalletTx>,
+    pub(crate) last_txid: Option<TxId>,
 }
 
 impl WalletTxns {
@@ -35,6 +36,7 @@ impl WalletTxns {
     pub fn new() -> Self {
         Self {
             current: HashMap::new(),
+            last_txid: None,
         }
     }
 
@@ -48,7 +50,10 @@ impl WalletTxns {
 
         let txs = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
 
-        Ok(Self { current: txs })
+        Ok(Self {
+            current: txs,
+            last_txid: None,
+        })
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -68,6 +73,16 @@ impl WalletTxns {
         })?;
 
         let current = txs_tuples.into_iter().collect::<HashMap<TxId, WalletTx>>();
+        let last_txid = current
+            .values()
+            .fold(None, |c: Option<(TxId, BlockHeight)>, w| {
+                if c.is_none() || w.block > c.unwrap().1 {
+                    Some((w.txid.clone(), w.block))
+                } else {
+                    c
+                }
+            })
+            .map(|v| v.0);
 
         let _mempool = if version <= 20 {
             Vector::read(&mut reader, |r| {
@@ -83,7 +98,7 @@ impl WalletTxns {
             vec![]
         };
 
-        Ok(Self { current })
+        Ok(Self { current, last_txid })
     }
 
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
@@ -186,6 +201,10 @@ impl WalletTxns {
                 }
             }
         }
+    }
+
+    pub fn get_last_txid(&self) -> &'_ Option<TxId> {
+        &self.last_txid
     }
 
     pub fn get_notes_for_updating(&self, before_block: u64) -> Vec<(TxId, Nullifier)> {
@@ -325,6 +344,7 @@ impl WalletTxns {
                 txid.clone(),
                 WalletTx::new(BlockHeight::from(height), datetime, &txid, unconfirmed, price),
             );
+            self.last_txid = Some(txid.clone());
         }
         let wtx = self.current.get_mut(&txid).expect("Txid should be present");
 
