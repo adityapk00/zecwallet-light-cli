@@ -1210,25 +1210,34 @@ impl LightClient {
         self.bsync_data.read().await.sync_status.read().await.clone()
     }
 
-    async fn start_mempool_monitor(&self) {
-        if !self.config.monitor_mempool {
+    pub fn start_mempool_monitor(lc: Arc<LightClient>) {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Self::start_mempool_monitor_async(lc));
+    }
+
+    async fn start_mempool_monitor_async(lc: Arc<LightClient>) {
+        if !lc.config.monitor_mempool {
             return;
         }
 
-        if self.mempool_monitor.read().await.is_some() {
+        if lc.mempool_monitor.read().await.is_some() {
             return;
         }
 
-        let config = self.config.clone();
+        let config = lc.config.clone();
         let uri = config.server.clone();
-        let keys = self.wallet.keys();
-        let wallet_txns = self.wallet.txns.clone();
-        let price = self.wallet.price.clone();
+        let lci = lc.clone();
 
         // Start monitoring the mempool in a new thread
         let h = tokio::spawn(async move {
             let (mempool_tx, mut mempool_rx) = unbounded_channel::<RawTransaction>();
+            let lc1 = lci.clone();
             tokio::spawn(async move {
+                let keys = lc1.wallet.keys();
+                let wallet_txns = lc1.wallet.txns.clone();
+                let price = lc1.wallet.price.clone();
+
                 while let Some(rtx) = mempool_rx.recv().await {
                     if let Ok(tx) = Transaction::read(&rtx.data[..]) {
                         let price = price.read().await.clone();
@@ -1252,17 +1261,17 @@ impl LightClient {
                 let r = GrpcConnector::monitor_mempool(uri.clone(), mempool_tx.clone()).await;
                 if r.is_err() {
                     warn!("Mempool monitor returned {:?}, will restart listening", r);
+                    sleep(Duration::from_secs(10)).await;
+                } else {
+                    let _ = lci.do_sync(false).await;
                 }
             }
         });
 
-        *self.mempool_monitor.write().await = Some(h);
+        *lc.mempool_monitor.write().await = Some(h);
     }
 
     pub async fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
-        // Start the mempool monitor
-        self.start_mempool_monitor().await;
-
         // Remember the previous sync id first
         let prev_sync_id = self.bsync_data.read().await.sync_status.read().await.sync_id;
 
@@ -1557,6 +1566,9 @@ impl LightClient {
         // 4. Remove the witnesses for spent notes more than 100 blocks old, since now there
         // is no risk of reorg
         self.wallet.txns().write().await.clear_old_witnesses(latest_block);
+
+        // 5. Remove expired mempool transactions, if any
+        self.wallet.txns().write().await.clear_expired_mempool(latest_block);
 
         Ok(object! {
             "result" => "success",

@@ -257,6 +257,13 @@ impl WalletTxns {
         });
     }
 
+    pub(crate) fn clear_expired_mempool(&mut self, latest_height: u64) {
+        let cutoff = BlockHeight::from_u32((latest_height.saturating_sub(MAX_REORG as u64)) as u32);
+
+        self.current
+            .retain(|_, wtx| !wtx.unconfirmed || (wtx.unconfirmed && wtx.block >= cutoff));
+    }
+
     // Will mark the nullifier of the given txid as spent. Returns the amount of the nullifier
     pub fn mark_txid_nf_spent(
         &mut self,
