@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io::{self, Read, Write},
 };
 
@@ -120,23 +120,7 @@ impl WalletTxns {
         });
     }
 
-    // During reorgs, we need to remove all txns at a given height, and all spends that refer to any removed txns.
-    pub fn remove_txns_at_height(&mut self, reorg_height: u64) {
-        let reorg_height = BlockHeight::from_u32(reorg_height as u32);
-
-        // First, emove entire transactions
-        let txids_to_remove = self
-            .current
-            .values()
-            .filter_map(|wtx| {
-                if wtx.block >= reorg_height {
-                    Some(wtx.txid.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<HashSet<TxId>>();
-
+    pub fn remove_txids(&mut self, txids_to_remove: Vec<TxId>) {
         for txid in &txids_to_remove {
             self.current.remove(&txid);
         }
@@ -146,12 +130,13 @@ impl WalletTxns {
         self.current.values_mut().for_each(|wtx| {
             // Update notes to rollback any spent notes
             wtx.notes.iter_mut().for_each(|nd| {
+                // Mark note as unspent if the txid being removed spent it.
                 if nd.spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap().0) {
                     nd.spent = None;
                 }
 
-                // This is not going to happen, but do it for completeness.
-                if nd.unconfirmed_spent.is_some() && txids_to_remove.contains(&nd.spent.unwrap().0) {
+                // Remove unconfirmed spends too
+                if nd.unconfirmed_spent.is_some() && txids_to_remove.contains(&nd.unconfirmed_spent.unwrap().0) {
                     nd.unconfirmed_spent = None;
                 }
             });
@@ -168,6 +153,25 @@ impl WalletTxns {
                 }
             })
         });
+    }
+
+    // During reorgs, we need to remove all txns at a given height, and all spends that refer to any removed txns.
+    pub fn remove_txns_at_height(&mut self, reorg_height: u64) {
+        let reorg_height = BlockHeight::from_u32(reorg_height as u32);
+
+        // First, collect txids that need to be removed
+        let txids_to_remove = self
+            .current
+            .values()
+            .filter_map(|wtx| {
+                if wtx.block >= reorg_height {
+                    Some(wtx.txid.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.remove_txids(txids_to_remove);
 
         // Of the notes that still remain, unroll the witness.
         // Trim all witnesses for the invalidated blocks
@@ -260,8 +264,18 @@ impl WalletTxns {
     pub(crate) fn clear_expired_mempool(&mut self, latest_height: u64) {
         let cutoff = BlockHeight::from_u32((latest_height.saturating_sub(MAX_REORG as u64)) as u32);
 
-        self.current
-            .retain(|_, wtx| !wtx.unconfirmed || (wtx.unconfirmed && wtx.block >= cutoff));
+        let txids_to_remove = self
+            .current
+            .iter()
+            .filter(|(_, wtx)| wtx.unconfirmed && wtx.block < cutoff)
+            .map(|(_, wtx)| wtx.txid.clone())
+            .collect::<Vec<_>>();
+
+        txids_to_remove
+            .iter()
+            .for_each(|t| println!("Removing expired mempool tx {}", t));
+
+        self.remove_txids(txids_to_remove);
     }
 
     // Will mark the nullifier of the given txid as spent. Returns the amount of the nullifier

@@ -287,7 +287,7 @@ impl FetchFullTxns {
             for (i, ivk) in ivks.iter().enumerate() {
                 let epk_prime = output.ephemeral_key;
 
-                let (note, to, memo) =
+                let (note, to, memo_bytes) =
                     match try_sapling_note_decryption(&MAIN_NETWORK, height, &ivk, &epk_prime, &cmu, &ct) {
                         Some(ret) => ret,
                         None => continue,
@@ -306,14 +306,8 @@ impl FetchFullTxns {
                     );
                 }
 
-                match memo.try_into() {
-                    Ok(m) => {
-                        wallet_txns.write().await.add_memo_to_note(&tx.txid(), note, m);
-                    }
-                    _ => {
-                        //error!("Couldn't parse memo");
-                    }
-                }
+                let memo = memo_bytes.clone().try_into().unwrap_or(Memo::Future(memo_bytes));
+                wallet_txns.write().await.add_memo_to_note(&tx.txid(), note, memo);
             }
 
             // Also scan the output to see if it can be decoded with our OutgoingViewKey

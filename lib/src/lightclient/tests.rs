@@ -18,7 +18,7 @@ use zcash_client_backend::address::RecipientAddress;
 use zcash_client_backend::encoding::{
     encode_extended_full_viewing_key, encode_extended_spending_key, encode_payment_address,
 };
-use zcash_primitives::consensus::MAIN_NETWORK;
+use zcash_primitives::consensus::{BlockHeight, MAIN_NETWORK};
 use zcash_primitives::memo::Memo;
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
 use zcash_primitives::note_encryption::SaplingNoteEncryption;
@@ -27,9 +27,10 @@ use zcash_primitives::redjubjub::Signature;
 use zcash_primitives::sapling::Node;
 use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
 use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_SIZE};
-use zcash_primitives::transaction::TransactionData;
+use zcash_primitives::transaction::{Transaction, TransactionData};
 use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
 
+use crate::blaze::fetch_full_tx::FetchFullTxns;
 use crate::blaze::test_utils::{tree_to_string, FakeCompactBlockList, FakeTransaction};
 use crate::compact_formats::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamerServer;
@@ -1237,6 +1238,97 @@ async fn witness_clearing() {
         .witnesses
         .clone();
     assert_eq!(witnesses.len(), 0);
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn mempool_clearing() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
+    //lc.init_logging().unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 100_000;
+    let (tx, _height, _) = fcbl.add_tx_paying(&extfvk1, value);
+    let orig_txid = tx.txid().to_string();
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. Send z-to-z tx to external z address with a memo
+    let sent_value = 2000;
+    let outgoing_memo = "Outgoing Memo".to_string();
+
+    let sent_txid = lc
+        .test_do_send(vec![(EXT_ZADDR, sent_value, Some(outgoing_memo.clone()))])
+        .await
+        .unwrap();
+
+    // 4. The tx is not yet sent, it is just sitting in the test GRPC server, so remove it from there to make sure it doesn't get mined.
+    let mut sent_txns = data.write().await.sent_txns.drain(..).collect::<Vec<_>>();
+    assert_eq!(sent_txns.len(), 1);
+    let sent_tx = sent_txns.remove(0);
+
+    // 5. At this point, the rawTx is already been parsed, but we'll parse it again just to make sure it doesn't create any duplicates.
+    let notes_before = lc.do_list_notes(true).await;
+    let txns_before = lc.do_list_transactions(false).await;
+
+    let tx = Transaction::read(&sent_tx.data[..]).unwrap();
+    FetchFullTxns::scan_full_tx(
+        config,
+        tx,
+        BlockHeight::from_u32(17),
+        true,
+        0,
+        lc.wallet.keys(),
+        lc.wallet.txns(),
+        &lc.wallet.price.read().await.clone(),
+    )
+    .await;
+
+    let notes_after = lc.do_list_notes(true).await;
+    let txns_after = lc.do_list_transactions(false).await;
+
+    assert_eq!(notes_before.pretty(2), notes_after.pretty(2));
+    assert_eq!(txns_before.pretty(2), txns_after.pretty(2));
+
+    // 6. Mine 10 blocks, the unconfirmed tx should still be there.
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 26);
+
+    let notes = lc.do_list_notes(true).await;
+    let txns = lc.do_list_transactions(false).await;
+
+    // There is 1 unspent note, which is the unconfirmed tx
+    assert_eq!(notes["unspent_notes"].len(), 1);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
+    assert_eq!(notes["unspent_notes"][0]["unconfirmed"].as_bool().unwrap(), true);
+    assert_eq!(txns.len(), 2);
+
+    // 7. Mine 100 blocks, so the mempool expires
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 126);
+
+    let notes = lc.do_list_notes(true).await;
+    let txns = lc.do_list_transactions(false).await;
+
+    // There is now again 1 unspent note, but it is the original (confirmed) note.
+    assert_eq!(notes["unspent_notes"].len(), 1);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], orig_txid);
+    assert_eq!(notes["unspent_notes"][0]["unconfirmed"].as_bool().unwrap(), false);
+    assert_eq!(notes["pending_notes"].len(), 0);
+    assert_eq!(txns.len(), 1);
 
     // Shutdown everything cleanly
     stop_tx.send(true).unwrap();
