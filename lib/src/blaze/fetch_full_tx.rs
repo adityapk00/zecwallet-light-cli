@@ -13,7 +13,10 @@ use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
     iter::FromIterator,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 use tokio::{
     sync::{
@@ -77,30 +80,49 @@ impl FetchFullTxns {
 
         let (txid_tx, mut txid_rx) = unbounded_channel::<(TxId, BlockHeight)>();
         let h1: JoinHandle<Result<(), String>> = tokio::spawn(async move {
-            let mut last_progress = 0;
+            let last_progress = Arc::new(AtomicU64::new(0));
+            let mut workers: Vec<JoinHandle<Result<(), String>>> = vec![];
 
             while let Some((txid, height)) = txid_rx.recv().await {
-                // It is possible that we recieve the same txid multiple times, so we keep track of all the txids that were fetched
-                let tx = {
-                    // Fetch the TxId from LightwalletD and process all the parts of it.
-                    let (tx, rx) = oneshot::channel();
-                    fulltx_fetcher.send((txid, tx)).unwrap();
-                    rx.await.unwrap()?
-                };
-
-                let progress = start_height - u64::from(height);
-                if progress > last_progress {
-                    bsync_data_i.read().await.sync_status.write().await.txn_scan_done = progress;
-                    last_progress = progress;
-                }
-
                 let config = config.clone();
                 let keys = keys.clone();
                 let wallet_txns = wallet_txns.clone();
                 let block_time = bsync_data_i.read().await.block_data.get_block_timestamp(&height).await;
+                let fulltx_fetcher = fulltx_fetcher.clone();
+                let price = price.clone();
+                let bsync_data = bsync_data_i.clone();
+                let last_progress = last_progress.clone();
 
-                Self::scan_full_tx(config, tx, height, false, block_time, keys, wallet_txns, &price).await;
+                workers.push(tokio::spawn(async move {
+                    // It is possible that we recieve the same txid multiple times, so we keep track of all the txids that were fetched
+                    let tx = {
+                        // Fetch the TxId from LightwalletD and process all the parts of it.
+                        let (tx, rx) = oneshot::channel();
+                        fulltx_fetcher.send((txid, tx)).unwrap();
+                        rx.await.unwrap()?
+                    };
+
+                    let progress = start_height - u64::from(height);
+                    if progress > last_progress.load(Ordering::SeqCst) {
+                        bsync_data.read().await.sync_status.write().await.txn_scan_done = progress;
+                        last_progress.store(progress, Ordering::SeqCst);
+                    }
+
+                    Self::scan_full_tx(config, tx, height, false, block_time, keys, wallet_txns, &price).await;
+
+                    Ok(())
+                }));
             }
+
+            join_all(workers)
+                .await
+                .into_iter()
+                .map(|r| match r {
+                    Ok(Ok(s)) => Ok(s),
+                    Ok(Err(s)) => Err(s),
+                    Err(e) => Err(format!("{}", e)),
+                })
+                .collect::<Result<Vec<()>, String>>()?;
 
             bsync_data_i.read().await.sync_status.write().await.txn_scan_done = start_height - end_height + 1;
             info!("Finished fetching all full transactions");
@@ -117,17 +139,26 @@ impl FetchFullTxns {
 
         let h2: JoinHandle<Result<(), String>> = tokio::spawn(async move {
             let bsync_data = bsync_data.clone();
+            let mut workers = vec![];
 
             while let Some((tx, height)) = tx_rx.recv().await {
                 let config = config.clone();
                 let keys = keys.clone();
                 let wallet_txns = wallet_txns.clone();
+                let price = price.clone();
 
                 let block_time = bsync_data.read().await.block_data.get_block_timestamp(&height).await;
 
-                Self::scan_full_tx(config, tx, height, false, block_time, keys, wallet_txns, &price).await;
+                workers.push(tokio::spawn(async move {
+                    Self::scan_full_tx(config, tx, height, false, block_time, keys, wallet_txns, &price).await;
+                }));
             }
 
+            join_all(workers)
+                .await
+                .into_iter()
+                .map(|r| r.map_err(|e| e.to_string()))
+                .collect::<Result<Vec<()>, String>>()?;
             info!("Finished full_tx scanning all txns");
             Ok(())
         });
