@@ -139,7 +139,6 @@ impl FetchFullTxns {
 
         let h2: JoinHandle<Result<(), String>> = tokio::spawn(async move {
             let bsync_data = bsync_data.clone();
-            let mut workers = vec![];
 
             while let Some((tx, height)) = tx_rx.recv().await {
                 let config = config.clone();
@@ -149,16 +148,9 @@ impl FetchFullTxns {
 
                 let block_time = bsync_data.read().await.block_data.get_block_timestamp(&height).await;
 
-                workers.push(tokio::spawn(async move {
-                    Self::scan_full_tx(config, tx, height, false, block_time, keys, wallet_txns, &price).await;
-                }));
+                Self::scan_full_tx(config, tx, height, false, block_time, keys, wallet_txns, &price).await;
             }
 
-            join_all(workers)
-                .await
-                .into_iter()
-                .map(|r| r.map_err(|e| e.to_string()))
-                .collect::<Result<Vec<()>, String>>()?;
             //info!("Finished full_tx scanning all txns");
             Ok(())
         });
