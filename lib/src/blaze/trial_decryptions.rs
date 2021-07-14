@@ -46,7 +46,7 @@ impl TrialDecryptions {
         bsync_data: Arc<RwLock<BlazeSyncData>>,
         detected_txid_sender: UnboundedSender<(TxId, Nullifier, BlockHeight, Option<u32>)>,
     ) -> (JoinHandle<()>, UnboundedSender<CompactBlock>) {
-        info!("Starting trial decrptions processor");
+        //info!("Starting trial decrptions processor");
 
         // Create a new channel where we'll receive the blocks
         let (tx, mut rx) = unbounded_channel::<CompactBlock>();
@@ -147,7 +147,7 @@ impl TrialDecryptions {
                     sync_status.write().await.trial_dec_done += exec_tasks.len() as u64;
                     workers.push(tokio::spawn(async move { future::join_all(exec_tasks).await }));
 
-                    info!("Finished 10_000 trial decryptions, at block {}", height);
+                    //info!("Finished 10_000 trial decryptions, at block {}", height);
                 }
             }
 
@@ -157,7 +157,7 @@ impl TrialDecryptions {
             workers.push(tokio::spawn(async move { future::join_all(tasks.into_iter()).await }));
             future::join_all(workers).await;
 
-            info!("Finished final trial decryptions");
+            //info!("Finished final trial decryptions");
         });
 
         return (h, tx);

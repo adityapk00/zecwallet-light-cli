@@ -434,7 +434,7 @@ impl BlockAndWitnessData {
         uri_fetcher: UnboundedSender<(u64, oneshot::Sender<Result<TreeState, String>>)>,
         reorg_tx: UnboundedSender<Option<u64>>,
     ) -> (JoinHandle<Result<u64, String>>, UnboundedSender<CompactBlock>) {
-        info!("Starting node and witness sync");
+        //info!("Starting node and witness sync");
 
         let sapling_activation_height = self.sapling_activation_height;
         let batch_size = self.batch_size;

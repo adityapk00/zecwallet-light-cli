@@ -69,7 +69,7 @@ impl UpdateNotes {
                     .await
             };
 
-            info!("Finished updating witnesses for {}", txid);
+            //info!("Finished updating witnesses for {}", txid);
 
             wallet_txns
                 .write()
@@ -87,7 +87,7 @@ impl UpdateNotes {
         oneshot::Sender<u64>,
         UnboundedSender<(TxId, Nullifier, BlockHeight, Option<u32>)>,
     ) {
-        info!("Starting Note Update processing");
+        //info!("Starting Note Update processing");
 
         let zec_price = self.price.clone();
         // Create a new channel where we'll be notified of TxIds that are to be processed
@@ -113,7 +113,7 @@ impl UpdateNotes {
                     .map_err(|e| format!("Error sending note for updating: {}", e))?;
             }
 
-            info!("Finished processing all existing notes in wallet");
+            //info!("Finished processing all existing notes in wallet");
             Ok(())
         });
 
@@ -185,7 +185,7 @@ impl UpdateNotes {
 
             // Wait for all the workers
             join_all(workers).await;
-            info!("Finished Note Update processing");
+            //info!("Finished Note Update processing");
         });
 
         let h = tokio::spawn(async move {

@@ -96,7 +96,7 @@ impl FetchTaddrTxns {
                     }
                 }
 
-                info!("Finished fetching all t-addr txns");
+                //info!("Finished fetching all t-addr txns");
 
                 Ok(())
             });
@@ -120,7 +120,7 @@ impl FetchTaddrTxns {
                         .unwrap();
                 }
 
-                info!("Finished scanning all t-addr txns");
+                //info!("Finished scanning all t-addr txns");
                 Ok(())
             });
 

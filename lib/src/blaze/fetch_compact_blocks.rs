@@ -72,7 +72,7 @@ impl FetchCompactBlocks {
             return Err(format!("Expected blocks in reverse order"));
         }
 
-        info!("Starting fetch compact blocks");
+        //info!("Starting fetch compact blocks");
         self.fetch_blocks_range(&receivers, start_block, end_block).await?;
 
         // After fetching all the normal blocks, we actually wait to see if any re-org'd blocks are recieved
@@ -81,7 +81,7 @@ impl FetchCompactBlocks {
             self.fetch_blocks_range(&receivers, reorg_block, reorg_block).await?;
         }
 
-        info!("Finished fetch compact blocks, closing channels");
+        //info!("Finished fetch compact blocks, closing channels");
         Ok(())
     }
 }

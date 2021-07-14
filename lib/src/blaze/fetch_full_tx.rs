@@ -125,7 +125,7 @@ impl FetchFullTxns {
                 .collect::<Result<Vec<()>, String>>()?;
 
             bsync_data_i.read().await.sync_status.write().await.txn_scan_done = start_height - end_height + 1;
-            info!("Finished fetching all full transactions");
+            //info!("Finished fetching all full transactions");
 
             Ok(())
         });
@@ -159,7 +159,7 @@ impl FetchFullTxns {
                 .into_iter()
                 .map(|r| r.map_err(|e| e.to_string()))
                 .collect::<Result<Vec<()>, String>>()?;
-            info!("Finished full_tx scanning all txns");
+            //info!("Finished full_tx scanning all txns");
             Ok(())
         });
 
@@ -428,6 +428,6 @@ impl FetchFullTxns {
                 .add_outgoing_metadata(&tx.txid(), outgoing_metadatas);
         }
 
-        info!("Finished Fetching full tx {}", tx.txid());
+        //info!("Finished Fetching full tx {}", tx.txid());
     }
 }
