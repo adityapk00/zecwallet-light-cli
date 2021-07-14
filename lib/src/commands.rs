@@ -307,6 +307,26 @@ impl Command for ZecPriceCommand {
     }
 }
 
+struct LastTxIdCommand {}
+impl Command for LastTxIdCommand {
+    fn help(&self) -> String {
+        let mut h = vec![];
+        h.push("Show the latest TxId in the wallet");
+        h.push("Usage:");
+        h.push("lasttxid");
+
+        h.join("\n")
+    }
+
+    fn short_help(&self) -> String {
+        "Show the latest TxId in the wallet".to_string()
+    }
+
+    fn exec(&self, _args: &[&str], lightclient: &LightClient) -> String {
+        RT.block_on(async move { format!("{}", lightclient.do_last_txid().await.pretty(2)) })
+    }
+}
+
 struct BalanceCommand {}
 impl Command for BalanceCommand {
     fn help(&self) -> String {
@@ -1200,6 +1220,7 @@ pub fn get_commands() -> Box<HashMap<String, Box<dyn Command>>> {
     map.insert("rescan".to_string(), Box::new(RescanCommand {}));
     map.insert("clear".to_string(), Box::new(ClearCommand {}));
     map.insert("help".to_string(), Box::new(HelpCommand {}));
+    map.insert("lasttxid".to_string(), Box::new(LastTxIdCommand {}));
     map.insert("balance".to_string(), Box::new(BalanceCommand {}));
     map.insert("addresses".to_string(), Box::new(AddressCommand {}));
     map.insert("height".to_string(), Box::new(HeightCommand {}));
@@ -1251,6 +1272,7 @@ pub mod tests {
             .block_on(LightClient::test_new(
                 &LightClientConfig::create_unconnected("main".to_string(), None),
                 Some(TEST_SEED.to_string()),
+                0,
             ))
             .unwrap();
 

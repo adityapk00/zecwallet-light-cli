@@ -86,7 +86,8 @@ pub fn startup(
                 Arc::new(LightClient::read_from_disk(&config)?)
             } else {
                 println!("Creating a new wallet");
-                Arc::new(LightClient::new(&config, latest_block_height)?)
+                // Create a wallet with height - 100, to protect against reorgs
+                Arc::new(LightClient::new(&config, latest_block_height.saturating_sub(100))?)
             }
         }
     };
@@ -198,24 +199,21 @@ pub fn command_loop(lightclient: Arc<LightClient>) -> (Sender<(String, Vec<Strin
 
     let lc = lightclient.clone();
     std::thread::spawn(move || {
+        LightClient::start_mempool_monitor(lc.clone());
+
         loop {
-            match command_rx.recv_timeout(std::time::Duration::from_secs(5 * 60)) {
-                Ok((cmd, args)) => {
-                    let args = args.iter().map(|s| s.as_ref()).collect();
+            if let Ok((cmd, args)) = command_rx.recv() {
+                let args = args.iter().map(|s| s.as_ref()).collect();
 
-                    let cmd_response = commands::do_user_command(&cmd, &args, lc.as_ref());
-                    resp_tx.send(cmd_response).unwrap();
+                let cmd_response = commands::do_user_command(&cmd, &args, lc.as_ref());
+                resp_tx.send(cmd_response).unwrap();
 
-                    if cmd == "quit" {
-                        info!("Quit");
-                        break;
-                    }
+                if cmd == "quit" {
+                    info!("Quit");
+                    break;
                 }
-                Err(_) => {
-                    // Timeout. Do a sync to keep the wallet up-to-date. False to whether to print updates on the console
-                    info!("Timeout, doing a sync");
-                    commands::do_user_command("sync", &vec![], lc.as_ref());
-                }
+            } else {
+                break;
             }
         }
     });
@@ -229,6 +227,7 @@ pub fn attempt_recover_seed(_password: Option<String>) {
         server: "0.0.0.0:0".parse().unwrap(),
         chain_name: "main".to_string(),
         sapling_activation_height: 0,
+        monitor_mempool: false,
         anchor_offset: 0,
         data_dir: None,
     };

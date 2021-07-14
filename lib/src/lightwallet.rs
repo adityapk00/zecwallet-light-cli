@@ -4,7 +4,7 @@ use log::{error, info, warn};
 use std::{
     cmp,
     collections::HashMap,
-    convert::{TryFrom, TryInto},
+    convert::TryFrom,
     io::{self, Error, ErrorKind, Read, Write},
     sync::{
         atomic::{AtomicBool, AtomicU64},
@@ -33,15 +33,16 @@ use zcash_primitives::{
 };
 
 use crate::{
+    blaze::fetch_full_tx::FetchFullTxns,
     lightclient::lightclient_config::LightClientConfig,
     lightwallet::{
-        data::{OutgoingTxMetadata, SpendableNote},
+        data::SpendableNote,
         walletzkey::{WalletZKey, WalletZKeyType},
     },
 };
 
 use self::{
-    data::{BlockData, SaplingNoteData, Utxo, WalletTx, WalletZecPriceInfo},
+    data::{BlockData, SaplingNoteData, Utxo, WalletZecPriceInfo},
     keys::Keys,
     message::Message,
     wallet_txns::WalletTxns,
@@ -120,7 +121,7 @@ pub struct LightWallet {
 
 impl LightWallet {
     pub fn serialized_version() -> u64 {
-        return 20;
+        return 21;
     }
 
     pub fn new(config: LightClientConfig, seed_phrase: Option<String>, height: u64) -> io::Result<Self> {
@@ -1222,50 +1223,19 @@ impl LightWallet {
 
         // Add this Tx to the mempool structure
         {
-            // Collect the outgoing metadata
-            let outgoing_metadata = tos
-                .iter()
-                .map(|(addr, amt, maybe_memo)| {
-                    OutgoingTxMetadata {
-                        address: addr.to_string(),
-                        value: *amt,
-                        memo: match maybe_memo {
-                            None => Memo::default(),
-                            Some(s) => {
-                                // If the address is not a z-address, then drop the memo
-                                if !Keys::is_shielded_address(&addr.to_string(), &self.config) {
-                                    Memo::default()
-                                } else {
-                                    match utils::interpret_memo_string(s.clone()) {
-                                        Ok(m) => match m.try_into() {
-                                            Ok(m) => m,
-                                            Err(e) => {
-                                                error!("{}", e);
-                                                Memo::default()
-                                            }
-                                        },
-                                        Err(e) => {
-                                            error!("{}", e);
-                                            Memo::default()
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                    }
-                })
-                .collect::<Vec<_>>();
+            let price = self.price.read().await.clone();
 
-            // Create a new WalletTx
-            let mut wtx = WalletTx::new(
+            FetchFullTxns::scan_full_tx(
+                self.config.clone(),
+                tx,
                 height.into(),
-                now() as u64,
-                &tx.txid(),
-                &self.price.read().await.clone(),
-            );
-            wtx.outgoing_metadata = outgoing_metadata;
-
-            self.txns.write().await.add_mempool(wtx);
+                true,
+                now() as u32,
+                self.keys.clone(),
+                self.txns.clone(),
+                &price,
+            )
+            .await;
         }
 
         Ok((txid, raw_tx))

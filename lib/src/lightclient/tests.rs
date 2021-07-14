@@ -18,7 +18,7 @@ use zcash_client_backend::address::RecipientAddress;
 use zcash_client_backend::encoding::{
     encode_extended_full_viewing_key, encode_extended_spending_key, encode_payment_address,
 };
-use zcash_primitives::consensus::MAIN_NETWORK;
+use zcash_primitives::consensus::{BlockHeight, MAIN_NETWORK};
 use zcash_primitives::memo::Memo;
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
 use zcash_primitives::note_encryption::SaplingNoteEncryption;
@@ -27,10 +27,11 @@ use zcash_primitives::redjubjub::Signature;
 use zcash_primitives::sapling::Node;
 use zcash_primitives::transaction::components::amount::DEFAULT_FEE;
 use zcash_primitives::transaction::components::{OutputDescription, GROTH_PROOF_SIZE};
-use zcash_primitives::transaction::TransactionData;
+use zcash_primitives::transaction::{Transaction, TransactionData};
 use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
 
-use crate::blaze::test_utils::{FakeCompactBlockList, FakeTransaction};
+use crate::blaze::fetch_full_tx::FetchFullTxns;
+use crate::blaze::test_utils::{tree_to_string, FakeCompactBlockList, FakeTransaction};
 use crate::compact_formats::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::compact_formats::compact_tx_streamer_server::CompactTxStreamerServer;
 use crate::compact_formats::{CompactOutput, CompactTx, Empty};
@@ -39,6 +40,7 @@ use crate::lightclient::test_server::TestGRPCService;
 use crate::lightclient::LightClient;
 use crate::lightwallet::data::WalletTx;
 
+use super::checkpoints;
 use super::test_server::TestServerData;
 
 async fn create_test_server() -> (
@@ -71,7 +73,15 @@ async fn create_test_server() -> (
 
         // Send the path name. Do into_path() to preserve the temp directory
         data_dir_tx
-            .send(temp_dir.path().canonicalize().unwrap().to_str().unwrap().to_string())
+            .send(
+                temp_dir
+                    .into_path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            )
             .unwrap();
 
         ready_tx.send(true).unwrap();
@@ -145,7 +155,7 @@ async fn basic_no_wallet_txns() {
         .into_inner();
     println!("{:?}", r);
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
@@ -161,7 +171,7 @@ async fn z_incoming_z_outgoing() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -225,7 +235,11 @@ async fn z_incoming_z_outgoing() {
     // 6.1 Check notes
 
     let notes = lc.do_list_notes(true).await;
-    assert_eq!(notes["unspent_notes"].len(), 0);
+    // Has a new (unconfirmed) unspent note (the change)
+    assert_eq!(notes["unspent_notes"].len(), 1);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
+    assert_eq!(notes["unspent_notes"][0]["unconfirmed"].as_bool().unwrap(), true);
+
     assert_eq!(notes["spent_notes"].len(), 0);
     assert_eq!(notes["pending_notes"].len(), 1);
     assert_eq!(notes["pending_notes"][0]["created_in_txid"], tx.txid().to_string());
@@ -294,7 +308,7 @@ async fn multiple_incoming_same_tx() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
@@ -426,7 +440,7 @@ async fn z_incoming_multiz_outgoing() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -482,7 +496,7 @@ async fn z_to_z_scan_together() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Start with 10 blocks that are unmined
@@ -543,7 +557,7 @@ async fn z_incoming_viewkey() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -640,9 +654,7 @@ async fn t_incoming_t_outgoing() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
-    lc.init_logging().unwrap();
-
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -701,9 +713,10 @@ async fn t_incoming_t_outgoing() {
     );
 
     let list = lc.do_list_transactions(false).await;
+
     assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
     assert_eq!(list[1]["txid"], sent_txid);
-    assert_eq!(list[1]["unconfirmed"].as_bool(), None);
+    assert_eq!(list[1]["unconfirmed"].as_bool().unwrap(), false);
     assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_TADDR);
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
@@ -714,7 +727,7 @@ async fn t_incoming_t_outgoing() {
     let list = lc.do_list_transactions(false).await;
     assert_eq!(list[1]["block_height"].as_u64().unwrap(), 12);
     assert_eq!(list[1]["txid"], sent_txid);
-    assert_eq!(list[1]["unconfirmed"].as_bool(), None);
+    assert_eq!(list[1]["unconfirmed"].as_bool().unwrap(), false);
     assert_eq!(list[1]["outgoing_metadata"][0]["address"], EXT_TADDR);
     assert_eq!(list[1]["outgoing_metadata"][0]["value"].as_u64().unwrap(), sent_value);
 
@@ -740,7 +753,7 @@ async fn mixed_txn() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -843,7 +856,7 @@ async fn aborted_resync() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -954,7 +967,7 @@ async fn no_change() {
 
     ready_rx.await.unwrap();
 
-    let lc = LightClient::test_new(&config, None).await.unwrap();
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
     let mut fcbl = FakeCompactBlockList::new(0);
 
     // 1. Mine 10 blocks
@@ -1003,6 +1016,328 @@ async fn no_change() {
     h1.await.unwrap();
 }
 
+#[tokio::test]
+async fn recover_at_checkpoint() {
+    // 1. Wait for test server to start
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+    ready_rx.await.unwrap();
+
+    // Get checkpoint at 1220000
+    let (ckpt_height, hash, tree) = checkpoints::get_all_main_checkpoints()
+        .into_iter()
+        .find(|(h, _, _)| *h == 1220000)
+        .unwrap();
+    // Manually insert the checkpoint at -100, so the test server can return it.
+    data.write()
+        .await
+        .tree_states
+        .push((ckpt_height, hash.to_string(), tree.to_string()));
+
+    // 2. Mine 110 blocks after 1220000
+    let mut fcbl = FakeCompactBlockList::new(0);
+    fcbl.next_height = ckpt_height + 1;
+    {
+        let blk = fcbl.add_empty_block();
+        blk.block.prev_hash = hex::decode(hash).unwrap().into_iter().rev().collect();
+    }
+    let cbs = fcbl.add_blocks(109).into_compact_blocks();
+    data.write().await.add_blocks(cbs.clone());
+
+    // 3. Calculate witness
+    let sapling_tree = hex::decode(tree).unwrap();
+    let start_tree = CommitmentTree::<Node>::read(&sapling_tree[..])
+        .map_err(|e| format!("{}", e))
+        .unwrap();
+    let tree = cbs.iter().rev().fold(start_tree, |mut tree, cb| {
+        for tx in &cb.vtx {
+            for co in &tx.outputs {
+                tree.append(Node::new(co.cmu().unwrap().into())).unwrap();
+            }
+        }
+
+        tree
+    });
+
+    // 4. Test1: create a new lightclient, restoring at exactly the checkpoint
+    let lc = LightClient::test_new(&config, Some(TEST_SEED.to_string()), ckpt_height)
+        .await
+        .unwrap();
+    //lc.init_logging().unwrap();
+    assert_eq!(
+        json::parse(lc.do_info().await.as_str()).unwrap()["latest_block_height"]
+            .as_u64()
+            .unwrap(),
+        ckpt_height + 110
+    );
+
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), false);
+    assert_eq!(lc.do_verify_from_last_checkpoint().await.unwrap(), true);
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), true);
+
+    lc.do_sync(true).await.unwrap();
+
+    // Check the trees
+    assert_eq!(
+        lc.wallet.blocks.read().await.first().map(|b| b.clone()).unwrap().height,
+        1220110
+    );
+    assert_eq!(
+        tree_to_string(
+            &lc.wallet
+                .blocks
+                .read()
+                .await
+                .first()
+                .map(|b| b.clone())
+                .unwrap()
+                .tree
+                .unwrap()
+        ),
+        tree_to_string(&tree)
+    );
+
+    // 5: Test2: Create a new lightwallet, restoring at checkpoint + 100
+    let lc = LightClient::test_new(&config, Some(TEST_SEED.to_string()), ckpt_height + 100)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        json::parse(lc.do_info().await.as_str()).unwrap()["latest_block_height"]
+            .as_u64()
+            .unwrap(),
+        ckpt_height + 110
+    );
+
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), false);
+    assert_eq!(lc.do_verify_from_last_checkpoint().await.unwrap(), true);
+    assert_eq!(lc.wallet.is_sapling_tree_verified(), true);
+
+    lc.do_sync(true).await.unwrap();
+
+    // Check the trees
+    assert_eq!(
+        lc.wallet.blocks.read().await.first().map(|b| b.clone()).unwrap().height,
+        1220110
+    );
+    assert_eq!(
+        tree_to_string(
+            &lc.wallet
+                .blocks
+                .read()
+                .await
+                .first()
+                .map(|b| b.clone())
+                .unwrap()
+                .tree
+                .unwrap()
+        ),
+        tree_to_string(&tree)
+    );
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn witness_clearing() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
+    //lc.init_logging().unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 100_000;
+    let (tx, _height, _) = fcbl.add_tx_paying(&extfvk1, value);
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+
+    // 3. Send z-to-z tx to external z address with a memo
+    let sent_value = 2000;
+    let outgoing_memo = "Outgoing Memo".to_string();
+
+    let _sent_txid = lc
+        .test_do_send(vec![(EXT_ZADDR, sent_value, Some(outgoing_memo.clone()))])
+        .await
+        .unwrap();
+
+    // Tx is not yet mined, so witnesses should still be there
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 6);
+
+    // 4. Mine the sent transaction
+    fcbl.add_pending_sends(&data).await;
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+
+    // Tx is now mined, but witnesses should still be there because not 100 blocks yet (i.e., could get reorged)
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 6);
+
+    // 5. Mine 50 blocks, witness should still be there
+    mine_random_blocks(&mut fcbl, &data, &lc, 50).await;
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 6);
+
+    // 5. Mine 100 blocks, witness should now disappear
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    let witnesses = lc
+        .wallet
+        .txns()
+        .read()
+        .await
+        .current
+        .get(&tx.txid())
+        .unwrap()
+        .notes
+        .get(0)
+        .unwrap()
+        .witnesses
+        .clone();
+    assert_eq!(witnesses.len(), 0);
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
+#[tokio::test]
+async fn mempool_clearing() {
+    let (data, config, ready_rx, stop_tx, h1) = create_test_server().await;
+
+    ready_rx.await.unwrap();
+
+    let lc = LightClient::test_new(&config, None, 0).await.unwrap();
+    //lc.init_logging().unwrap();
+    let mut fcbl = FakeCompactBlockList::new(0);
+
+    // 1. Mine 10 blocks
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 10);
+
+    // 2. Send an incoming tx to fill the wallet
+    let extfvk1 = lc.wallet.keys().read().await.get_all_extfvks()[0].clone();
+    let value = 100_000;
+    let (tx, _height, _) = fcbl.add_tx_paying(&extfvk1, value);
+    let orig_txid = tx.txid().to_string();
+    mine_pending_blocks(&mut fcbl, &data, &lc).await;
+    mine_random_blocks(&mut fcbl, &data, &lc, 5).await;
+    assert_eq!(lc.do_last_txid().await["last_txid"], orig_txid);
+
+    // 3. Send z-to-z tx to external z address with a memo
+    let sent_value = 2000;
+    let outgoing_memo = "Outgoing Memo".to_string();
+
+    let sent_txid = lc
+        .test_do_send(vec![(EXT_ZADDR, sent_value, Some(outgoing_memo.clone()))])
+        .await
+        .unwrap();
+
+    // 4. The tx is not yet sent, it is just sitting in the test GRPC server, so remove it from there to make sure it doesn't get mined.
+    assert_eq!(lc.do_last_txid().await["last_txid"], sent_txid);
+    let mut sent_txns = data.write().await.sent_txns.drain(..).collect::<Vec<_>>();
+    assert_eq!(sent_txns.len(), 1);
+    let sent_tx = sent_txns.remove(0);
+
+    // 5. At this point, the rawTx is already been parsed, but we'll parse it again just to make sure it doesn't create any duplicates.
+    let notes_before = lc.do_list_notes(true).await;
+    let txns_before = lc.do_list_transactions(false).await;
+
+    let tx = Transaction::read(&sent_tx.data[..]).unwrap();
+    FetchFullTxns::scan_full_tx(
+        config,
+        tx,
+        BlockHeight::from_u32(17),
+        true,
+        0,
+        lc.wallet.keys(),
+        lc.wallet.txns(),
+        &lc.wallet.price.read().await.clone(),
+    )
+    .await;
+
+    let notes_after = lc.do_list_notes(true).await;
+    let txns_after = lc.do_list_transactions(false).await;
+
+    assert_eq!(notes_before.pretty(2), notes_after.pretty(2));
+    assert_eq!(txns_before.pretty(2), txns_after.pretty(2));
+
+    // 6. Mine 10 blocks, the unconfirmed tx should still be there.
+    mine_random_blocks(&mut fcbl, &data, &lc, 10).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 26);
+
+    let notes = lc.do_list_notes(true).await;
+    let txns = lc.do_list_transactions(false).await;
+
+    // There is 1 unspent note, which is the unconfirmed tx
+    assert_eq!(notes["unspent_notes"].len(), 1);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], sent_txid);
+    assert_eq!(notes["unspent_notes"][0]["unconfirmed"].as_bool().unwrap(), true);
+    assert_eq!(txns.len(), 2);
+
+    // 7. Mine 100 blocks, so the mempool expires
+    mine_random_blocks(&mut fcbl, &data, &lc, 100).await;
+    assert_eq!(lc.wallet.last_scanned_height().await, 126);
+
+    let notes = lc.do_list_notes(true).await;
+    let txns = lc.do_list_transactions(false).await;
+
+    // There is now again 1 unspent note, but it is the original (confirmed) note.
+    assert_eq!(notes["unspent_notes"].len(), 1);
+    assert_eq!(notes["unspent_notes"][0]["created_in_txid"], orig_txid);
+    assert_eq!(notes["unspent_notes"][0]["unconfirmed"].as_bool().unwrap(), false);
+    assert_eq!(notes["pending_notes"].len(), 0);
+    assert_eq!(txns.len(), 1);
+
+    // Shutdown everything cleanly
+    stop_tx.send(true).unwrap();
+    h1.await.unwrap();
+}
+
 const EXT_TADDR: &str = "t1NoS6ZgaUTpmjkge2cVpXGcySasdYDrXqh";
 const EXT_ZADDR: &str = "zs1va5902apnzlhdu0pw9r9q7ca8s4vnsrp2alr6xndt69jnepn2v2qrj9vg3wfcnjyks5pg65g9dc";
 const EXT_ZADDR2: &str = "zs1fxgluwznkzm52ux7jkf4st5znwzqay8zyz4cydnyegt2rh9uhr9458z0nk62fdsssx0cqhy6lyv";
+const TEST_SEED: &str = "chimney better bulb horror rebuild whisper improve intact letter giraffe brave rib appear bulk aim burst snap salt hill sad merge tennis phrase raise";

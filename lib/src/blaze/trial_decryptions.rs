@@ -113,6 +113,7 @@ impl TrialDecryptions {
                                     wallet_txns.write().await.add_new_note(
                                         txid.clone(),
                                         height,
+                                        false,
                                         cb.time as u64,
                                         note,
                                         to,
