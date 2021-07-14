@@ -25,7 +25,7 @@ use tokio::{
     join,
     runtime::Runtime,
     sync::{mpsc::unbounded_channel, oneshot, Mutex, RwLock},
-    task::{yield_now, JoinHandle},
+    task::yield_now,
     time::sleep,
 };
 use zcash_client_backend::encoding::{decode_payment_address, encode_payment_address};
@@ -64,7 +64,7 @@ pub struct LightClient {
     pub(crate) config: LightClientConfig,
     pub(crate) wallet: LightWallet,
 
-    mempool_monitor: RwLock<Option<JoinHandle<()>>>,
+    mempool_monitor: std::sync::RwLock<Option<std::thread::JoinHandle<()>>>,
 
     // zcash-params
     pub sapling_output: Vec<u8>,
@@ -91,7 +91,7 @@ impl LightClient {
             config: config.clone(),
             sapling_output: vec![],
             sapling_spend: vec![],
-            mempool_monitor: RwLock::new(None),
+            mempool_monitor: std::sync::RwLock::new(None),
             bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             sync_lock: Mutex::new(()),
         };
@@ -222,7 +222,7 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
-                mempool_monitor: RwLock::new(None),
+                mempool_monitor: std::sync::RwLock::new(None),
                 sync_lock: Mutex::new(()),
                 bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
@@ -266,7 +266,7 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
-                mempool_monitor: RwLock::new(None),
+                mempool_monitor: std::sync::RwLock::new(None),
                 sync_lock: Mutex::new(()),
                 bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
@@ -297,7 +297,7 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
-                mempool_monitor: RwLock::new(None),
+                mempool_monitor: std::sync::RwLock::new(None),
                 sync_lock: Mutex::new(()),
                 bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
@@ -334,7 +334,7 @@ impl LightClient {
                 config: config.clone(),
                 sapling_output: vec![],
                 sapling_spend: vec![],
-                mempool_monitor: RwLock::new(None),
+                mempool_monitor: std::sync::RwLock::new(None),
                 sync_lock: Mutex::new(()),
                 bsync_data: Arc::new(RwLock::new(BlazeSyncData::new(&config))),
             };
@@ -1217,17 +1217,11 @@ impl LightClient {
     }
 
     pub fn start_mempool_monitor(lc: Arc<LightClient>) {
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(Self::start_mempool_monitor_async(lc));
-    }
-
-    async fn start_mempool_monitor_async(lc: Arc<LightClient>) {
         if !lc.config.monitor_mempool {
             return;
         }
 
-        if lc.mempool_monitor.read().await.is_some() {
+        if lc.mempool_monitor.read().unwrap().is_some() {
             return;
         }
 
@@ -1235,46 +1229,59 @@ impl LightClient {
         let uri = config.server.clone();
         let lci = lc.clone();
 
+        info!("Mempool monitoring starting");
+
         // Start monitoring the mempool in a new thread
-        let h = tokio::spawn(async move {
-            let (mempool_tx, mut mempool_rx) = unbounded_channel::<RawTransaction>();
-            let lc1 = lci.clone();
-            tokio::spawn(async move {
-                let keys = lc1.wallet.keys();
-                let wallet_txns = lc1.wallet.txns.clone();
-                let price = lc1.wallet.price.clone();
+        let h = std::thread::spawn(move || {
+            // Start a new async runtime, which is fine because we are in a new thread.
+            Runtime::new().unwrap().block_on(async move {
+                let (mempool_tx, mut mempool_rx) = unbounded_channel::<RawTransaction>();
+                let lc1 = lci.clone();
 
-                while let Some(rtx) = mempool_rx.recv().await {
-                    if let Ok(tx) = Transaction::read(&rtx.data[..]) {
-                        let price = price.read().await.clone();
+                let h1 = tokio::spawn(async move {
+                    let keys = lc1.wallet.keys();
+                    let wallet_txns = lc1.wallet.txns.clone();
+                    let price = lc1.wallet.price.clone();
 
-                        FetchFullTxns::scan_full_tx(
-                            config.clone(),
-                            tx,
-                            BlockHeight::from_u32(rtx.height as u32),
-                            true,
-                            now() as u32,
-                            keys.clone(),
-                            wallet_txns.clone(),
-                            &price,
-                        )
-                        .await;
+                    while let Some(rtx) = mempool_rx.recv().await {
+                        if let Ok(tx) = Transaction::read(&rtx.data[..]) {
+                            let price = price.read().await.clone();
+                            //info!("Mempool attempting to scan {}", tx.txid());
+
+                            FetchFullTxns::scan_full_tx(
+                                config.clone(),
+                                tx,
+                                BlockHeight::from_u32(rtx.height as u32),
+                                true,
+                                now() as u32,
+                                keys.clone(),
+                                wallet_txns.clone(),
+                                &price,
+                            )
+                            .await;
+                        }
                     }
-                }
-            });
+                });
 
-            loop {
-                let r = GrpcConnector::monitor_mempool(uri.clone(), mempool_tx.clone()).await;
-                if r.is_err() {
-                    warn!("Mempool monitor returned {:?}, will restart listening", r);
-                    sleep(Duration::from_secs(10)).await;
-                } else {
-                    let _ = lci.do_sync(false).await;
-                }
-            }
+                let h2 = tokio::spawn(async move {
+                    loop {
+                        //info!("Monitoring mempool");
+                        let r = GrpcConnector::monitor_mempool(uri.clone(), mempool_tx.clone()).await;
+
+                        if r.is_err() {
+                            warn!("Mempool monitor returned {:?}, will restart listening", r);
+                            sleep(Duration::from_secs(10)).await;
+                        } else {
+                            let _ = lci.do_sync(false).await;
+                        }
+                    }
+                });
+
+                let (_, _) = join!(h1, h2);
+            });
         });
 
-        *lc.mempool_monitor.write().await = Some(h);
+        *lc.mempool_monitor.write().unwrap() = Some(h);
     }
 
     pub async fn do_sync(&self, print_updates: bool) -> Result<JsonValue, String> {
