@@ -3,7 +3,6 @@ use crate::lightwallet::{data::WalletTx, wallet_txns::WalletTxns};
 use std::sync::Arc;
 
 use futures::future::join_all;
-use log::info;
 use tokio::join;
 use tokio::sync::oneshot;
 use tokio::sync::{mpsc::unbounded_channel, RwLock};

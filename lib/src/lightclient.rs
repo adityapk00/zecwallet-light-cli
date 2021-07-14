@@ -1189,7 +1189,7 @@ impl LightClient {
                             None => any_failed = true,
                             Some(p) => {
                                 // Update the price
-                                info!("Historical price at txid {} was {}", txid, p);
+                                // info!("Historical price at txid {} was {}", txid, p);
                                 self.wallet.txns.write().await.current.get_mut(&txid).unwrap().zec_price = Some(p);
                             }
                         }

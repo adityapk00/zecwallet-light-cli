@@ -1,7 +1,6 @@
 use crate::compact_formats::RawTransaction;
 
 use crate::lightwallet::keys::Keys;
-use log::info;
 use std::sync::Arc;
 use tokio::join;
 use tokio::sync::mpsc::unbounded_channel;
